@@ -1,4 +1,4 @@
-// ProxyIP 监控管理系统 - 终极融合增强版
+// ProxyIP 监控管理系统 - 终极融合增强稳定版
 // KV 命名空间绑定名称: PROXYIP_STORE
 
 export default {
@@ -19,7 +19,7 @@ export default {
       if (url.pathname === '/api/logs') return handleLogs(request, env);
       if (url.pathname === '/api/maintenance') {
         ctx.waitUntil(this.runMaintenance(env, true));
-        return jsonResponse({ success: true, message: '一键同步/维护任务已在后台启动' });
+        return jsonResponse({ success: true, message: '一键维护任务已在后台启动' });
       }
     } catch (e) {
       return jsonResponse({ error: e.message }, 500);
@@ -48,12 +48,9 @@ export default {
     };
 
     try {
-      // 1. 采集候选 IP
       let pool = [];
-      // 本地库
       const localDB = await env.PROXYIP_STORE.get('ip-database') || '';
       pool.push(...extractIPs(localDB));
-      // 远程 API
       if (config.remoteApis) {
         for (const api of config.remoteApis.split(',')) {
           try {
@@ -62,16 +59,14 @@ export default {
           } catch (e) {}
         }
       }
-      // 远程域名
       if (config.remoteDomains) {
         for (const dom of config.remoteDomains.split(',')) {
           pool.push(...(await resolveDomain(dom.trim())));
         }
       }
-      pool = [...new Set(pool)]; // 去重
+      pool = [...new Set(pool)];
       report.totalCandidate = pool.length;
 
-      // 2. 检查现有解析
       const currentRecords = await fetchDNSRecords(config);
       const healthyIPs = [];
       
@@ -86,7 +81,6 @@ export default {
         await sleep(300);
       }
 
-      // 3. 补齐不足的部分
       const needed = Math.max(0, config.minActiveIPs - healthyIPs.length);
       if (needed > 0) {
         const candidates = pool.filter(ip => !healthyIPs.includes(ip));
@@ -106,8 +100,6 @@ export default {
 
       report.active = healthyIPs.length;
       await addLog(env, `同步结束: 移除${report.removed.length}，新增${report.added.length}`, "TASK");
-      
-      // 发送 TG 通知
       await sendTGNotification(buildTGMsg(report, isManual, startTime), config);
 
     } catch (e) {
@@ -116,7 +108,7 @@ export default {
   }
 };
 
-// --- 后端功能函数 ---
+// --- 工具函数 ---
 
 function buildTGMsg(report, isManual, startTime) {
   const status = report.active >= 1 ? "✅ 运行正常" : "⚠️ 节点不足";
@@ -276,6 +268,8 @@ function getHTML() {
     .active-tab { border-bottom: 3px solid #3b82f6; color: #3b82f6; }
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-thumb { background: #334155; }
+    .scan-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-200 font-sans">
@@ -290,7 +284,9 @@ function getHTML() {
 
     <div class="flex gap-6 border-b border-slate-900 mb-8 text-sm font-bold overflow-x-auto whitespace-nowrap">
       <button onclick="setTab('dashboard')" class="pb-3 tab-btn" id="btn-dashboard">仪表盘</button>
-      <button onclick="setTab('database')" class="pb-3 tab-btn" id="btn-database">IP 数据源</button>
+      <button onclick="setTab('database')" class="pb-3 tab-btn" id="btn-database">
+        IP 数据源 <span id="scan-badge" class="hidden scan-pulse text-[8px] bg-blue-600 px-1 rounded ml-1 text-white">SCANNING</span>
+      </button>
       <button onclick="setTab('tools')" class="pb-3 tab-btn" id="btn-tools">测试诊断</button>
       <button onclick="setTab('config')" class="pb-3 tab-btn" id="btn-config">系统配置</button>
       <button onclick="setTab('logs')" class="pb-3 tab-btn" id="btn-logs">运行日志</button>
@@ -300,7 +296,11 @@ function getHTML() {
   </div>
 
   <script>
-    let state = { config:{}, currentIPs:[], db:'', logs:[], activeTab:'dashboard', stopScan: false, loading: false };
+    // 将扫描状态置于全局，防止切页中断逻辑
+    let state = { 
+      config:{}, currentIPs:[], db:'', logs:[], activeTab:'dashboard', 
+      isScanning: false, stopScan: false, scanResults: [], scanProgress: { current:0, total:0 }
+    };
 
     async function api(path, method='GET', body=null) {
       const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -326,16 +326,14 @@ function getHTML() {
     async function runMaintenance() {
       await api('/maintenance');
       alert('同步任务已提交至后台，结果将通过 TG 发送。');
-      setTimeout(refreshData, 2000);
     }
 
     async function checkCurrent() {
-      state.loading = true; render();
+      render();
       for(let ip of state.currentIPs) {
         ip.st = await api(\`/check?target=\${ip.content}:\${state.config.targetPort}\`);
         render();
       }
-      state.loading = false; render();
     }
 
     async function customTest() {
@@ -346,22 +344,44 @@ function getHTML() {
       resDiv.innerHTML = JSON.stringify(res, null, 2);
     }
 
+    // 核心改进：扫描逻辑独立于渲染
     async function startScan() {
+      if(state.isScanning) return;
+      state.isScanning = true;
       state.stopScan = false;
-      const resDiv = document.getElementById('scan-res');
-      resDiv.innerHTML = '<p class="text-blue-500">开始探测备选库...</p>';
+      state.scanResults = [];
+      document.getElementById('scan-badge').classList.remove('hidden');
+      
       const ips = [...new Set(state.db.split(/[\\n,\\s]+/).filter(i => i && !i.startsWith('#')))];
-      let valid = [];
-      for(let ip of ips) {
+      state.scanProgress.total = ips.length;
+      
+      for(let i=0; i<ips.length; i++) {
         if(state.stopScan) break;
+        state.scanProgress.current = i + 1;
+        const ip = ips[i];
+        
+        // 渲染进度（仅当用户正在数据源页面时）
+        if(state.activeTab === 'database') renderScanUI();
+
         const r = await api(\`/check?target=\${ip}:\${state.config.targetPort}\`);
         if(r?.success) {
-          valid.push(ip);
-          resDiv.innerHTML += \`<div class="text-[10px] text-slate-500">\${ip} - OK (\${r.responseTime}ms)</div>\`;
-          resDiv.scrollTop = resDiv.scrollHeight;
+          state.scanResults.push({ip, responseTime: r.responseTime});
         }
       }
-      resDiv.innerHTML += \`<div class="mt-2 p-2 bg-blue-900/20 text-xs rounded text-blue-300">探测结束，共发现 \${valid.length} 个有效节点。</div>\`;
+      
+      state.isScanning = false;
+      document.getElementById('scan-badge').classList.add('hidden');
+      if(state.activeTab === 'database') render();
+    }
+
+    function renderScanUI() {
+      const resDiv = document.getElementById('scan-res');
+      if(!resDiv) return;
+      resDiv.innerHTML = \`<p class="text-blue-400 mb-2">进度: \${state.scanProgress.current} / \${state.scanProgress.total}</p>\`;
+      state.scanResults.forEach(r => {
+        resDiv.innerHTML += \`<div class="text-[10px] text-slate-500">\${r.ip} - OK (\${r.responseTime}ms)</div>\`;
+      });
+      resDiv.scrollTop = resDiv.scrollHeight;
     }
 
     async function saveConfig() {
@@ -393,7 +413,7 @@ function getHTML() {
                 <h3 class="text-xs font-bold text-slate-500 uppercase mb-1">在线节点</h3>
                 <div class="text-4xl font-black text-white">\${state.currentIPs.length}</div>
               </div>
-              <button onclick="checkCurrent()" class="bg-slate-800 px-4 py-2 rounded-xl text-xs">\${state.loading ? '正在检测...' : '手动刷新状态'}</button>
+              <button onclick="checkCurrent()" class="bg-slate-800 px-4 py-2 rounded-xl text-xs hover:bg-slate-700 transition">检测解析状态</button>
             </div>
           </div>
           <div class="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden">
@@ -410,7 +430,7 @@ function getHTML() {
                   <button onclick="deleteIP('\${ip.id}')" class="text-xs text-slate-600 hover:text-red-500">移除</button>
                 </div>
               \`).join('')}
-              \${state.currentIPs.length === 0 ? '<p class="p-4 text-slate-600 text-center">暂无记录，请点击一键维护</p>' : ''}
+              \${state.currentIPs.length === 0 ? '<p class="p-4 text-slate-600 text-center text-xs italic">暂无记录，请点击上方全量维护按钮</p>' : ''}
             </div>
           </div>\`;
       } else if(state.activeTab === 'database') {
@@ -418,32 +438,34 @@ function getHTML() {
           <div class="grid md:grid-cols-2 gap-6">
             <div class="bg-slate-900 p-6 rounded-3xl border border-slate-800">
               <h3 class="text-xs font-bold text-slate-500 uppercase mb-4 tracking-tighter">本地备选库</h3>
-              <textarea id="db-area" class="w-full h-80 bg-slate-950 border border-slate-800 p-4 rounded-2xl font-mono text-[10px] outline-none">\${state.db}</textarea>
-              <button onclick="saveDB()" class="w-full mt-4 bg-slate-800 py-3 rounded-xl text-sm font-bold">保存并同步</button>
+              <textarea id="db-area" class="w-full h-80 bg-slate-950 border border-slate-800 p-4 rounded-2xl font-mono text-[10px] outline-none focus:border-blue-900 transition">\${state.db}</textarea>
+              <button onclick="saveDB()" class="w-full mt-4 bg-slate-800 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">保存数据</button>
             </div>
             <div class="bg-slate-900 p-6 rounded-3xl border border-slate-800 flex flex-col">
-              <h3 class="text-xs font-bold text-slate-500 uppercase mb-4 tracking-tighter">全库实时探测</h3>
+              <h3 class="text-xs font-bold text-slate-500 uppercase mb-4 tracking-tighter">全库探测 (切页不会中断)</h3>
               <div class="flex gap-2 mb-4">
-                <button onclick="startScan()" class="flex-1 bg-indigo-600 py-2 rounded-xl text-sm font-bold">全量扫描</button>
+                <button onclick="startScan()" class="flex-1 bg-indigo-600 py-2 rounded-xl text-sm font-bold disabled:opacity-50" \${state.isScanning?'disabled':''}>
+                  \${state.isScanning ? '正在探测...' : '开始探测'}
+                </button>
                 <button onclick="state.stopScan=true" class="bg-slate-800 px-4 rounded-xl text-xs">停止</button>
               </div>
               <div id="scan-res" class="flex-1 bg-black/40 p-4 rounded-2xl font-mono text-[10px] overflow-y-auto min-h-[250px]"></div>
             </div>
           </div>\`;
+          if(state.isScanning || state.scanResults.length > 0) renderScanUI();
       } else if(state.activeTab === 'tools') {
         c.innerHTML = \`
           <div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 space-y-6">
             <div>
-              <h3 class="text-xl font-bold mb-2">后端接口诊断</h3>
-              <p class="text-xs text-slate-500 mb-6 font-mono">通过随机轮询配置的后端，测试目标 IP 及其端口的连通性。</p>
+              <h3 class="text-xl font-bold mb-2 font-mono">Backend Diagnostics</h3>
+              <p class="text-xs text-slate-500 mb-6 uppercase tracking-wider">轮询后端接口测试目标连通性</p>
               <div class="flex gap-3">
-                <input id="test-target" class="flex-1 bg-slate-950 border border-slate-800 p-3 rounded-2xl font-mono" placeholder="例如: 1.1.1.1:50001">
-                <button onclick="customTest()" class="bg-blue-600 px-8 py-3 rounded-2xl font-bold transition-all active:scale-95">测试</button>
+                <input id="test-target" class="flex-1 bg-slate-950 border border-slate-800 p-3 rounded-2xl font-mono outline-none focus:border-blue-900" placeholder="例如: 1.1.1.1:50001">
+                <button onclick="customTest()" class="bg-blue-600 px-8 py-3 rounded-2xl font-bold transition-all active:scale-95 shadow-lg shadow-blue-900/20">测试</button>
               </div>
             </div>
             <div class="bg-black/50 p-6 rounded-2xl border border-slate-800 shadow-inner">
-              <h4 class="text-xs font-bold text-slate-600 mb-2 uppercase">Response Header & Body</h4>
-              <pre id="test-res" class="font-mono text-[11px] text-green-500 overflow-x-auto whitespace-pre-wrap min-h-[150px]"></pre>
+              <pre id="test-res" class="font-mono text-[11px] text-green-500 overflow-x-auto whitespace-pre-wrap min-h-[150px] italic">Ready to debug...</pre>
             </div>
           </div>\`;
       } else if(state.activeTab === 'config') {
@@ -451,48 +473,48 @@ function getHTML() {
           <div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-6 text-sm">
             <div class="grid md:grid-cols-2 gap-8">
               <div class="space-y-4">
-                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">Cloudflare 核心配置</h4>
-                <div><label class="text-slate-500 block mb-1">CF 邮箱</label><input id="c-cfMail" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.cfMail||''}"></div>
-                <div><label class="text-slate-500 block mb-1">监控域名</label><input id="c-cfDomain" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.cfDomain||''}"></div>
-                <div><label class="text-slate-500 block mb-1">Zone ID</label><input id="c-cfZoneId" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.cfZoneId||''}"></div>
-                <div><label class="text-slate-500 block mb-1">API Token</label><input id="c-cfApiKey" type="password" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.cfApiKey||''}"></div>
+                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">Cloudflare 基础</h4>
+                <div><label class="text-slate-500 block mb-1">CF 邮箱</label><input id="c-cfMail" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.cfMail||''}"></div>
+                <div><label class="text-slate-500 block mb-1">监控域名</label><input id="c-cfDomain" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.cfDomain||''}"></div>
+                <div><label class="text-slate-500 block mb-1">Zone ID</label><input id="c-cfZoneId" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.cfZoneId||''}"></div>
+                <div><label class="text-slate-500 block mb-1">API Token</label><input id="c-cfApiKey" type="password" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.cfApiKey||''}"></div>
               </div>
               <div class="space-y-4">
-                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">远程同步 (DDNS 模式)</h4>
-                <div><label class="text-slate-500 block mb-1">远程 API 地址 (逗号分隔)</label><textarea id="c-remoteApis" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl h-20 text-[10px]">\${state.config.remoteApis||''}</textarea></div>
-                <div><label class="text-slate-500 block mb-1">待克隆解析域名 (逗号分隔)</label><textarea id="c-remoteDomains" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl h-20 text-[10px]">\${state.config.remoteDomains||''}</textarea></div>
+                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">DDNS / 远程同步</h4>
+                <div><label class="text-slate-500 block mb-1">远程 API 地址 (逗号分隔)</label><textarea id="c-remoteApis" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl h-20 text-[10px] outline-none">\${state.config.remoteApis||''}</textarea></div>
+                <div><label class="text-slate-500 block mb-1">克隆域名 (逗号分隔)</label><textarea id="c-remoteDomains" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl h-20 text-[10px] outline-none">\${state.config.remoteDomains||''}</textarea></div>
               </div>
               <div class="space-y-4">
-                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">运行参数</h4>
-                <div><label class="text-slate-500 block mb-1">检测端口</label><input id="c-targetPort" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.targetPort||'50001'}"></div>
-                <div><label class="text-slate-500 block mb-1">最小活跃数</label><input id="c-minActiveIPs" type="number" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.minActiveIPs||3}"></div>
-                <div><label class="text-slate-500 block mb-1">TG Token</label><input id="c-tgBotToken" type="password" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.tgBotToken||''}"></div>
-                <div><label class="text-slate-500 block mb-1">TG ChatID</label><input id="c-tgChatId" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl" value="\${state.config.tgChatId||''}"></div>
+                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">监控配置</h4>
+                <div><label class="text-slate-500 block mb-1">检测端口</label><input id="c-targetPort" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.targetPort||'50001'}"></div>
+                <div><label class="text-slate-500 block mb-1">最小活跃数</label><input id="c-minActiveIPs" type="number" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.minActiveIPs||3}"></div>
+                <div><label class="text-slate-500 block mb-1">TG Token</label><input id="c-tgBotToken" type="password" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.tgBotToken||''}"></div>
+                <div><label class="text-slate-500 block mb-1">TG ChatID</label><input id="c-tgChatId" class="w-full bg-slate-950 border border-slate-800 p-2.5 rounded-xl outline-none" value="\${state.config.tgChatId||''}"></div>
               </div>
               <div class="space-y-4 flex flex-col">
-                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">检测后端列表</h4>
-                <textarea id="c-checkBackends" class="w-full flex-1 bg-slate-950 border border-slate-800 p-4 rounded-xl font-mono text-[10px]">\${state.config.checkBackends||''}</textarea>
+                <h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px]">后端轮询列表</h4>
+                <textarea id="c-checkBackends" class="w-full flex-1 bg-slate-950 border border-slate-800 p-4 rounded-xl font-mono text-[10px] outline-none">\${state.config.checkBackends||''}</textarea>
               </div>
             </div>
-            <button onclick="saveConfig()" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black text-white shadow-xl shadow-blue-900/10 transition-all active:scale-[0.99]">保存并部署配置</button>
+            <button onclick="saveConfig()" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black text-white shadow-xl shadow-blue-900/10 transition-all active:scale-[0.99]">保存并部署设置</button>
           </div>\`;
       } else if(state.activeTab === 'logs') {
         c.innerHTML = \`
           <div class="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
             <div class="p-4 border-b border-slate-800 flex justify-between items-center px-8">
               <span class="font-bold">System Events</span>
-              <button onclick="api('/logs','DELETE').then(refreshData)" class="text-xs text-red-500">清空记录</button>
+              <button onclick="api('/logs','DELETE').then(refreshData)" class="text-xs text-red-500">清除日志</button>
             </div>
             <div class="h-[500px] overflow-y-auto p-4 font-mono text-[10px] space-y-1">
               \${state.logs.map(l => \`<div><span class="text-slate-600">[\${l.t}]</span> <span class="\${l.y==='ERROR'?'text-red-500':l.y==='TASK'?'text-blue-500':'text-slate-400'}">[\${l.y}]</span> \${l.m}</div>\`).join('')}
-              \${state.logs.length === 0 ? '<p class="text-center text-slate-700 mt-20">No data logs recorded.</p>' : ''}
+              \${state.logs.length === 0 ? '<p class="text-center text-slate-700 mt-20">暂无系统运行记录</p>' : ''}
             </div>
           </div>\`;
       }
     }
 
     async function deleteIP(id) {
-      if(confirm('确定移除？')) { await api('/update-dns', 'POST', { remove:[{id}] }); refreshData(); }
+      if(confirm('确认移除该解析记录？')) { await api('/update-dns', 'POST', { remove:[{id}] }); refreshData(); }
     }
 
     window.onload = () => { setTab('dashboard'); refreshData(); setInterval(refreshData, 30000); };
