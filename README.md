@@ -1,8 +1,4 @@
-这是一个为你准备的 GitHub `README.md` 模板，专门针对小白用户编写，内容详尽且逻辑清晰。
-
----
-
-# 🚀 ProxyIP & DDNS 监控维护中心 (Pro 版)
+# 🚀 ProxyIP & DDNS 监控维护中心
 
 这是一款基于 **Cloudflare Workers** 开发的全自动 ProxyIP 监控与域名解析（DDNS）维护系统。它集成了实时健康检测、多源 IP 抓取、域名记录克隆、Telegram 实时通知以及可视化 Web 管理面板。
 
