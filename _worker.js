@@ -1,472 +1,407 @@
-// ProxyIP 监控管理系统 
-// KV 命名空间绑定名称: PROXYIP_STORE
+/**
+ * DDNS Pro & Proxy IP Manager v1.0
+ */
 
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    if (request.method === 'OPTIONS') return handleCORS();
-
-    // 1. 静态路由
-    if (url.pathname === '/' || url.pathname === '/admin') {
-      return new Response(getHTML(url.pathname), { 
-        headers: { 'Content-Type': 'text/html;charset=UTF-8' } 
-      });
-    }
-
-    // 2. 鉴权校验
-    const config = await getConfig(env);
-    const clientPwd = request.headers.get('x-password');
-    // 定义敏感操作 API
-    const isWrite = request.method === 'POST' || request.method === 'DELETE';
-    const isAdminData = ['/api/config', '/api/ip-database', '/api/scan-summary'].includes(url.pathname);
-
-    if (config.adminPassword && (isWrite || isAdminData)) {
-      if (clientPwd !== config.adminPassword) {
-        return jsonResponse({ error: 'AUTH_REQUIRED', message: '请在 /admin 登录' }, 401);
-      }
-    }
-
-    try {
-      if (url.pathname === '/api/config') return handleConfig(request, env);
-      if (url.pathname === '/api/current-ips') return handleGetCurrentIPs(request, env);
-      if (url.pathname === '/api/update-dns') return handleUpdateDNS(request, env);
-      if (url.pathname === '/api/check') return handleCheck(request, env);
-      if (url.pathname === '/api/ip-database') return handleIPDatabase(request, env);
-      if (url.pathname === '/api/logs') return handleLogs(request, env);
-      if (url.pathname === '/api/scan-summary') return handleScanSummary(request, env);
-      if (url.pathname === '/api/maintenance') {
-        ctx.waitUntil(this.runMaintenance(env, true));
-        return jsonResponse({ success: true });
-      }
-    } catch (e) {
-      return jsonResponse({ error: e.message }, 500);
-    }
-    return new Response('Not Found', { status: 404 });
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(this.runMaintenance(env, false));
-  },
-
-  async runMaintenance(env, isManual = false) {
-    const config = await getConfig(env);
-    if (!config.cfApiKey) return;
-
-    const start = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    await addLog(env, `[${isManual ? '手动' : '定时'}] 启动同步任务...`, "TASK");
-    
-    let report = {
-      domain: config.cfDomain,
-      port: config.targetPort,
-      removed: [],
-      added: [],
-      onlineDetails: [],
-      totalCandidate: 0,
-      adminUrl: `https://${config.cfDomain}/admin`
-    };
-
-    try {
-      let pool = [];
-      const localDB = await env.PROXYIP_STORE.get('ip-database') || '';
-      pool.push(...extractIPs(localDB));
-      if (config.remoteApis) {
-        for (const api of config.remoteApis.split(',')) {
-          try {
-            const res = await fetch(api.trim(), { signal: AbortSignal.timeout(5000) });
-            pool.push(...extractIPs(await res.text()));
-          } catch (e) {}
-        }
-      }
-      if (config.remoteDomains) {
-        for (const dom of config.remoteDomains.split(',')) {
-          pool.push(...(await resolveDomain(dom.trim())));
-        }
-      }
-      pool = [...new Set(pool)];
-      report.totalCandidate = pool.length;
-
-      const currentRecords = await fetchDNSRecords(config);
-      const healthyIPs = [];
-      for (const record of currentRecords) {
-        const res = await checkProxyIP(`${record.content}:${config.targetPort}`, config.checkBackends);
-        if (res.success) {
-          healthyIPs.push(record.content);
-          report.onlineDetails.push({ ip: record.content, ms: res.responseTime, loc: res.colo });
-        } else {
-          await deleteDNSRecord(record.id, config);
-          report.removed.push(record.content);
-        }
-        await sleep(200);
-      }
-
-      const needed = Math.max(0, config.minActiveIPs - healthyIPs.length);
-      if (needed > 0) {
-        const poolFiltered = pool.filter(ip => !healthyIPs.includes(ip));
-        let count = 0;
-        for (const ip of poolFiltered) {
-          if (count >= needed) break;
-          const res = await checkProxyIP(`${ip}:${config.targetPort}`, config.checkBackends);
-          if (res.success) {
-            await addDNSRecord(ip, config);
-            report.added.push(ip);
-            report.onlineDetails.push({ ip: ip, ms: res.responseTime, loc: res.colo });
-            count++;
-          }
-          await sleep(200);
-        }
-      }
-
-      await addLog(env, `同步结束: 在线${report.onlineDetails.length}`, "TASK");
-      await sendTGNotification(buildTGMsg(report, isManual, start), config);
-    } catch (e) {
-      await addLog(env, `同步异常: ${e.message}`, "ERROR");
-    }
-  }
+let CONFIG = {
+    email: '', apiKey: '', zoneId: '', domain: '',
+    targetPort: '443', // 默认 443
+    minActive: 3,
+    remoteUrls: [], tgToken: '', tgId: '',
+    checkApi: 'https://check.dwb.pp.ua/check?proxyip=',
+    dohApi: 'https://cloudflare-dns.com/dns-query'
 };
 
-// --- 后端核心逻辑 ---
+export default {
+    async fetch(request, env, ctx) {
+        initConfig(env);
+        const url = new URL(request.url);
 
-async function getConfig(env) {
-  const kvConfig = await env.PROXYIP_STORE.get('config', { type: 'json' }) || {};
-  return {
-    cfMail: kvConfig.cfMail || env.CF_MAIL || '',
-    cfDomain: kvConfig.cfDomain || env.CF_DOMAIN || '',
-    cfZoneId: kvConfig.cfZoneId || env.CF_ZONEID || '',
-    cfApiKey: kvConfig.cfApiKey || env.CF_KEY || '',
-    targetPort: kvConfig.targetPort || env.TARGET_PORT || '50001',
-    minActiveIPs: parseInt(kvConfig.minActiveIPs || env.MIN_ACTIVE_IPS || '3'),
-    checkBackends: kvConfig.checkBackends || env.CHECK_BACKENDS || 'https://check.dwb.pp.ua/check',
-    tgBotToken: kvConfig.tgBotToken || env.TG_TOKEN || '',
-    tgChatId: kvConfig.tgChatId || env.TG_ID || '',
-    adminPassword: kvConfig.adminPassword || env.ADMIN_PASSWORD || '',
-    remoteApis: kvConfig.remoteApis || env.REMOTE_APIS || '',
-    remoteDomains: kvConfig.remoteDomains || env.REMOTE_DOMAINS || ''
-  };
+        if (url.pathname === '/') return new Response(renderHTML(CONFIG), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+
+        try {
+            if (url.pathname === '/api/get-pool') {
+                const pool = await env.IP_DATA.get('pool') || '';
+                const count = pool.trim() ? pool.trim().split('\n').length : 0;
+                if (url.searchParams.get('onlyCount') === 'true') return new Response(JSON.stringify({ count }));
+                return new Response(JSON.stringify({ pool, count }));
+            }
+
+            if (url.pathname === '/api/save-pool') {
+                const body = await request.json();
+                const cleaned = cleanIPList(body.pool || '', CONFIG.targetPort);
+                await env.IP_DATA.put('pool', cleaned);
+                return new Response(JSON.stringify({ success: true, count: cleaned ? cleaned.split('\n').length : 0 }));
+            }
+
+            if (url.pathname === '/api/sync-remote') {
+                const count = await syncRemoteIPs(env);
+                return new Response(JSON.stringify({ success: true, count }));
+            }
+
+            if (url.pathname === '/api/current-status') {
+                const status = await getDomainStatus();
+                return new Response(JSON.stringify(status));
+            }
+
+            if (url.pathname === '/api/lookup-domain') {
+                const target = url.searchParams.get('domain');
+                let [domain, port] = target.split(':');
+                port = port || CONFIG.targetPort; 
+                const ips = await resolveDomain(domain);
+                return new Response(JSON.stringify({ ips, port }));
+            }
+
+            if (url.pathname === '/api/check-ip') {
+                const res = await checkProxyIP(url.searchParams.get('ip'));
+                return new Response(JSON.stringify(res));
+            }
+
+            if (url.pathname === '/api/delete-record') {
+                await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${url.searchParams.get('id')}`, 'DELETE');
+                return new Response(JSON.stringify({ success: true }));
+            }
+
+            if (url.pathname === '/api/maintain') {
+                const res = await maintainDomain(env, true);
+                return new Response(JSON.stringify(res));
+            }
+
+        } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+        }
+        return new Response('Not Found', { status: 404 });
+    },
+
+    async scheduled(event, env, ctx) {
+        initConfig(env);
+        ctx.waitUntil((async () => {
+            await syncRemoteIPs(env);
+            await maintainDomain(env, false);
+        })());
+    }
+};
+
+function cleanIPList(text, defaultPort) {
+    if (!text) return '';
+    const set = new Set();
+    const regex = /(\d{1,3}(?:\.\d{1,3}){3})(?:[:\s\t]+(\d+))?/g;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+        set.add(`${m[1]}:${m[2] || defaultPort}`);
+    }
+    return Array.from(set).join('\n');
 }
 
-function buildTGMsg(report, isManual, startTime) {
-  const nodes = report.onlineDetails.map((d, i) => `${i+1}. \`${d.ip}\` | ${d.ms}ms | ${d.loc}`).join('\n');
-  return `
-🚀 *ProxyIP 维护报告*
----------------------------
-🌐 域名: \`${report.domain}:${report.port}\`
-🕒 时间: \`${startTime}\` (\`${isManual ? '手动' : '定时'}\`)
-✅ 在线: \`${report.onlineDetails.length}\` | 🔴 移除: \`${report.removed.length}\`
-➕ 补全: \`${report.added.length}\` | 📦 库量: \`${report.totalCandidate}\`
+async function syncRemoteIPs(env) {
+    const old = await env.IP_DATA.get('pool') || '';
+    let remote = "";
+    for (const u of CONFIG.remoteUrls) {
+        try {
+            const r = await fetch(u, { signal: AbortSignal.timeout(8000) });
+            if (r.ok) remote += await r.text() + "\n";
+        } catch (e) {}
+    }
+    const combined = cleanIPList(old + "\n" + remote, CONFIG.targetPort);
+    await env.IP_DATA.put('pool', combined);
+    return combined ? combined.split('\n').length : 0;
+}
 
-*活跃列表:*
-${nodes || '⚠️ 无活跃节点'}
----------------------------
-🔗 [进入管理面板](${report.adminUrl})
-  `;
+function initConfig(env) {
+    CONFIG.email = env.CF_MAIL || '';
+    CONFIG.apiKey = env.CF_KEY || '';
+    CONFIG.zoneId = env.CF_ZONEID || '';
+    CONFIG.domain = env.CF_DOMAIN || '';
+    CONFIG.targetPort = (env.TARGET_PORT || '443').toString();
+    CONFIG.minActive = parseInt(env.MIN_ACTIVE) || 3;
+    CONFIG.tgToken = env.TG_TOKEN || '';
+    CONFIG.tgId = env.TG_ID || '';
+    if (env.REMOTE_URLS) CONFIG.remoteUrls = env.REMOTE_URLS.split(',').map(u => u.trim());
 }
 
 async function resolveDomain(domain) {
-  const ips = [];
-  try {
-    for (const type of ['A', 'AAAA']) {
-      const resp = await fetch(`https://cloudflare-dns.com/dns-query?name=${domain}&type=${type}`, { headers: { 'accept': 'application/dns-json' } });
-      const data = await resp.json();
-      if (data.Answer) data.Answer.forEach(a => ips.push(a.data));
+    const r = await fetch(`${CONFIG.dohApi}?name=${domain}&type=A`, { headers: { 'accept': 'application/dns-json' } });
+    const d = await r.json();
+    return d.Answer ? d.Answer.map(a => a.data) : [];
+}
+
+async function getDomainStatus() {
+    const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${CONFIG.domain}&type=A`);
+    if (!records) return [];
+    return await Promise.all(records.map(async r => {
+        const addr = `${r.content}:${CONFIG.targetPort}`;
+        const c = await checkProxyIP(addr);
+        return { id: r.id, ip: r.content, success: c.success, colo: c.colo || 'N/A', time: c.responseTime || '-' };
+    }));
+}
+
+async function checkProxyIP(ip) {
+    const addr = ip.includes(':') ? ip : `${ip}:${CONFIG.targetPort}`;
+    try {
+        const r = await fetch(`${CONFIG.checkApi}${addr}`, { signal: AbortSignal.timeout(6000) });
+        return await r.json();
+    } catch (e) { return { success: false }; }
+}
+
+async function fetchCF(p, m = 'GET', body = null) {
+    const i = { method: m, headers: { 'X-Auth-Email': CONFIG.email, 'Authorization': `Bearer ${CONFIG.apiKey}`, 'Content-Type': 'application/json' } };
+    if (body) i.body = JSON.stringify(body);
+    try {
+        const r = await fetch(`https://api.cloudflare.com/client/v4${p}`, i);
+        const d = await r.json();
+        return d.result;
+    } catch (e) { return null; }
+}
+
+async function maintainDomain(env, isManual) {
+    let report = { added: [], removed: [], currentActive: 0, poolExhausted: false, logs: [] };
+    const addLog = (m) => report.logs.push(`[${new Date().toLocaleTimeString()}] ${m}`);
+    const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${CONFIG.domain}&type=A`) || [];
+    let activeIPs = [];
+    let poolRaw = await env.IP_DATA.get('pool') || '';
+    let poolList = poolRaw.split('\n').filter(l => l.trim());
+
+    for (const r of records) {
+        const addr = `${r.content}:${CONFIG.targetPort}`;
+        const c = await checkProxyIP(addr);
+        if (c.success) activeIPs.push(r.content);
+        else { 
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${r.id}`, 'DELETE'); 
+            report.removed.push(r.content);
+            poolList = poolList.filter(p => p !== addr);
+        }
     }
-  } catch (e) {}
-  return ips;
+
+    if (activeIPs.length < CONFIG.minActive) {
+        for (const item of poolList) {
+            if (activeIPs.length >= CONFIG.minActive) break;
+            const [ip, port] = item.split(':');
+            if (activeIPs.includes(ip) || port !== CONFIG.targetPort) continue;
+            if ((await checkProxyIP(item)).success) {
+                await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', { type: 'A', name: CONFIG.domain, content: ip, ttl: 60, proxied: false });
+                activeIPs.push(ip); report.added.push(ip);
+            } else {
+                poolList = poolList.filter(p => p !== item);
+            }
+        }
+        await env.IP_DATA.put('pool', poolList.join('\n'));
+        if (activeIPs.length < CONFIG.minActive) report.poolExhausted = true;
+    }
+    report.currentActive = activeIPs.length;
+    if (isManual || report.added.length > 0 || report.removed.length > 0 || report.poolExhausted) await sendTG(report);
+    return report;
 }
 
-function extractIPs(text) {
-  const v4 = /((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}/g;
-  const v6 = /(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4})/g;
-  return [...new Set([...(text.match(v4) || []), ...(text.match(v6) || [])])];
+async function sendTG(r) {
+    if (!CONFIG.tgToken || !CONFIG.tgId) return;
+    const msg = `🛠️ DDNS: ${CONFIG.domain}\n活跃: ${r.currentActive}/${CONFIG.minActive}\n新增: ${r.added.length} | 移除: ${r.removed.length}`;
+    await fetch(`https://api.telegram.org/bot${CONFIG.tgToken}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: CONFIG.tgId, text: msg }) });
 }
 
-async function addLog(env, msg, type = "INFO") {
-  let logs = await env.PROXYIP_STORE.get('system-logs', { type: 'json' }) || [];
-  logs.unshift({ t: new Date().toLocaleString('zh-CN'), m: msg, y: type });
-  await env.PROXYIP_STORE.put('system-logs', JSON.stringify(logs.slice(0, 50)));
-}
-
-async function handleLogs(request, env) {
-  if (request.method === 'DELETE') { await env.PROXYIP_STORE.put('system-logs', '[]'); return jsonResponse({ success: true }); }
-  return jsonResponse(await env.PROXYIP_STORE.get('system-logs', { type: 'json' }) || []);
-}
-
-async function handleScanSummary(request, env) {
-  if (request.method === 'POST') {
-    await env.PROXYIP_STORE.put('last-scan-summary', JSON.stringify(await request.json()));
-    return jsonResponse({ success: true });
-  }
-  return jsonResponse(await env.PROXYIP_STORE.get('last-scan-summary', { type: 'json' }) || {});
-}
-
-async function handleConfig(request, env) {
-  if (request.method === 'GET') {
-    const config = await getConfig(env);
-    const safe = { ...config };
-    ['cfApiKey', 'tgBotToken', 'adminPassword'].forEach(k => { if (safe[k]) safe[k] = "HASH_SET"; });
-    return jsonResponse(safe);
-  }
-  const data = await request.json();
-  const old = await getConfig(env);
-  ['cfApiKey', 'tgBotToken', 'adminPassword'].forEach(k => { if (data[k] === "HASH_SET") data[k] = old[k]; });
-  await env.PROXYIP_STORE.put('config', JSON.stringify(data));
-  return jsonResponse({ success: true });
-}
-
-async function handleIPDatabase(request, env) {
-  if (request.method === 'GET') return jsonResponse({ data: await env.PROXYIP_STORE.get('ip-database') || '' });
-  await env.PROXYIP_STORE.put('ip-database', (await request.json()).data);
-  return jsonResponse({ success: true });
-}
-
-async function checkProxyIP(proxyip, backends = "") {
-  const list = backends.split(',').map(b => b.trim()).filter(b=>b);
-  const backend = list[Math.floor(Math.random() * list.length)] || 'https://check.dwb.pp.ua/check';
-  try {
-    const res = await fetch(`${backend}?proxyip=${proxyip}`, { signal: AbortSignal.timeout(6000) });
-    return await res.json();
-  } catch (e) { return { success: false, message: 'TIMEOUT' }; }
-}
-
-async function handleCheck(request, env) {
-  const { target } = Object.fromEntries(new URL(request.url).searchParams);
-  const config = await getConfig(env);
-  return jsonResponse(await checkProxyIP(target, config.checkBackends));
-}
-
-async function fetchDNSRecords(config) {
-  const url = `https://api.cloudflare.com/client/v4/zones/${config.cfZoneId}/dns_records?name=${config.cfDomain}&type=A`;
-  const res = await fetch(url, { headers: { 'X-Auth-Email': config.cfMail, 'Authorization': `Bearer ${config.cfApiKey}` } });
-  const data = await res.json();
-  return data.success ? data.result : [];
-}
-
-async function addDNSRecord(ip, config) {
-  await fetch(`https://api.cloudflare.com/client/v4/zones/${config.cfZoneId}/dns_records`, {
-    method: 'POST',
-    headers: { 'X-Auth-Email': config.cfMail, 'Authorization': `Bearer ${config.cfApiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'A', name: config.cfDomain, content: ip, ttl: 60, proxied: false })
-  });
-}
-
-async function deleteDNSRecord(id, config) {
-  await fetch(`https://api.cloudflare.com/client/v4/zones/${config.cfZoneId}/dns_records/${id}`, {
-    method: 'DELETE',
-    headers: { 'X-Auth-Email': config.cfMail, 'Authorization': `Bearer ${config.cfApiKey}` }
-  });
-}
-
-async function handleGetCurrentIPs(request, env) {
-  const config = await getConfig(env);
-  if (!config.cfApiKey) return jsonResponse({ ips: [] });
-  return jsonResponse({ ips: await fetchDNSRecords(config) });
-}
-
-async function handleUpdateDNS(request, env) {
-  const { remove, add } = await request.json();
-  const config = await getConfig(env);
-  if (remove) for (const item of remove) if (item.id) await deleteDNSRecord(item.id, config);
-  if (add) for (const item of add) await addDNSRecord(item.ip, config);
-  return jsonResponse({ success: true });
-}
-
-async function sendTGNotification(text, config) {
-  if (!config.tgBotToken || !config.tgChatId) return;
-  await fetch(`https://api.telegram.org/bot${config.tgBotToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: config.tgChatId, text: text, parse_mode: 'Markdown' })
-  });
-}
-
-function handleCORS() {
-  return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
-}
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-}
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-// --- 前端 HTML 构造 ---
-
-function getHTML(path) {
-  const isAdmin = path === '/admin';
-  return `<!DOCTYPE html>
+function renderHTML(C) {
+    return `
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <title>ProxyIP/DDNS Pro Console</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    .active-tab { border-bottom: 3px solid #3b82f6; color: #3b82f6; }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-thumb { background: #334155; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-    .scan-pulse { animation: pulse 2s infinite; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDNS Pro Console</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root { --primary: #007aff; --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --secondary: #86868b; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.01em; }
+        .hero { padding: 40px 0 20px 0; text-align: left; }
+        .hero h1 { font-size: 1.5rem; font-weight: 600; color: var(--secondary); margin-bottom: 8px; }
+        .hero .domain-info { font-size: 2.2rem; font-weight: 700; color: var(--text); letter-spacing: -0.03em; }
+        .card { border: none; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.04); background: var(--card); margin-bottom: 24px; transition: transform 0.2s; }
+        .console { background: #1c1c1e; color: #32d74b; height: 350px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace; padding: 20px; border-radius: 16px; font-size: 13px; line-height: 1.6; }
+        .table { margin: 0; }
+        .table th { border: none; font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--secondary); padding: 15px; }
+        .table td { border-top: 1px solid #f2f2f2; padding: 15px; vertical-align: middle; }
+        .btn { border-radius: 12px; font-weight: 600; padding: 10px 20px; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); border: none; }
+        .btn-primary { background: var(--primary); box-shadow: 0 4px 15px rgba(0,122,255,0.25); }
+        .btn-primary:hover { transform: translateY(-1px); background: #0066d6; }
+        .form-control { border-radius: 12px; background: #f5f5f7; border: 1px solid transparent; padding: 12px 16px; }
+        .form-control:focus { background: #fff; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(0,122,255,0.1); }
+        .status-pill { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+        .badge-add { cursor: pointer; border-radius: 8px; font-size: 11px; font-weight: 600; }
+        @media (max-width: 768px) { .hero .domain-info { font-size: 1.6rem; } .console { height: 260px; } }
+    </style>
 </head>
-<body class="bg-slate-950 text-slate-200">
-  <div class="max-w-5xl mx-auto p-4 md:p-8">
-    <header class="flex justify-between items-center mb-8">
-      <div>
-        <h1 class="text-3xl font-black text-blue-500 italic">PROXY-DDNS PRO</h1>
-        <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">${isAdmin ? 'ADMIN CONSOLE' : 'PUBLIC DASHBOARD'}</p>
-      </div>
-      <div class="flex gap-2">
-        ${isAdmin ? `
-          <button onclick="runMaintenance()" id="m-btn" class="bg-blue-600 px-6 py-2 rounded-xl text-sm font-bold transition">一键维护</button>
-          <button onclick="logout()" class="bg-slate-800 px-4 py-2 rounded-xl text-sm">退出</button>
-        ` : `
-          <button onclick="location.href='/admin'" class="bg-blue-600 px-6 py-2 rounded-xl text-sm font-bold shadow-xl shadow-blue-900/40">管理后台</button>
-        `}
-      </div>
-    </header>
+<body class="pb-5">
 
-    ${isAdmin ? `
-      <div id="login-overlay" class="hidden fixed inset-0 bg-slate-950 z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 w-full max-w-sm shadow-2xl text-center">
-          <h2 class="text-xl font-bold text-blue-500 mb-6 underline">IDENTITY VERIFICATION</h2>
-          <input id="login-pwd" type="password" placeholder="请输入管理密码" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl mb-4 text-center font-mono outline-none focus:border-blue-500">
-          <button onclick="doLogin()" class="w-full bg-blue-600 py-3 rounded-xl font-bold">验证权限</button>
+<div class="container hero">
+    <h1>正在自动维护</h1>
+    <div class="domain-info">${C.domain}<span style="color:var(--secondary); font-weight: 400;">:${C.targetPort}</span></div>
+</div>
+
+<div class="container">
+    <div class="card p-3">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="m-0 fw-bold">解析实况</h6>
+            <button class="btn btn-primary btn-sm" onclick="refreshStatus()">刷新状态</button>
         </div>
-      </div>
-    ` : ''}
+        <div class="table-responsive">
+            <table class="table text-center">
+                <thead><tr><th>IP地址</th><th>机房</th><th>延迟</th><th>状态</th><th>管理</th></tr></thead>
+                <tbody id="status-table"></tbody>
+            </table>
+        </div>
+    </div>
 
-    <nav class="flex gap-6 border-b border-slate-900 mb-8 text-sm font-bold overflow-x-auto whitespace-nowrap">
-      <button onclick="setTab('dashboard')" class="pb-3 tab-btn" id="btn-dashboard">仪表盘</button>
-      ${isAdmin ? `
-        <button onclick="setTab('database')" class="pb-3 tab-btn" id="btn-database">IP 库 <span id="scan-badge" class="hidden scan-pulse text-[8px] bg-blue-600 px-1 rounded ml-1">SCANNING</span></button>
-        <button onclick="setTab('tools')" class="pb-3 tab-btn" id="btn-tools">诊断/测试</button>
-        <button onclick="setTab('config')" class="pb-3 tab-btn" id="btn-config">系统设置</button>
-      ` : ''}
-      <button onclick="setTab('logs')" class="pb-3 tab-btn" id="btn-logs">运行日志</button>
-    </nav>
-    <div id="content"></div>
-  </div>
+    <div class="row">
+        <div class="col-lg-7">
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="m-0 fw-bold">IP 库池</h6>
+                    <span class="small text-secondary">库存: <b id="pool-count" class="text-dark">...</b> <a href="javascript:refreshPoolCount()" class="text-decoration-none ms-2">刷新总数</a></span>
+                </div>
+                <textarea id="ip-pool" class="form-control mb-3" rows="8" placeholder="点击加载库详情..."></textarea>
+                <div class="row g-2">
+                    <div class="col-6"><button class="btn btn-outline-dark btn-sm w-100" onclick="loadPool()">📂 加载详情</button></div>
+                    <div class="col-6"><button class="btn btn-primary btn-sm w-100" onclick="savePool()">✅ 保存并添加</button></div>
+                </div>
+                <button class="btn btn-light btn-sm w-100 mt-3 border" onclick="batchCheck()" style="background:#fff; color: #e67e22;">⚡ 极速洗库</button>
+            </div>
+            
+            <div class="card p-4">
+                <h6 class="mb-3 fw-bold">Check ProxyIP</h6>
+                <div class="input-group mb-3">
+                    <input type="text" id="lookup-dom" class="form-control" placeholder="输入域名或 域名:端口">
+                    <button class="btn btn-info text-white" onclick="lookupDomain()">探测</button>
+                </div>
+                <div id="lookup-results" class="row g-2"></div>
+            </div>
+        </div>
 
-  <script>
-    let state = { config:{}, currentIPs:[], db:'', logs:[], activeTab:'dashboard', isScanning: false, scanResults: [], scanIndex: 0, scanTotal: 0, lastScan: {}, isAdmin: ${isAdmin} };
+        <div class="col-lg-5">
+            <div class="card p-4 h-100">
+                <h6 class="mb-3 fw-bold">系统日志</h6>
+                <div id="log-window" class="console mb-3"></div>
+                <div class="progress mb-4" style="height:14px; background: #f5f5f7; border-radius: 7px;">
+                    <div id="pg-bar" class="progress-bar bg-primary" style="width:0%"></div>
+                </div>
+                <div class="d-grid gap-2">
+                    <button class="btn btn-dark" onclick="runMaintain()">启动补齐维护</button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="syncRemote()">同步远程订阅库</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
-    function logout() { localStorage.removeItem('admin_pwd'); location.href='/'; }
-    function doLogin() { localStorage.setItem('admin_pwd', document.getElementById('login-pwd').value); document.getElementById('login-overlay').classList.add('hidden'); refreshData(); }
+<script>
+    const log = (m, t='info') => {
+        const w = document.getElementById('log-window'), c = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
+        w.innerHTML += \`<div style="color:\${c[t]}">[\${new Date().toLocaleTimeString()}] \${m}</div>\`;
+        w.scrollTop = w.scrollHeight;
+    };
 
-    async function api(path, method='GET', body=null) {
-      const pwd = localStorage.getItem('admin_pwd') || '';
-      const opts = { method, headers: { 'x-password': pwd, 'Content-Type': 'application/json' } };
-      if(body) opts.body = JSON.stringify(body);
-      const res = await fetch(path, opts);
-      if(res.status === 401 && state.isAdmin) { document.getElementById('login-overlay').classList.remove('hidden'); return null; }
-      return res.json();
+    async function refreshPoolCount() {
+        const r = await fetch('/api/get-pool?onlyCount=true').then(r => r.json());
+        document.getElementById('pool-count').innerText = r.count;
+        log('刷新总数: ' + r.count);
     }
 
-    async function setTab(tab) { state.activeTab = tab; document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active-tab', b.id === 'btn-' + tab)); render(); }
-
-    async function refreshData() {
-      state.config = (await api('/api/config')) || {};
-      state.currentIPs = (await api('/api/current-ips'))?.ips || [];
-      state.logs = await api('/api/logs') || [];
-      state.lastScan = await api('/api/scan-summary') || {};
-      if(state.isAdmin) state.db = (await api('/api/ip-database'))?.data || '';
-      render();
+    async function loadPool() {
+        log('载入详情中...');
+        const r = await fetch('/api/get-pool').then(r => r.json());
+        document.getElementById('ip-pool').value = r.pool || '';
+        document.getElementById('pool-count').innerText = r.count;
+        log('载入成功');
     }
 
-    async function runMaintenance() {
-      document.getElementById('m-btn').innerText = '执行中...';
-      await api('/api/maintenance');
-      alert('已在后台同步，请查看日志或 TG');
-      document.getElementById('m-btn').innerText = '一键维护';
+    async function savePool() {
+        log('正在保存...', 'warn');
+        const r = await fetch('/api/save-pool', { method: 'POST', body: JSON.stringify({ pool: document.getElementById('ip-pool').value }) }).then(r => r.json());
+        if(r.success) { log(\`入库成功: \${r.count}条\`, 'success'); document.getElementById('pool-count').innerText = r.count; }
     }
 
-    async function startScan() {
-      if(state.isScanning) return;
-      const ips = [...new Set(state.db.split(/[\\n,\\s]+/).filter(i => i && !i.startsWith('#')))];
-      state.scanTotal = ips.length; state.scanIndex = 0; state.scanResults = []; state.isScanning = true;
-      saveScanProgress(); doScan();
+    async function batchCheck() {
+        const l = document.getElementById('ip-pool').value.split('\\n').filter(i => i.trim());
+        if(!l.length) return log('请先载入详情', 'error');
+        let valid = [], ok = 0, checked = 0;
+        const pg = document.getElementById('pg-bar');
+        log(\`🚀 并发检测启动\`, 'warn');
+        const chunkSize = 10;
+        for (let i = 0; i < l.length; i += chunkSize) {
+            const chunk = l.slice(i, i + chunkSize);
+            await Promise.all(chunk.map(async (line) => {
+                let item = line.trim().replace(/\\s+/g, ':');
+                if(!item.includes(':')) item += ':443';
+                const r = await fetch(\`/api/check-ip?ip=\${item}\`).then(r => r.json());
+                checked++;
+                if(r.success) { valid.push(item); ok++; log(\`✅ [\${item}]\`, 'success'); }
+                else { log(\`❌ [\${item}]\`, 'error'); }
+                pg.style.width = (checked / l.length * 100) + '%';
+            }));
+        }
+        document.getElementById('ip-pool').value = valid.join('\\n');
+        await savePool();
+        log(\`洗库结束，活跃保留: \${ok}\`, 'success');
     }
 
-    async function doScan() {
-      const ips = [...new Set(state.db.split(/[\\n,\\s]+/).filter(i => i && !i.startsWith('#')))];
-      document.getElementById('scan-badge')?.classList.remove('hidden');
-      while(state.scanIndex < ips.length && state.isScanning) {
-        const batch = ips.slice(state.scanIndex, state.scanIndex + 4);
-        const results = await Promise.all(batch.map(ip => api('/api/check?target=' + ip + ':' + state.config.targetPort)));
-        results.forEach((r, i) => { if(r) state.scanResults.push({ ip: batch[i], success: r.success, ms: r.responseTime, loc: r.colo }); });
-        state.scanIndex += batch.length;
-        saveScanProgress();
-        if(state.activeTab === 'database') renderScanUI();
-      }
-      if(state.scanIndex >= ips.length) {
-        state.isScanning = false;
-        const valid = state.scanResults.filter(r => r.success);
-        await api('/api/scan-summary', 'POST', { time: new Date().toLocaleString(), total: state.scanTotal, validCount: valid.length, avgMs: valid.length ? Math.round(valid.reduce((a,b)=>a+b.ms,0)/valid.length) : 0 });
-        localStorage.removeItem('scan_progress'); document.getElementById('scan-badge')?.classList.add('hidden'); refreshData();
-      }
+    async function refreshStatus() {
+        const t = document.getElementById('status-table');
+        t.innerHTML = '<tr><td colspan="5" class="text-secondary p-4">查询中...</td></tr>';
+        const d = await fetch('/api/current-status').then(r => r.json());
+        t.innerHTML = d.map(r => \`
+            <tr>
+                <td class="fw-bold">\${r.ip}</td>
+                <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
+                <td>\${r.time}ms</td>
+                <td><span class="status-pill \${r.success?'text-success':'text-danger'}"><span class="dot \${r.success?'bg-success':'bg-danger'}"></span>\${r.success?'活跃':'失效'}</span></td>
+                <td><a href="javascript:deleteRecord('\${r.id}')" class="text-danger text-decoration-none small fw-bold">移除</a></td>
+            </tr>\`).join('') || '<tr><td colspan="5" class="p-4">无记录</td></tr>';
     }
 
-    function saveScanProgress() { localStorage.setItem('scan_progress', JSON.stringify({ index: state.scanIndex, total: state.scanTotal, results: state.scanResults, isScanning: state.isScanning })); }
-
-    async function customTest() {
-      const target = document.getElementById('test-target').value;
-      const resDiv = document.getElementById('test-res-body');
-      resDiv.innerText = '正在调测...';
-      const r = await api('/api/check?target=' + target);
-      resDiv.innerText = JSON.stringify(r, null, 2);
-      if(r?.success) {
-        document.getElementById('test-tools-extra').innerHTML = '<div class="flex gap-2 mt-4"><button onclick="addIpToDb(\\''+target.split(':')[0]+'\\')" class="bg-blue-900/40 text-blue-400 px-4 py-2 rounded-xl text-xs">加入本地 IP 库</button><button onclick="addIpToDns(\\''+target.split(':')[0]+'\\')" class="bg-green-900/40 text-green-400 px-4 py-2 rounded-xl text-xs">直接解析到域名</button></div>';
-      }
+    async function lookupDomain() {
+        const val = document.getElementById('lookup-dom').value;
+        if(!val) return;
+        let [dom, port] = val.split(':');
+        port = port || '443';
+        log(\`解析: \${dom} (端口 \${port})\`);
+        const { ips } = await fetch(\`/api/lookup-domain?domain=\${val}\`).then(r => r.json());
+        const res = document.getElementById('lookup-results');
+        res.innerHTML = '';
+        await Promise.all(ips.map(async ip => {
+            const id = 'ip-'+ip.replace(/\\./g,'-');
+            const target = \`\${ip}:\${port}\`;
+            res.innerHTML += \`<div class="col-6"><div class="border rounded-4 p-2 d-flex justify-content-between align-items-center bg-light"><span>\${target}</span><span id="\${id}" onclick="addToPool('\${target}')" class="badge-add bg-secondary text-white p-2">探测...</span></div></div>\`;
+            const d = await fetch(\`/api/check-ip?ip=\${target}\`).then(r => r.json());
+            const e = document.getElementById(id);
+            e.className = 'badge-add p-2 text-white ' + (d.success ? 'bg-success' : 'bg-danger');
+            e.innerText = d.success ? '追加' : '失效';
+            log(\`探测: [\${target}] -> \${d.success?'有效':'失效'}\`);
+        }));
     }
 
-    async function addIpToDb(ip) { state.db = ip + '\\n' + state.db; await api('/api/ip-database', 'POST', { data: state.db }); alert('已添加至库'); }
-    async function addIpToDns(ip) { await api('/api/update-dns', 'POST', { add: [{ip}] }); alert('已发起解析'); refreshData(); }
-
-    async function cleanInvalid() {
-      if(!confirm('清理库中失效 IP？')) return;
-      state.db = state.scanResults.filter(r => r.success).map(r => r.ip).join('\\n');
-      await api('/api/ip-database', 'POST', { data: state.db });
-      refreshData();
+    function addToPool(v) {
+        const b = document.getElementById('ip-pool');
+        if(!b.value.includes(v)) { b.value += (b.value ? '\\n' : '') + v; log('追加: '+v, 'success'); }
     }
 
-    async function saveConfig() {
-      const body = {};
-      ['adminPassword','cfMail','cfDomain','cfZoneId','cfApiKey','targetPort','minActiveIPs','checkBackends','tgBotToken','tgChatId','remoteApis','remoteDomains'].forEach(f => {
-        const el = document.getElementById('c-'+f); if(el) body[f] = el.value;
-      });
-      await api('/api/config', 'POST', body); alert('配置已应用'); refreshData();
+    async function deleteRecord(id) {
+        if(confirm('移除？')) { await fetch(\`/api/delete-record?id=\${id}\`); refreshStatus(); }
     }
 
-    function deduplicate() { 
-      const ips = [...document.getElementById('db-area').value.matchAll(/((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?\\b){4}/g)].map(m=>m[0]);
-      document.getElementById('db-area').value = [...new Set(ips)].join('\\n');
+    async function syncRemote() { 
+        log('同步库...', 'warn'); 
+        const r = await fetch('/api/sync-remote').then(r => r.json()); 
+        log('完成，库存: '+r.count, 'success'); 
+        document.getElementById('pool-count').innerText = r.count;
     }
 
-    function renderScanUI() {
-      const div = document.getElementById('scan-res'); if(!div) return;
-      div.innerHTML = '<div class="flex justify-between text-blue-400 mb-4 border-b border-blue-900 pb-2 text-xs"><span>进度: '+state.scanIndex+'/'+state.scanTotal+'</span><span>有效: '+state.scanResults.filter(r=>r.success).length+'</span></div>';
-      state.scanResults.slice(-20).forEach(r => {
-        div.innerHTML += '<div class="flex justify-between text-[10px] mb-1 font-mono '+(r.success?'text-slate-400':'text-red-900/50')+'"><span>'+r.ip+'</span><span>'+(r.success?r.loc+'|'+r.ms+'ms':'FAIL')+'</span></div>';
-      });
-      div.scrollTop = div.scrollHeight;
+    async function runMaintain() { 
+        log('启动任务...', 'warn'); 
+        const r = await fetch('/api/maintain').then(r => r.json());
+        r.logs.forEach(msg => log(msg));
+        log(\`活跃解析: \${r.currentActive}\`, 'success'); 
+        refreshStatus(); 
     }
 
-    function render() {
-      const c = document.getElementById('content');
-      if(state.activeTab === 'dashboard') {
-        c.innerHTML = '<div class="grid md:grid-cols-2 gap-6 mb-8"><div class="bg-slate-900 p-6 rounded-3xl border border-slate-800"><h3 class="text-xs font-bold text-slate-500 uppercase mb-4 tracking-tighter">监控中心</h3><div class="text-2xl font-black text-blue-400 font-mono">'+(state.config.cfDomain||'未配置')+'</div><div class="text-[10px] text-slate-500 mt-2 uppercase font-bold tracking-widest">Port: '+state.config.targetPort+' | Goal: '+state.config.minActiveIPs+'</div></div><div class="bg-slate-900 p-6 rounded-3xl border border-slate-800 flex justify-between items-center text-center"><div class="flex-1 border-r border-slate-800"><h3 class="text-[9px] text-slate-500 uppercase">当前在线</h3><div class="text-3xl font-black">'+state.currentIPs.length+'</div></div><div class="flex-1 px-2"><h3 class="text-[9px] text-slate-500 uppercase">最近扫描有效</h3><div class="text-3xl font-black text-blue-500">'+(state.lastScan.validCount||0)+'</div></div></div></div><div class="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl"><div class="p-6 border-b border-slate-800 font-bold flex justify-between items-center"><span>Cloudflare A 记录列表</span><button onclick="refreshData()" class="text-xs text-blue-500 font-bold uppercase tracking-widest">刷新</button></div><div class="p-4 space-y-2">'+state.currentIPs.map(ip => '<div class="flex justify-between items-center bg-slate-950 p-4 rounded-2xl border border-slate-900"><div class="font-mono text-sm">'+ip.content+'</div>'+(state.isAdmin ? '<button onclick="deleteIP(\\''+ip.id+'\\')" class="text-xs text-slate-600 hover:text-red-500">移除</button>' : '<div class="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_8px_#22c55e]"></div>')+'</div>').join('')+'</div></div>';
-      } else if(state.activeTab === 'database' && state.isAdmin) {
-        c.innerHTML = '<div class="grid md:grid-cols-2 gap-6"><div class="bg-slate-900 p-6 rounded-3xl border border-slate-800"><div class="flex justify-between mb-4"><h3 class="text-xs font-bold uppercase text-slate-500">本地数据源</h3><button onclick="deduplicate()" class="text-[10px] text-blue-500 font-bold">去重</button></div><textarea id="db-area" class="w-full h-80 bg-slate-950 border border-slate-800 p-4 rounded-2xl font-mono text-[10px] outline-none">'+state.db+'</textarea><button onclick="saveDB()" class="w-full mt-4 bg-slate-800 py-3 rounded-xl text-sm font-bold">同步</button></div><div class="flex flex-col gap-6"><div class="bg-slate-900 p-6 rounded-3xl border border-slate-800 flex-1 flex flex-col min-h-[300px]"><div class="flex gap-2 mb-4"><button onclick="startScan()" class="flex-1 bg-indigo-600 py-2 rounded-xl text-xs font-bold">启动扫描</button><button onclick="state.isScanning=false" class="bg-slate-800 px-4 rounded-xl text-xs font-bold">停止</button><button onclick="cleanInvalid()" class="bg-red-900/20 text-red-500 px-4 rounded-xl text-xs font-bold">清理失效</button></div><div id="scan-res" class="flex-1 bg-black/40 p-4 rounded-2xl font-mono text-[10px] overflow-y-auto min-h-[150px]"></div></div></div></div>';
-      } else if(state.activeTab === 'config' && state.isAdmin) {
-        c.innerHTML = '<div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-8"><div class="grid md:grid-cols-2 gap-8 text-sm"><div class="space-y-4"><h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px] mb-4">基础配置</h4><div><label class="text-slate-500 block mb-1 font-bold">管理密码</label><input id="c-adminPassword" type="password" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.adminPassword||'')+'"></div><div><label class="text-slate-500 block mb-1">CF 邮箱</label><input id="c-cfMail" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.cfMail||'')+'"></div><div><label class="text-slate-500 block mb-1">监控域名</label><input id="c-cfDomain" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.cfDomain||'')+'"></div><div><label class="text-slate-500 block mb-1">Zone ID</label><input id="c-cfZoneId" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.cfZoneId||'')+'"></div><div><label class="text-slate-500 block mb-1">API Key</label><input id="c-cfApiKey" type="password" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.cfApiKey||'')+'"></div></div><div class="space-y-4"><h4 class="text-blue-500 font-bold uppercase tracking-widest text-[10px] mb-4">运行/通知</h4><div><label class="text-slate-500 block mb-1">远程 API 地址 (逗号分隔)</label><textarea id="c-remoteApis" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl h-20 text-[10px]">'+(state.config.remoteApis||'')+'</textarea></div><div><label class="text-slate-500 block mb-1">克隆域名</label><textarea id="c-remoteDomains" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl h-20 text-[10px]">'+(state.config.remoteDomains||'')+'</textarea></div><div class="grid grid-cols-2 gap-4"><div><label class="text-slate-500 block mb-1">检测端口</label><input id="c-targetPort" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.targetPort||'50001')+'"></div><div><label class="text-slate-500 block mb-1">最小活跃数</label><input id="c-minActiveIPs" type="number" class="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.minActiveIPs||3)+'"></div></div><div><label class="text-slate-500 block mb-1 font-bold">TG Token & ChatID</label><div class="flex gap-2"><input id="c-tgBotToken" type="password" class="flex-1 bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.tgBotToken||'')+'"><input id="c-tgChatId" class="w-32 bg-slate-950 border border-slate-800 p-3 rounded-xl" value="'+(state.config.tgChatId||'')+'"></div></div></div></div><button onclick="saveConfig()" class="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-black text-white shadow-xl transition-all">保存配置信息</button></div>';
-      } else if(state.activeTab === 'tools' && state.isAdmin) {
-        c.innerHTML = '<div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 space-y-6"><h3 class="text-xl font-bold mb-2 italic tracking-tighter">Diagnostic Lab</h3><div class="flex gap-3"><input id="test-target" class="flex-1 bg-slate-950 border border-slate-800 p-4 rounded-2xl font-mono" placeholder="IP:PORT"><button onclick="customTest()" class="bg-blue-600 px-8 py-3 rounded-2xl font-bold active:scale-95">调测</button></div><div id="test-tools-extra"></div><div class="bg-black/50 p-6 rounded-2xl border border-slate-800 font-mono text-[11px] text-green-500 whitespace-pre-wrap min-h-[200px]" id="test-res-body">Waiting for signal...</div></div>';
-      } else if(state.activeTab === 'logs') {
-        c.innerHTML = '<div class="bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl overflow-hidden"><div class="p-6 border-b border-slate-800 flex justify-between px-8"><span class="font-bold text-slate-500 uppercase text-xs tracking-tighter">Event Logs</span>' + (state.isAdmin ? '<button onclick="api(\\'/api/logs\\',\\'DELETE\\').then(refreshData)" class="text-[10px] text-red-500 font-bold uppercase underline">Clear</button>' : '') + '</div><div class="h-[500px] overflow-y-auto p-4 font-mono text-[10px] space-y-1">' + state.logs.map(l => '<div><span class="text-slate-600">['+l.t+']</span> <span class="'+(l.y==='ERROR'?'text-red-500':l.y==='TASK'?'text-blue-500':'text-slate-500')+' font-bold">['+l.y+']</span> '+l.m+'</div>').join('') + (state.logs.length === 0 ? '<p class="text-center text-slate-700 mt-20 italic">No events recorded.</p>' : '') + '</div></div>';
-      }
-    }
-
-    async function deleteIP(id) { if(confirm('确认移除？')) { await api('/api/update-dns', 'POST', { remove:[{id}] }); refreshData(); } }
-    async function saveDB() { await api('/api/ip-database', 'POST', { data: document.getElementById('db-area').value }); alert('同步完成'); refreshData(); }
-
-    window.onload = async () => { await refreshData(); const saved = localStorage.getItem('scan_progress'); if(saved && state.isAdmin) { Object.assign(state, JSON.parse(saved)); if(state.isScanning) doScan(); } setInterval(refreshData, 30000); };
-  </script>
+    window.onload = () => { refreshStatus(); refreshPoolCount(); };
+</script>
 </body>
-</html>`;
+</html>
+    `;
 }
