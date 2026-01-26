@@ -16,7 +16,7 @@
     *   `CF_DOMAIN`: **目标维护域名**（如 `kr.dwb.cc.cd`）。
     *   `TARGET_PORT`: 维护的端口（如 `50001` 或 `443`）。
     *   `MIN_ACTIVE`: 最小活跃 IP 数量（如 `3`）。
-    *   `CHECK_API`: (可选) 后端检测接口地址，例如：`https://check.dwb.pp.ua/check?proxyip=`，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
+    *   `CHECK_API`:  后端检测接口地址，默认为：`https://check.dwb.pp.ua/check?proxyip=`，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。  
     *   `REMOTE_URLS`: (可选) 远程 TXT 订阅库地址，多个用逗号隔开。
 
 #### 第三步：设置自动化（定时任务）
@@ -34,6 +34,6 @@
 2.  **手动维护**：
     *   点击 **「启动补齐维护」**：后端会立即检查当前域名解析，删掉坏的 IP，并从库里找好的补齐。
 3.  **批量洗库**：
-    *   如果你库里 IP 太多，点击 **「⚡ 一键检测并入库」**。前端会并发检测所有 IP 存活情况，并自动剔除死 IP 后更新数据库。
+    *   如果你库里 IP 太多，可以加载库然后点击 **「⚡ 一键检测并入库」**。前端会并发检测所有 IP 存活情况，并自动剔除死 IP 后更新数据库。
 4.  **外部探测**：
     *   在 `Check ProxyIP` 输入别人的域名或 `域名:端口`，点击探测。解析出来的 IP 若有效，可点 **「追加」** 直接收入你的库中。
