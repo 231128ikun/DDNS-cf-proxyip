@@ -18,6 +18,8 @@
     *   `MIN_ACTIVE`: 最小活跃 IP 数量（如 `3`）。
     *   `CHECK_API`:  后端检测接口地址，默认为：`https://check.dwb.pp.ua/check?proxyip=`，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。  
     *   `REMOTE_URLS`: (可选) 远程 TXT 订阅库地址，多个用逗号隔开。
+    *   `TG_TOKEN`: (可选) TG通知机器人的api token 。
+    *   `TG_ID`: (可选) 需要TG通知的账号ID。
 
 #### 第三步：设置自动化（定时任务）
 1.  在 Worker 设置页面找到 **Triggers（触发器）** -> **Cron Triggers**。
