@@ -10,18 +10,18 @@
     *   在 Worker 设置页面找到 **Variables（变量）** -> **KV Namespace Bindings**。
     *   创建一个名为 `IP_DATA` 的 KV 空间并绑定到 Worker 上。
 3.  **配置环境变量**（在 Variables 页面添加）：
-    *   `CF_MAIL`: 你的 CF 邮箱。
-    *   `CF_KEY`: 你的 API 令牌。
-    *   `CF_ZONEID`: 你的区域 ID。
+    *   `CF_MAIL`: 你的 CF 邮箱（要维护的域名所在cf账号）。
+    *   `CF_KEY`: 你的 API 令牌。（同上）
+    *   `CF_ZONEID`: 你的区域 ID。（同上）
     *   `CF_DOMAIN`: **目标维护域名**（如 `kr.dwb.cc.cd`）。
-    *   `TARGET_PORT`: 默认探测端口（如 `50001` 或 `443`）。
+    *   `TARGET_PORT`: 维护的端口（如 `50001` 或 `443`）。
     *   `MIN_ACTIVE`: 最小活跃 IP 数量（如 `3`）。
-    *   `CHECK_API`: (可选) 后端检测接口地址，例如：https://check.dwb.pp.ua/check?proxyip=，[[项目地址]](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
+    *   `CHECK_API`: (可选) 后端检测接口地址，例如：https://check.dwb.pp.ua/check?proxyip=，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
     *   `REMOTE_URLS`: (可选) 远程 TXT 订阅库地址，多个用逗号隔开。
 
 #### 第三步：设置自动化（定时任务）
 1.  在 Worker 设置页面找到 **Triggers（触发器）** -> **Cron Triggers**。
-2.  添加一个触发器，例如 `*/20 * * * *`（每 20 分钟执行一次自动维护）。
+2.  添加一个触发器，例如 `0 */3 * * *`（每 3个小时执行一次自动维护）。
 
 ---
 
