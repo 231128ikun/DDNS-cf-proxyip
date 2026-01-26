@@ -16,7 +16,7 @@
     *   `CF_DOMAIN`: **目标维护域名**（如 `kr.dwb.cc.cd`）。
     *   `TARGET_PORT`: 维护的端口（如 `50001` 或 `443`）。
     *   `MIN_ACTIVE`: 最小活跃 IP 数量（如 `3`）。
-    *   `CHECK_API`: (可选) 后端检测接口地址，例如：https://check.dwb.pp.ua/check?proxyip=，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
+    *   `CHECK_API`: (可选) 后端检测接口地址，例如：`https://check.dwb.pp.ua/check?proxyip=`，[项目地址](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
     *   `REMOTE_URLS`: (可选) 远程 TXT 订阅库地址，多个用逗号隔开。
 
 #### 第三步：设置自动化（定时任务）
