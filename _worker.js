@@ -1,4 +1,4 @@
-// ProxyIP 监控管理系统 - 终极融合增强稳定版 V5
+// ProxyIP 监控管理系统 
 // KV 命名空间绑定名称: PROXYIP_STORE
 
 export default {
