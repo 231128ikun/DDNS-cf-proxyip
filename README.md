@@ -12,28 +12,171 @@
 - ✅ **Telegram通知** - 维护完成后推送详细报告
 - ✅ **Web管理界面** - 直观的可视化操作面板
 
-## 🚀 快速部署
+# 快速开始指南
 
-### 1. 准备工作
+## 1️⃣ 准备工作
 
-- Cloudflare账号
-- Cloudflare API Token（需要DNS编辑权限）
-- Zone ID（域名的区域ID）
-- （可选）Telegram Bot Token 和 Chat ID
-
-### 2. 部署到 Cloudflare Workers
+### 获取 Cloudflare API Token
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. 进入 **Workers & Pages**
-3. 点击 **Create Application** → **Create Worker**
-4. 复制 `worker.js` 的完整代码
-5. 粘贴到编辑器并点击 **Save and Deploy**
-6. 进入 **Settings** → **Variables** 配置环境变量
-7. 进入 **Settings** → **Bindings** 创建 KV 绑定（变量名: `IP_DATA`）
+2. 点击右上角头像 → **My Profile**
+3. 左侧菜单 **API Tokens** → **Create Token**
+4. 选择 **Edit zone DNS** 模板
+5. 配置权限：
+   - **Permissions**: Zone - DNS - Edit
+   - **Zone Resources**: 选择你的域名
+6. 点击 **Continue to summary** → **Create Token**
+7. **复制保存** 生成的 Token（只显示一次）
 
-### 3. 配置环境变量
+### 获取 Zone ID
 
-在 Cloudflare Dashboard 的 Worker 设置中添加，详细见下方说明。
+1. 在 [Cloudflare Dashboard](https://dash.cloudflare.com/) 中选择你的域名
+2. 右侧 **API** 区域可以看到 **Zone ID**
+3. 复制保存
+
+## 2️⃣ 部署 Worker
+
+### 通过 Cloudflare Dashboard
+
+1. 访问 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)
+2. 点击 **Create Application** → **Create Worker**
+3. 复制 `worker.js` 的全部内容
+4. 粘贴到编辑器 → **Save and Deploy**
+5. 配置环境变量和KV绑定（见下方）
+
+#### 配置环境变量
+
+进入 Worker → **Settings** → **Variables**，添加：
+
+```
+CF_MAIL = your-email@example.com
+CF_KEY = your-cloudflare-api-token
+CF_ZONEID = your-zone-id
+CF_DOMAIN = ddns.example.com:port （不填端口默认443）
+MIN_ACTIVE = 3
+```
+
+#### 创建 KV 绑定
+
+1. 在 [KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间
+2. 名称：`IP_DATA`
+3. 回到 Worker → **Settings** → **Bindings**
+4. 点击 **Add binding**
+   - Type: **KV Namespace**
+   - Variable name: `IP_DATA`
+   - KV namespace: 选择刚创建的命名空间
+
+#### 配置定时任务
+
+Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger**
+
+```
+0 */6 * * *  # 每6小时执行一次
+```
+
+## 3️⃣ 使用管理面板
+
+访问你的 Worker 地址：
+```
+https://ddns-pro.你的子域名.workers.dev
+```
+
+### 第一次使用
+
+#### Step 1: 添加IP到库存
+
+1. 在 **手动输入** 标签页输入IP列表：
+```
+1.2.3.4:443
+5.6.7.8:8080
+```
+
+2. 点击 **检测清洗**（自动验证IP可用性）
+
+3. 点击 **追加入库**（保存到库存）
+
+#### Step 2: 查看解析状态
+
+1. 选择要管理的域名（顶部下拉框）
+2. 点击 **刷新** 查看当前DNS记录
+
+#### Step 3: 执行维护
+
+点击 **执行全部维护** 按钮，系统会：
+- 检测现有DNS记录
+- 删除失效IP
+- 从库存补充新IP
+- 发送Telegram通知（如已配置）
+
+## 4️⃣ 配置自动维护（可选）
+
+### 设置定时任务
+
+在 `Worker → Triggers → Cron Triggers` 中：
+```
+[triggers]
+crons = ["0 */6 * * *"]  # 每6小时
+```
+
+### 配置 Telegram 通知
+
+1. 创建 Telegram Bot:
+   - 与 [@BotFather](https://t.me/botfather) 对话
+   - 发送 `/newbot` 并按提示操作
+   - 获得 Token: `123456789:ABCdef...`
+
+2. 获取 Chat ID:
+   - 与 [@userinfobot](https://t.me/userinfobot) 对话
+   - 发送任意消息
+   - 获得 ID: `123456789`
+
+3. 在 `环境变量` 中添加：
+```
+TG_TOKEN = "your-bot-token"
+TG_ID = "your-chat-id"
+```
+
+4. 重新部署
+
+## 5️⃣ 日常使用
+
+### 批量导入IP（从Excel）
+
+1. 在Excel中准备两列：
+```
+IP地址         端口
+1.2.3.4       443
+5.6.7.8       8080
+```
+
+2. 选中数据 → Ctrl+C 复制
+
+3. 粘贴到管理面板的输入框
+
+4. 点击 **检测清洗** → **追加入库**
+
+### 从远程URL加载IP
+
+1. 切换到 **远程TXT** 标签页
+
+2. 输入TXT文件URL（如GitHub Raw文件）
+
+3. 点击 **加载** → **追加入库**
+
+### 域名探测
+
+在 **Check ProxyIP** 区域：
+```
+# 探测A记录
+example.com
+example.com:8080
+
+# 探测TXT记录
+txt@example.com
+```
+
+自动检测IP可用性，点击 **➕** 添加到输入框
+
 
 ## ⚙️ 环境变量说明
 
@@ -47,11 +190,12 @@
 | `CF_DOMAIN` | 目标域名配置（见下方格式说明） | `ddns.example.com` |
 | `MIN_ACTIVE` | 最少活跃IP数量 | `3` |
 | `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` |
+
 ### 可选变量
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
-| `DOMAIN` | 源域名（自动解析为候选IP） | 无 | `source.example.com:443` |
+| `DOMAIN` | 别人维护好的优质域名（自动解析为候选IP） | 无 | `source.example.com:443` |
 | `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 |
 | `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` |
@@ -73,100 +217,6 @@ CF_DOMAIN="all@multi.example.com:8080"          # 同时创建A记录和TXT记�
 
 # 多域名配置（逗号分隔）
 CF_DOMAIN="ddns.example.com,txt@txt.example.com,all@multi.example.com:8080"
-```
-
-## 📖 使用指南
-
-### 1. 访问管理面板
-
-部署完成后，访问你的 Worker 地址：
-```
-https://your-worker-name.your-subdomain.workers.dev
-```
-
-### 2. IP 管理操作
-
-#### 添加 IP 到库存
-
-1. 在 **手动输入** 标签页输入IP（支持多种格式）
-2. 点击 **检测清洗** - 自动验证并过滤失效IP
-3. 点击 **追加入库** - 将有效IP追加到库存
-
-**支持的IP格式：**
-```
-1.2.3.4:443
-1.2.3.4 443
-1.2.3.4	443     ← Tab分隔（Excel复制）
-1.2.3.4：443    ← 中文冒号
-1.2.3.4         ← 默认端口443
-```
-
-#### 从远程加载 IP
-
-1. 切换到 **远程TXT** 标签页
-2. 输入远程TXT文件URL
-3. 点击 **加载** - 自动下载并格式化
-
-#### 查看IP库存
-
-1. 切换到 **IP库** 标签页
-2. 点击 **加载库存** 查看所有库存IP
-
-### 3. 域名解析管理
-
-#### 手动添加IP到DNS
-
-在 **解析实况** 区域：
-1. 输入IP地址
-2. 点击 **添加** - 自动检测并添加A记录
-
-#### 查看当前解析状态
-
-点击 **刷新** 按钮查看：
-- A记录列表（IP、机房、延迟、状态）
-- TXT记录内容（如果是TXT或ALL模式）
-
-#### 删除失效记录
-
-点击每个记录后的 **🗑️** 图标删除
-
-### 4. 域名探测
-
-在 **Check ProxyIP** 区域：
-
-```bash
-# 探测A记录
-example.com           # 默认端口443
-example.com:8080      # 指定端口
-
-# 探测TXT记录
-txt@example.com
-```
-
-自动检测每个IP的可用性，可点击 **➕** 添加到输入框
-
-### 5. 域名维护
-
-#### 手动维护
-
-点击 **执行全部维护** 按钮，系统会：
-1. 检测所有DNS记录中的IP/txt记录中的ip
-2. 删除失效的IP
-3. 从库存中补充新IP（保证最少活跃数量）
-4. 发送Telegram通知（如已配置）
-
-#### 自动维护
-
-在 `worker触发事件` 中配置定时任务：
-
-```
-[triggers]
-crons = ["0 */6 * * *"]  # 每6小时执行一次
-
-# 更多示例：
-# "0 */2 * * *"   # 每2小时
-# "0 0 * * *"     # 每天0点
-# "0 */30 * * *"  # 每30分钟
 ```
 
 ## 🔧 高级配置
@@ -207,7 +257,7 @@ const GLOBAL_SETTINGS = {
    ↓
 3. 删除失效IP 
    ↓
-4. 如果活跃IP < MIN_ACTIVE
+4. 如果活跃IP < MIN_ACTIVE（最小活跃ip数）
    ├─ 从 DOMAIN（若配置） 解析新IP
    └─ 从 IP_DATA (KV) 加载库存
    ↓
