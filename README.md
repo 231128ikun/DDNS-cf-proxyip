@@ -37,6 +37,7 @@
 
 # 环境变量
 [vars]
+```
 CF_MAIL = "your-email@example.com"
 CF_KEY = "your-cloudflare-api-token"
 CF_ZONEID = "your-zone-id"
@@ -45,6 +46,7 @@ MIN_ACTIVE = "3"
 DOMAIN = "source.example.com:443"
 CHECK_API = "https://check.dwb.pp.ua/check?proxyip="
 DOH_API = "https://cloudflare-dns.com/dns-query"
+```
 （这里的cf变量CF_MAIL、CF_KEY、CF_ZONEID、CF_DOMAIN是你要维护的域名托管的cf账号信息）
 
 # Telegram 通知（可选）
