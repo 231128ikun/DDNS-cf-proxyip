@@ -190,7 +190,7 @@ txt@example.com
 | `CF_MAIL` | Cloudflare 账号邮箱 | `user@example.com` |
 | `CF_KEY` | Cloudflare API Token | `abcd1234...` |
 | `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
-| `CF_DOMAIN` | 目标域名配置（见下方格式说明） | `ddns.example.com` |
+| `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `ddns.example.com` |
 | `MIN_ACTIVE` | 最少活跃IP数量 | `3` |
 | `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` |
 
@@ -302,9 +302,8 @@ const GLOBAL_SETTINGS = {
 ### 4. 定时任务不工作？
 
 Cloudflare Workers 的免费计划支持 Cron Triggers。检查：
-1. `wrangler.toml` 中是否配置了 `[triggers]`
-2. 在 Dashboard 的 Worker → **Triggers** → **Cron Triggers** 查看是否生效
-3. 查看执行日志：Dashboard → Worker → **Logs**
+1. 在 Dashboard 的 Worker → **Triggers** → **Cron Triggers** 查看是否生效
+2. 查看执行日志：Dashboard → Worker → **Logs**
 
 ### 5. IP检测一直失败？
 
