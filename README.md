@@ -36,8 +36,8 @@
 在 Cloudflare Dashboard 的 Worker 设置中添加：
 
 # 环境变量
-[vars]
 ```
+[vars]
 CF_MAIL = "your-email@example.com"
 CF_KEY = "your-cloudflare-api-token"
 CF_ZONEID = "your-zone-id"
@@ -50,10 +50,12 @@ DOH_API = "https://cloudflare-dns.com/dns-query"
 （这里的cf变量CF_MAIL、CF_KEY、CF_ZONEID、CF_DOMAIN是你要维护的域名托管的cf账号信息）
 
 # Telegram 通知（可选）
+```
 TG_TOKEN = "your-telegram-bot-token"
 TG_ID = "your-telegram-chat-id"
-
+```
 # 定时任务（Cron Triggers）
+```
 [triggers]
 crons = ["0 */6 * * *"]  # 每6小时执行一次维护
 ```
@@ -180,9 +182,9 @@ txt@example.com
 
 #### 自动维护
 
-在 `wrangler.toml` 中配置定时任务：
+在 `worker触发事件` 中配置定时任务：
 
-```toml
+```
 [triggers]
 crons = ["0 */6 * * *"]  # 每6小时执行一次
 
@@ -236,7 +238,7 @@ const GLOBAL_SETTINGS = {
    ↓
 5. 检测候选IP
    ↓
-6. 添加有效IP到DNS
+6. 添加有效IP到DNS/txt记录
    ↓
 7. 更新库存
    ↓
