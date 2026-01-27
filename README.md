@@ -33,32 +33,7 @@
 
 ### 3. 配置环境变量
 
-在 Cloudflare Dashboard 的 Worker 设置中添加：
-
-# 环境变量
-```
-[vars]
-CF_MAIL = "your-email@example.com"
-CF_KEY = "your-cloudflare-api-token"
-CF_ZONEID = "your-zone-id"
-CF_DOMAIN = "ddns.example.com,all@proxy.example.com:8443,txt@txt.example.com"
-MIN_ACTIVE = "3"
-DOMAIN = "source.example.com:443"
-CHECK_API = "https://check.dwb.pp.ua/check?proxyip="
-DOH_API = "https://cloudflare-dns.com/dns-query"
-```
-（这里的cf变量CF_MAIL、CF_KEY、CF_ZONEID、CF_DOMAIN是你要维护的域名托管的cf账号信息）
-
-# Telegram 通知（可选）
-```
-TG_TOKEN = "your-telegram-bot-token"
-TG_ID = "your-telegram-chat-id"
-```
-# 定时任务（Cron Triggers）
-```
-[triggers]
-crons = ["0 */6 * * *"]  # 每6小时执行一次维护
-```
+在 Cloudflare Dashboard 的 Worker 设置中添加，详细见下方说明。
 
 ## ⚙️ 环境变量说明
 
@@ -70,8 +45,8 @@ crons = ["0 */6 * * *"]  # 每6小时执行一次维护
 | `CF_KEY` | Cloudflare API Token | `abcd1234...` |
 | `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
 | `CF_DOMAIN` | 目标域名配置（见下方格式说明） | `ddns.example.com` |
-| `MIN_ACTIVE` | 最少活跃IP数量 | `3` | `5` |
-| `CHECK_API` | IP检测API地址 | `https://check.dwb.pp.ua/check?proxyip=` | 自建API地址 |
+| `MIN_ACTIVE` | 最少活跃IP数量 | `3` |
+| `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` |
 ### 可选变量
 
 | 变量名 | 说明 | 默认值 | 示例 |
@@ -170,7 +145,7 @@ txt@example.com
 
 自动检测每个IP的可用性，可点击 **➕** 添加到输入框
 
-### 5. 定时维护
+### 5. 域名维护
 
 #### 手动维护
 
