@@ -12,6 +12,9 @@
 - ✅ **Telegram通知** - 维护完成后推送详细报告
 - ✅ **Web管理界面** - 直观的可视化操作面板
 
+```
+主要就是为了维护一个任意端口的proxyip域名用于访问cf类网站，达到的效果就是定时监控自动维护来保证域名中的ip始终可用。比如kr.dwb.cc.cd:50001
+```
 # 快速开始指南
 
 ## 1️⃣ 准备工作
@@ -205,11 +208,11 @@ txt@example.com
 支持三种模式，多个域名用逗号分隔：
 
 ```bash
-# A记录模式（默认）
+# A记录模式（默认。就是将活跃的ip解析到维护的域名的a记录）
 CF_DOMAIN="ddns.example.com"                    # 默认端口443
 CF_DOMAIN="ddns.example.com:8443"               # 指定端口8443
 
-# TXT记录模式
+# TXT记录模式（就是将活跃的ip解析到维护域名的txt记录中）
 CF_DOMAIN="txt@txt.example.com"                 # TXT记录，存储 IP:PORT 列表
 
 # 双模式（同时维护A和TXT记录）
