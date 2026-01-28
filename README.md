@@ -1,6 +1,6 @@
 # DDNS Pro - Cloudflare Workers 动态DNS & IP管理
 
-多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。
+基于cmliu 的check proxyip项目提供的api做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。
 
 ## 📋 主要功能
 
