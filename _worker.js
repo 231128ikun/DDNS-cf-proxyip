@@ -1,5 +1,6 @@
 /**
- * DDNS Pro & Proxy IP Manager v4.0
+ * DDNS Pro & Proxy IP Manager v4.1
+ * 修复版本 - 简化逻辑，正确处理接口调用
  */
 
 // ========== 运行时配置 ==========
@@ -106,7 +107,7 @@ export default {
                 return new Response(JSON.stringify(status));
             }
 
-            // 查询域名解析
+            // 查询域名解析（DNS查询，不是检测）
             if (url.pathname === '/api/lookup-domain') {
                 const input = url.searchParams.get('domain');
                 
@@ -131,7 +132,7 @@ export default {
                 }));
             }
 
-            // 检测单个IP
+            // 检测单个IP/域名（直接调用检测接口）
             if (url.pathname === '/api/check-ip') {
                 const target = url.searchParams.get('ip');
                 const res = await checkProxyIP(target);
@@ -178,7 +179,8 @@ export default {
 
             // 执行维护任务
             if (url.pathname === '/api/maintain') {
-                const res = await maintainAllDomains(env);
+                const isManual = url.searchParams.get('manual') === 'true';
+                const res = await maintainAllDomains(env, isManual);
                 return new Response(JSON.stringify(res));
             }
 
@@ -191,7 +193,7 @@ export default {
     async scheduled(event, env, ctx) {
         initConfig(env);
         ctx.waitUntil((async () => {
-            await maintainAllDomains(env);
+            await maintainAllDomains(env, false);
         })());
     }
 };
@@ -263,7 +265,6 @@ function initConfig(env, request = null) {
 
 /**
  * 清理IP列表 - 增强版
- * 支持格式：IP:PORT, IP PORT, IP<TAB>PORT, IP
  */
 function cleanIPList(text) {
     if (!text) return '';
@@ -315,45 +316,6 @@ function cleanIPList(text) {
     }
     
     return Array.from(set).join('\n');
-}
-
-/**
- * 标准化单个IP地址格式
- * 确保返回 IP:PORT 格式
- */
-function normalizeIPFormat(input) {
-    if (!input) return null;
-    
-    input = input.trim();
-    
-    // 已经是标准格式
-    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$/.test(input)) {
-        return input;
-    }
-    
-    // 空格或Tab分割
-    const parts = input.split(/\s+/);
-    if (parts.length === 2) {
-        const ip = parts[0].trim();
-        const port = parts[1].trim();
-        
-        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip) && /^\d+$/.test(port)) {
-            return `${ip}:${port}`;
-        }
-    }
-    
-    // 只有IP，添加默认端口
-    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(input)) {
-        return `${input}:443`;
-    }
-    
-    // 中文冒号
-    const match = input.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})：(\d+)$/);
-    if (match) {
-        return `${match[1]}:${match[2]}`;
-    }
-    
-    return null;
 }
 
 async function loadFromRemoteUrl(url) {
@@ -458,6 +420,10 @@ async function getDomainStatus(target) {
     return result;
 }
 
+/**
+ * 检测代理IP - 直接调用检测接口
+ * 接口支持：IPv4、IPv6、域名，端口可选
+ */
 async function checkProxyIP(input) {
     let addr = input.trim();
     
@@ -670,29 +636,36 @@ async function maintainTXTRecords(env, target, addLog, report) {
         }
     }
     
+    // 修复问题4：只在内容变化时更新
     const newContent = validIPs.join(',');
-    if (recordId) {
-        await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${recordId}`, 'PUT', {
-            type: 'TXT',
-            name: target.domain,
-            content: newContent,
-            ttl: 60
-        });
-        addLog(`📝 TXT已更新`);
+    const currentContent = currentIPs.join(',');
+    
+    if (newContent !== currentContent) {
+        if (recordId) {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${recordId}`, 'PUT', {
+                type: 'TXT',
+                name: target.domain,
+                content: newContent,
+                ttl: 60
+            });
+            addLog(`📝 TXT已更新`);
+        } else {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
+                type: 'TXT',
+                name: target.domain,
+                content: newContent,
+                ttl: 60
+            });
+            addLog(`📝 TXT已创建`);
+        }
     } else {
-        await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
-            type: 'TXT',
-            name: target.domain,
-            content: newContent,
-            ttl: 60
-        });
-        addLog(`📝 TXT已创建`);
+        addLog(`📝 TXT无变化，跳过更新`);
     }
     
     report.afterActive = validIPs.length;
 }
 
-async function maintainAllDomains(env) {
+async function maintainAllDomains(env, isManual = false) {
     const allReports = [];
     let globalPoolBefore = 0;
     let globalPoolAfter = 0;
@@ -719,7 +692,7 @@ async function maintainAllDomains(env) {
         };
         
         const addLog = (m) => {
-            const time = new Date().toLocaleTimeString('zh-CN');
+            const time = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' });
             report.logs.push(`[${time}] ${m}`);
         };
         
@@ -741,7 +714,10 @@ async function maintainAllDomains(env) {
                 checkDetails: [],
                 logs: []
             };
-            const addTxtLog = (m) => txtReport.logs.push(`[${new Date().toLocaleTimeString('zh-CN')}] ${m}`);
+            const addTxtLog = (m) => {
+                const time = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' });
+                txtReport.logs.push(`[${time}] ${m}`);
+            };
             await maintainTXTRecords(env, target, addTxtLog, txtReport);
             
             report.txtLogs = txtReport.logs;
@@ -757,13 +733,21 @@ async function maintainAllDomains(env) {
     const poolAfterRaw = await env.IP_DATA.get('pool') || '';
     globalPoolAfter = poolAfterRaw ? poolAfterRaw.split('\n').filter(l => l.trim()).length : 0;
     
-    await sendTG(allReports, globalPoolBefore, globalPoolAfter);
+    // 修复问题1：通知策略
+    const shouldNotify = isManual || 
+        allReports.some(r => r.added.length > 0 || r.removed.length > 0) ||
+        allReports.some(r => r.poolExhausted);
+    
+    if (shouldNotify) {
+        await sendTG(allReports, globalPoolBefore, globalPoolAfter);
+    }
     
     return {
         success: true,
         reports: allReports,
         poolBefore: globalPoolBefore,
-        poolAfter: globalPoolAfter
+        poolAfter: globalPoolAfter,
+        notified: shouldNotify
     };
 }
 
@@ -853,7 +837,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v4.0 - IP管理面板</title>
+    <title>DDNS Pro v4.1 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -1027,15 +1011,6 @@ function renderHTML(C) {
             padding: 4px 10px;
             border-radius: 8px;
         }
-        .feature-badge {
-            display: inline-block;
-            background: #34c759;
-            color: white;
-            font-size: 10px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            margin-left: 8px;
-        }
     </style>
 </head>
 <body class="pb-5">
@@ -1043,7 +1018,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v4.0</span>
+        <span class="version-badge">v4.1</span>
     </h1>
     <div class="domain-selector">
         <select id="domain-select" class="form-select" onchange="switchDomain()">
@@ -1151,7 +1126,7 @@ function renderHTML(C) {
             <div class="card p-4">
                 <h6 class="mb-3 fw-bold">🔍 Check ProxyIP</h6>
                 <div class="input-group mb-3">
-                    <input type="text" id="lookup-domain" class="form-control" placeholder="域名, 域名:端口, 或 txt@域名">
+                    <input type="text" id="lookup-domain" class="form-control" placeholder="域名, IP:端口, 或 txt@域名">
                     <button class="btn btn-info text-white" onclick="lookupDomain()">🔎 探测</button>
                 </div>
                 <div id="lookup-results"></div>
@@ -1179,26 +1154,32 @@ function renderHTML(C) {
     let currentSource = 'manual';
     let abortController = null;
     
-    const log = (m, t='info') => {
+    // 修复问题3：区分前端和后端日志
+    const log = (m, t='info', skipTimestamp=false) => {
         const w = document.getElementById('log-window');
         const colors = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
-        const time = new Date().toLocaleTimeString('zh-CN');
-        w.innerHTML += \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${m}</div>\`;
+        
+        let output;
+        if (skipTimestamp) {
+            output = \`<div style="color:\${colors[t]}">\${m}</div>\`;
+        } else {
+            const time = new Date().toLocaleTimeString('zh-CN');
+            output = \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${m}</div>\`;
+        }
+        
+        w.innerHTML += output;
         w.scrollTop = w.scrollHeight;
     };
     
-    // 标准化IP格式函数
     function normalizeIPFormat(input) {
         if (!input) return null;
         
         input = input.trim();
         
-        // 已经是标准格式
         if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d+$/.test(input)) {
             return input;
         }
         
-        // 空格或Tab分割
         const parts = input.split(/\\s+/);
         if (parts.length === 2) {
             const ip = parts[0].trim();
@@ -1209,12 +1190,10 @@ function renderHTML(C) {
             }
         }
         
-        // 只有IP，添加默认端口
         if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(input)) {
             return \`\${input}:443\`;
         }
         
-        // 中文冒号
         const match = input.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})：(\\d+)$/);
         if (match) {
             return \`\${match[1]}:\${match[2]}\`;
@@ -1332,7 +1311,6 @@ function renderHTML(C) {
             return;
         }
         
-        // 如果正在检测，点击按钮则停止
         if (abortController) {
             abortController.abort();
             abortController = null;
@@ -1353,25 +1331,20 @@ function renderHTML(C) {
         const pg = document.getElementById('pg-bar');
         
         log(\`🚀 开始检测 \${total} 个IP (并发: \${SETTINGS.CONCURRENT_CHECKS})\`, 'warn');
-        log(\`📝 注意: 检测清洗只处理输入框中的IP，不影响库存\`, 'info');
         
         const chunkSize = SETTINGS.CONCURRENT_CHECKS;
         try {
             for (let i = 0; i < lines.length; i += chunkSize) {
-                // 检查是否被中止
                 if (abortController.signal.aborted) break;
                 
                 const chunk = lines.slice(i, i + chunkSize);
                 
-                // 并发检测当前批次
                 await Promise.all(chunk.map(async (line) => {
-                    // 再次检查是否被中止
                     if (abortController.signal.aborted) return;
                     
                     const item = line.trim();
                     if (!item) return;
                     
-                    // 标准化格式
                     const normalized = normalizeIPFormat(item);
                     if (!normalized) {
                         log(\`  ⚠️  格式错误: \${item}\`, 'warn');
@@ -1381,7 +1354,6 @@ function renderHTML(C) {
                     }
                     
                     try {
-                        // 使用标准化后的格式进行检测
                         const r = await fetch(\`/api/check-ip?ip=\${encodeURIComponent(normalized)}\`, {
                             signal: abortController.signal
                         }).then(r => r.json());
@@ -1496,6 +1468,8 @@ function renderHTML(C) {
         }
     }
     
+    // 修复问题2：简化lookupDomain逻辑
+    // 接口本身支持域名/IP/IPv6，我们只需要区分"DNS查询"和"直接检测"
     async function lookupDomain() {
         const input = document.getElementById('lookup-domain');
         const val = input.value.trim();
@@ -1508,42 +1482,34 @@ function renderHTML(C) {
         log(\`🔍 查询: \${val}\`, 'info');
         
         try {
-            const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
-            
-            if (data.type === 'TXT') {
+            // txt@domain 查询TXT记录
+            if (val.startsWith('txt@')) {
+                const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
                 const res = document.getElementById('lookup-results');
                 res.innerHTML = '<div class="alert alert-info mb-2 py-2"><small>📝 TXT记录内容</small></div>';
                 
                 for (const ip of data.ips) {
-                    const id = 'check-' + Math.random().toString(36).substr(2, 9);
-                    const div = document.createElement('div');
-                    div.className = 'result-item';
-                    div.innerHTML = \`
-                        <code>\${ip}</code>
-                        <span class="info" id="\${id}">检测中...</span>
-                        <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${ip}')" style="display:none" id="btn-\${id}">➕</button>
-                    \`;
-                    res.appendChild(div);
-                    
-                    (async () => {
-                        const result = await fetch(\`/api/check-ip?ip=\${encodeURIComponent(ip)}\`).then(r => r.json());
-                        const info = document.getElementById(id);
-                        const btn = document.getElementById('btn-' + id);
-                        
-                        if (result.success) {
-                            info.innerHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
-                            btn.style.display = 'block';
-                            log(\`  ✅ \${ip} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
-                        } else {
-                            info.innerHTML = '<span class="text-danger">❌ 失效</span>';
-                            log(\`  ❌ \${ip}\`, 'error');
-                        }
-                    })();
+                    await checkAndDisplayIP(ip, res);
                 }
+                return;
+            }
+            
+            // 判断是否为纯IP或IP:PORT格式（直接检测）
+            const isIP = /^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$/.test(val);
+            
+            if (isIP) {
+                // 直接检测IP
+                log(\`🔌 直接检测: \${val}\`, 'info');
+                const res = document.getElementById('lookup-results');
+                res.innerHTML = '';
+                await checkAndDisplayIP(val, res);
             } else {
+                // 查询域名的A记录
+                const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
+                
                 if (!data.ips || data.ips.length === 0) {
-                    log(\`⚠️  无A记录\`, 'warn');
+                    log(\`⚠️  域名无A记录\`, 'warn');
                     return;
                 }
                 
@@ -1554,34 +1520,44 @@ function renderHTML(C) {
                 
                 for (const ip of data.ips) {
                     const target = \`\${ip}:\${data.port}\`;
-                    const id = 'check-' + Math.random().toString(36).substr(2, 9);
-                    const div = document.createElement('div');
-                    div.className = 'result-item';
-                    div.innerHTML = \`
-                        <code>\${target}</code>
-                        <span class="info" id="\${id}">检测中...</span>
-                        <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${target}')" style="display:none" id="btn-\${id}">➕</button>
-                    \`;
-                    res.appendChild(div);
-                    
-                    (async () => {
-                        const result = await fetch(\`/api/check-ip?ip=\${encodeURIComponent(target)}\`).then(r => r.json());
-                        const info = document.getElementById(id);
-                        const btn = document.getElementById('btn-' + id);
-                        
-                        if (result.success) {
-                            info.innerHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
-                            btn.style.display = 'block';
-                            log(\`  ✅ \${target} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
-                        } else {
-                            info.innerHTML = '<span class="text-danger">❌ 失效</span>';
-                            log(\`  ❌ \${target}\`, 'error');
-                        }
-                    })();
+                    await checkAndDisplayIP(target, res);
                 }
             }
         } catch (e) {
-            log(\`❌ 失败\`, 'error');
+            log(\`❌ 失败: \${e.message}\`, 'error');
+        }
+    }
+    
+    // 辅助函数：检测并显示IP
+    async function checkAndDisplayIP(ip, container) {
+        const id = 'check-' + Math.random().toString(36).substr(2, 9);
+        const div = document.createElement('div');
+        div.className = 'result-item';
+        div.innerHTML = \`
+            <code>\${ip}</code>
+            <span class="info" id="\${id}">检测中...</span>
+            <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${ip}')" style="display:none" id="btn-\${id}">➕</button>
+        \`;
+        container.appendChild(div);
+        
+        try {
+            const result = await fetch(\`/api/check-ip?ip=\${encodeURIComponent(ip)}\`).then(r => r.json());
+            const info = document.getElementById(id);
+            const btn = document.getElementById('btn-' + id);
+            
+            if (result.success) {
+                info.innerHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
+                btn.style.display = 'block';
+                log(\`  ✅ \${ip} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
+            } else {
+                info.innerHTML = '<span class="text-danger">❌ 失效</span>';
+                log(\`  ❌ \${ip}\`, 'error');
+            }
+        } catch (e) {
+            const info = document.getElementById(id);
+            if (info) {
+                info.innerHTML = '<span class="text-danger">❌ 出错</span>';
+            }
         }
     }
     
@@ -1609,26 +1585,33 @@ function renderHTML(C) {
         }
     }
     
+    // 修复问题1：手动维护添加manual参数
     async function runMaintain() {
         log('🔧 启动维护...', 'warn');
         
         try {
-            const r = await fetch('/api/maintain').then(r => r.json());
+            const r = await fetch('/api/maintain?manual=true').then(r => r.json());
             
             if (r.reports) {
                 r.reports.forEach(report => {
                     log(\`\\n━━ \${report.domain} ━━\`, 'info');
                     if (report.logs) {
-                        report.logs.forEach(msg => log(msg));
+                        // 后端日志已带时间戳
+                        report.logs.forEach(msg => log(msg, 'info', true));
                     }
                 });
             }
             
             log(\`✅ 维护完成\`, 'success');
+            if (r.notified) {
+                log(\`📱 已发送TG通知\`, 'info');
+            } else {
+                log(\`📱 无变化，未发送通知\`, 'info');
+            }
             refreshStatus();
             refreshPoolCount();
         } catch (e) {
-            log(\`❌ 失败\`, 'error');
+            log(\`❌ 失败: \${e.message}\`, 'error');
         }
     }
     
