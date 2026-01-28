@@ -1,6 +1,7 @@
 /**
- * DDNS Pro & Proxy IP Manager v4.3
- * 新增：IP归属地查询功能（可选）
+ * DDNS Pro & Proxy IP Manager v4.4
+ * 更新日志：
+ * - 优化并发处理：解析实况和 Check ProxyIP 功能使用完全并发
  */
 
 // ========== 运行时配置 ==========
@@ -24,7 +25,7 @@ let CONFIG = {
 
 // ========== 全局设置 ==========
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 10,      // 并发检测数量
+    CONCURRENT_CHECKS: 10,      // 并发检测数量（仅用于IP库批量检测）
     CHECK_TIMEOUT: 6000,        // 检测单个 IP 的超时（毫秒）
     REMOTE_LOAD_TIMEOUT: 10000, // 加载远程 URL 的超时（毫秒）
     IP_INFO_TIMEOUT: 3000       // IP信息查询超时（毫秒）
@@ -412,6 +413,10 @@ async function getIPInfo(ip) {
     return null;
 }
 
+/**
+ * v4.4 优化：使用完全并发处理
+ * 参考 check-proxyip 源码的最佳实践
+ */
 async function getDomainStatus(target) {
     const result = {
         mode: target.mode,
@@ -424,25 +429,31 @@ async function getDomainStatus(target) {
     if (target.mode === 'A' || target.mode === 'ALL') {
         const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=A`);
         if (records) {
-            result.aRecords = await Promise.all(records.map(async r => {
-                const addr = `${r.content}:${target.port}`;
-                const c = await checkProxyIP(addr);
-                
-                // 新增：查询IP信息（如果启用）
-                let ipInfo = null;
-                if (CONFIG.ipInfoEnabled) {
-                    ipInfo = await getIPInfo(r.content);
-                }
-                
-                return {
-                    id: r.id,
-                    ip: r.content,
-                    port: target.port,
-                    success: c.success,
-                    colo: c.colo || 'N/A',
-                    time: c.responseTime || '-',
-                    ipInfo: ipInfo  // 新增字段
-                };
+            // ✅ v4.4 优化：先创建所有检测 Promise
+            const checkPromises = records.map(r => 
+                checkProxyIP(`${r.content}:${target.port}`)
+            );
+            
+            // ✅ v4.4 优化：再创建所有 IP 信息查询 Promise
+            const ipInfoPromises = CONFIG.ipInfoEnabled
+                ? records.map(r => getIPInfo(r.content))
+                : records.map(() => Promise.resolve(null));
+            
+            // ✅ v4.4 优化：并发执行所有任务
+            const [checkResults, ipInfoResults] = await Promise.all([
+                Promise.all(checkPromises),
+                Promise.all(ipInfoPromises)
+            ]);
+            
+            // ✅ v4.4 优化：组装结果
+            result.aRecords = records.map((r, i) => ({
+                id: r.id,
+                ip: r.content,
+                port: target.port,
+                success: checkResults[i].success,
+                colo: checkResults[i].colo || 'N/A',
+                time: checkResults[i].responseTime || '-',
+                ipInfo: ipInfoResults[i]
             }));
         }
     }
@@ -453,23 +464,27 @@ async function getDomainStatus(target) {
             const txtContent = records[0].content;
             const ips = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
             
-            const txtChecks = await Promise.all(ips.map(async addr => {
-                const c = await checkProxyIP(addr);
-                
-                // 新增：查询IP信息（如果启用）
-                const ipOnly = addr.split(':')[0];
-                let ipInfo = null;
-                if (CONFIG.ipInfoEnabled) {
-                    ipInfo = await getIPInfo(ipOnly);
-                }
-                
-                return {
-                    ip: addr,
-                    success: c.success,
-                    colo: c.colo || 'N/A',
-                    time: c.responseTime || '-',
-                    ipInfo: ipInfo  // 新增字段
-                };
+            // ✅ v4.4 优化：先创建所有检测 Promise
+            const checkPromises = ips.map(addr => checkProxyIP(addr));
+            
+            // ✅ v4.4 优化：再创建所有 IP 信息查询 Promise
+            const ipInfoPromises = CONFIG.ipInfoEnabled
+                ? ips.map(addr => getIPInfo(addr.split(':')[0]))
+                : ips.map(() => Promise.resolve(null));
+            
+            // ✅ v4.4 优化：并发执行所有任务
+            const [checkResults, ipInfoResults] = await Promise.all([
+                Promise.all(checkPromises),
+                Promise.all(ipInfoPromises)
+            ]);
+            
+            // ✅ v4.4 优化：组装结果
+            const txtChecks = ips.map((addr, i) => ({
+                ip: addr,
+                success: checkResults[i].success,
+                colo: checkResults[i].colo || 'N/A',
+                time: checkResults[i].responseTime || '-',
+                ipInfo: ipInfoResults[i]
             }));
             
             result.txtRecords = [{
@@ -1014,7 +1029,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v4.3 - IP管理面板</title>
+    <title>DDNS Pro v4.4 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -1053,16 +1068,6 @@ function renderHTML(C) {
             font-weight: 600;
             margin-left: 8px;
             box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-        }
-        .feature-badge {
-            display: inline-block;
-            background: #34c759;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 8px;
-            font-size: 10px;
-            font-weight: 600;
-            margin-left: 8px;
         }
         /* GitHub图标样式 */
         .github-corner {
@@ -1258,8 +1263,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v4.3</span>
-        ${ipInfoEnabled ? '<span class="feature-badge">🌍 IP归属地</span>' : ''}
+        <span class="version-badge">v4.4</span>
     </h1>
     <div class="domain-selector">
         <select id="domain-select" class="form-select" onchange="switchDomain()">
@@ -1314,7 +1318,7 @@ function renderHTML(C) {
                     <div>
                         <h6 class="m-0 fw-bold d-inline">📦 IP管理中心</h6>
                         <div class="config-info ms-2">
-                            ⚙️ 并发: ${GLOBAL_SETTINGS.CONCURRENT_CHECKS} | 超时: ${GLOBAL_SETTINGS.CHECK_TIMEOUT}ms
+                            ⚙️ 批量检测并发: ${GLOBAL_SETTINGS.CONCURRENT_CHECKS} | 超时: ${GLOBAL_SETTINGS.CHECK_TIMEOUT}ms
                         </div>
                     </div>
                     <button class="btn btn-sm btn-outline-secondary" onclick="refreshPoolCount()">
@@ -1746,9 +1750,13 @@ function renderHTML(C) {
                 const res = document.getElementById('lookup-results');
                 res.innerHTML = '<div class="alert alert-info mb-2 py-2"><small>📝 TXT记录内容</small></div>';
                 
-                for (const ip of data.ips) {
-                    await checkAndDisplayIP(ip, res);
-                }
+                const checkPromises = data.ips.map(ip => checkAndDisplayIP(ip, res));
+                const results = await Promise.all(checkPromises);
+                
+                // 统计活跃数
+                const activeCount = results.filter(r => r === true).length;
+                const totalCount = data.ips.length;
+                log(\`📊 检测完成: \${activeCount}/\${totalCount} 活跃\`, activeCount === totalCount ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
                 return;
             }
             
@@ -1758,7 +1766,8 @@ function renderHTML(C) {
                 log(\`🔌 直接检测: \${val}\`, 'info');
                 const res = document.getElementById('lookup-results');
                 res.innerHTML = '';
-                await checkAndDisplayIP(val, res);
+                const result = await checkAndDisplayIP(val, res);
+                log(\`📊 检测完成: \${result ? '1/1' : '0/1'} 活跃\`, result ? 'success' : 'error');
             } else {
                 const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 
@@ -1772,10 +1781,14 @@ function renderHTML(C) {
                 const res = document.getElementById('lookup-results');
                 res.innerHTML = '';
                 
-                for (const ip of data.ips) {
-                    const target = \`\${ip}:\${data.port}\`;
-                    await checkAndDisplayIP(target, res);
-                }
+                const targets = data.ips.map(ip => \`\${ip}:\${data.port}\`);
+                const checkPromises = targets.map(target => checkAndDisplayIP(target, res));
+                const results = await Promise.all(checkPromises);
+                
+                // 统计活跃数
+                const activeCount = results.filter(r => r === true).length;
+                const totalCount = targets.length;
+                log(\`📊 检测完成: \${activeCount}/\${totalCount} 活跃\`, activeCount === totalCount ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
             }
         } catch (e) {
             log(\`❌ 失败: \${e.message}\`, 'error');
@@ -1813,15 +1826,18 @@ function renderHTML(C) {
                 info.innerHTML = infoHTML;
                 btn.style.display = 'block';
                 log(\`  ✅ \${ip} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
+                return true; // 返回成功状态
             } else {
                 info.innerHTML = '<span class="text-danger">❌ 失效</span>';
                 log(\`  ❌ \${ip}\`, 'error');
+                return false; // 返回失败状态
             }
         } catch (e) {
             const info = document.getElementById(id);
             if (info) {
                 info.innerHTML = '<span class="text-danger">❌ 出错</span>';
             }
+            return false; // 返回失败状态
         }
     }
     
@@ -1879,7 +1895,7 @@ function renderHTML(C) {
     
     window.addEventListener('DOMContentLoaded', () => {
         log('🚀 系统就绪', 'success');
-        log(\`⚙️  配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CHECK_TIMEOUT}ms\`, 'info');
+        log(\`⚙️ 配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CHECK_TIMEOUT}ms\`, 'info');
         if (IP_INFO_ENABLED) {
             log('🌍 IP归属地查询: 已启用', 'info');
         }
