@@ -1,6 +1,6 @@
 /**
- * DDNS Pro & Proxy IP Manager v4.1
- * 修复版本 - 简化逻辑，正确处理接口调用
+ * DDNS Pro & Proxy IP Manager v4.2
+ * 新增：IP归属地查询功能（可选）
  */
 
 // ========== 运行时配置 ==========
@@ -16,14 +16,18 @@ let CONFIG = {
     tgId: '',
     checkApi: '',
     dohApi: '',
-    projectUrl: ''
+    projectUrl: '',
+    // 新增：IP信息查询配置
+    ipInfoEnabled: false,
+    ipInfoApi: ''
 };
 
 // ========== 全局设置 ==========
 const GLOBAL_SETTINGS = {
     CONCURRENT_CHECKS: 10,      // 并发检测数量
     CHECK_TIMEOUT: 6000,        // 检测单个 IP 的超时（毫秒）
-    REMOTE_LOAD_TIMEOUT: 10000  // 加载远程 URL 的超时（毫秒）
+    REMOTE_LOAD_TIMEOUT: 10000, // 加载远程 URL 的超时（毫秒）
+    IP_INFO_TIMEOUT: 3000       // IP信息查询超时（毫秒）
 };
 
 export default {
@@ -62,11 +66,9 @@ export default {
                     return new Response(JSON.stringify({ success: false, error: '没有有效IP' }), { status: 400 });
                 }
                 
-                // 获取现有IP池
                 const existingPool = await env.IP_DATA.get('pool') || '';
                 const existingSet = new Set(existingPool.split('\n').filter(l => l.trim()));
                 
-                // 追加新IP（去重）
                 newIPs.split('\n').forEach(ip => {
                     if (ip.trim()) existingSet.add(ip.trim());
                 });
@@ -107,7 +109,7 @@ export default {
                 return new Response(JSON.stringify(status));
             }
 
-            // 查询域名解析（DNS查询，不是检测）
+            // 查询域名解析
             if (url.pathname === '/api/lookup-domain') {
                 const input = url.searchParams.get('domain');
                 
@@ -132,11 +134,21 @@ export default {
                 }));
             }
 
-            // 检测单个IP/域名（直接调用检测接口）
+            // 检测单个IP
             if (url.pathname === '/api/check-ip') {
                 const target = url.searchParams.get('ip');
                 const res = await checkProxyIP(target);
                 return new Response(JSON.stringify(res));
+            }
+
+            // 新增：查询IP归属地信息
+            if (url.pathname === '/api/ip-info') {
+                const ip = url.searchParams.get('ip');
+                if (!ip) {
+                    return new Response(JSON.stringify({ error: '缺少IP参数' }), { status: 400 });
+                }
+                const info = await getIPInfo(ip);
+                return new Response(JSON.stringify(info || { error: '查询失败' }));
             }
 
             // 删除DNS记录
@@ -257,15 +269,16 @@ function initConfig(env, request = null) {
     CONFIG.checkApi = env.CHECK_API || 'https://check.dwb.pp.ua/check?proxyip=';
     CONFIG.dohApi = env.DOH_API || 'https://cloudflare-dns.com/dns-query';
     
+    // 新增：IP信息查询配置
+    CONFIG.ipInfoEnabled = env.IP_INFO_ENABLED === 'true';
+    CONFIG.ipInfoApi = env.IP_INFO_API || 'http://ip-api.com/json';
+    
     if (request) {
         const url = new URL(request.url);
         CONFIG.projectUrl = `${url.protocol}//${url.host}`;
     }
 }
 
-/**
- * 清理IP列表 - 增强版
- */
 function cleanIPList(text) {
     if (!text) return '';
     
@@ -276,21 +289,18 @@ function cleanIPList(text) {
         line = line.trim();
         if (!line || line.startsWith('#')) continue;
         
-        // 1. 标准格式：IP:PORT
         let match = line.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$/);
         if (match) {
             set.add(`${match[1]}:${match[2]}`);
             continue;
         }
         
-        // 2. 中文冒号
         match = line.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})：(\d+)$/);
         if (match) {
             set.add(`${match[1]}:${match[2]}`);
             continue;
         }
         
-        // 3. 空格或Tab分割
         const parts = line.split(/\s+/);
         if (parts.length === 2) {
             const ip = parts[0].trim();
@@ -302,13 +312,11 @@ function cleanIPList(text) {
             }
         }
         
-        // 4. 只有IP
         if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(line)) {
             set.add(`${line}:443`);
             continue;
         }
         
-        // 5. 兜底：从复杂字符串提取
         const complexMatch = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\D+(\d+)/);
         if (complexMatch) {
             set.add(`${complexMatch[1]}:${complexMatch[2]}`);
@@ -367,6 +375,43 @@ async function resolveTXTRecord(domain) {
     }
 }
 
+/**
+ * 新增：查询IP归属地信息
+ * 使用 ip-api.com 免费API（45次/分钟）
+ */
+async function getIPInfo(ip) {
+    if (!CONFIG.ipInfoEnabled) {
+        return null;
+    }
+    
+    try {
+        // 清理IP格式（移除方括号）
+        const cleanIP = ip.replace(/[\[\]]/g, '');
+        
+        const r = await fetch(
+            `${CONFIG.ipInfoApi}/${cleanIP}?fields=status,country,countryCode,city,isp,as,asname&lang=zh-CN`,
+            { signal: AbortSignal.timeout(GLOBAL_SETTINGS.IP_INFO_TIMEOUT) }
+        );
+        
+        const data = await r.json();
+        
+        if (data.status === 'success') {
+            return {
+                country: data.country || '未知',
+                countryCode: data.countryCode || '',
+                city: data.city || '',
+                isp: data.isp || '未知',
+                asn: data.as || '',
+                asname: data.asname || ''
+            };
+        }
+    } catch (e) {
+        console.error(`IP信息查询失败 ${ip}:`, e);
+    }
+    
+    return null;
+}
+
 async function getDomainStatus(target) {
     const result = {
         mode: target.mode,
@@ -382,13 +427,21 @@ async function getDomainStatus(target) {
             result.aRecords = await Promise.all(records.map(async r => {
                 const addr = `${r.content}:${target.port}`;
                 const c = await checkProxyIP(addr);
+                
+                // 新增：查询IP信息（如果启用）
+                let ipInfo = null;
+                if (CONFIG.ipInfoEnabled) {
+                    ipInfo = await getIPInfo(r.content);
+                }
+                
                 return {
                     id: r.id,
                     ip: r.content,
                     port: target.port,
                     success: c.success,
                     colo: c.colo || 'N/A',
-                    time: c.responseTime || '-'
+                    time: c.responseTime || '-',
+                    ipInfo: ipInfo  // 新增字段
                 };
             }));
         }
@@ -402,11 +455,20 @@ async function getDomainStatus(target) {
             
             const txtChecks = await Promise.all(ips.map(async addr => {
                 const c = await checkProxyIP(addr);
+                
+                // 新增：查询IP信息（如果启用）
+                const ipOnly = addr.split(':')[0];
+                let ipInfo = null;
+                if (CONFIG.ipInfoEnabled) {
+                    ipInfo = await getIPInfo(ipOnly);
+                }
+                
                 return {
                     ip: addr,
                     success: c.success,
                     colo: c.colo || 'N/A',
-                    time: c.responseTime || '-'
+                    time: c.responseTime || '-',
+                    ipInfo: ipInfo  // 新增字段
                 };
             }));
             
@@ -420,14 +482,9 @@ async function getDomainStatus(target) {
     return result;
 }
 
-/**
- * 检测代理IP - 直接调用检测接口
- * 接口支持：IPv4、IPv6、域名，端口可选
- */
 async function checkProxyIP(input) {
     let addr = input.trim();
     
-    // 如果没有端口，添加默认端口
     if (!addr.includes(':')) {
         addr = `${addr}:443`;
     }
@@ -501,16 +558,29 @@ async function maintainARecords(env, target, addLog, report) {
         const addr = `${r.content}:${target.port}`;
         const c = await checkProxyIP(addr);
         
+        // 新增：查询IP信息（如果启用）
+        let ipInfo = null;
+        if (CONFIG.ipInfoEnabled) {
+            ipInfo = await getIPInfo(r.content);
+        }
+        
         report.checkDetails.push({
             ip: addr,
             status: c.success ? '✅ 活跃' : '❌ 失效',
             colo: c.colo || 'N/A',
-            time: c.responseTime || '-'
+            time: c.responseTime || '-',
+            ipInfo: ipInfo
         });
         
         if (c.success) {
             activeIPs.push(r.content);
-            addLog(`  ✅ ${addr} - ${c.colo} (${c.responseTime}ms)`);
+            
+            // 增强日志：包含IP归属地信息
+            let logMsg = `  ✅ ${addr} - ${c.colo} (${c.responseTime}ms)`;
+            if (ipInfo) {
+                logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
+            }
+            addLog(logMsg);
         } else {
             await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${r.id}`, 'DELETE');
             report.removed.push({ ip: r.content, reason: '检测失效' });
@@ -544,12 +614,25 @@ async function maintainARecords(env, target, addLog, report) {
                     proxied: false
                 });
                 activeIPs.push(ip);
+                
+                // 新增：查询新添加IP的信息
+                let ipInfo = null;
+                if (CONFIG.ipInfoEnabled) {
+                    ipInfo = await getIPInfo(ip);
+                }
+                
                 report.added.push({
                     ip: ip,
                     colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-'
+                    time: checkResult.responseTime || '-',
+                    ipInfo: ipInfo
                 });
-                addLog(`  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
+                
+                let logMsg = `  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`;
+                if (ipInfo) {
+                    logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
+                }
+                addLog(logMsg);
             } else {
                 poolList = poolList.filter(p => p !== item);
                 report.poolRemoved++;
@@ -588,16 +671,29 @@ async function maintainTXTRecords(env, target, addLog, report) {
     for (const addr of currentIPs) {
         const c = await checkProxyIP(addr);
         
+        // 新增：查询IP信息
+        const ipOnly = addr.split(':')[0];
+        let ipInfo = null;
+        if (CONFIG.ipInfoEnabled) {
+            ipInfo = await getIPInfo(ipOnly);
+        }
+        
         report.checkDetails.push({
             ip: addr,
             status: c.success ? '✅ 活跃' : '❌ 失效',
             colo: c.colo || 'N/A',
-            time: c.responseTime || '-'
+            time: c.responseTime || '-',
+            ipInfo: ipInfo
         });
         
         if (c.success) {
             validIPs.push(addr);
-            addLog(`  ✅ ${addr} - ${c.colo} (${c.responseTime}ms)`);
+            
+            let logMsg = `  ✅ ${addr} - ${c.colo} (${c.responseTime}ms)`;
+            if (ipInfo) {
+                logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
+            }
+            addLog(logMsg);
         } else {
             report.removed.push({ ip: addr, reason: '检测失效' });
         }
@@ -617,12 +713,25 @@ async function maintainTXTRecords(env, target, addLog, report) {
             
             if (checkResult.success) {
                 validIPs.push(item);
+                
+                const ipOnly = item.split(':')[0];
+                let ipInfo = null;
+                if (CONFIG.ipInfoEnabled) {
+                    ipInfo = await getIPInfo(ipOnly);
+                }
+                
                 report.added.push({
                     ip: item,
                     colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-'
+                    time: checkResult.responseTime || '-',
+                    ipInfo: ipInfo
                 });
-                addLog(`  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
+                
+                let logMsg = `  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`;
+                if (ipInfo) {
+                    logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
+                }
+                addLog(logMsg);
             } else {
                 poolList = poolList.filter(p => p !== item);
                 report.poolRemoved++;
@@ -636,7 +745,6 @@ async function maintainTXTRecords(env, target, addLog, report) {
         }
     }
     
-    // 修复问题4：只在内容变化时更新
     const newContent = validIPs.join(',');
     const currentContent = currentIPs.join(',');
     
@@ -733,7 +841,6 @@ async function maintainAllDomains(env, isManual = false) {
     const poolAfterRaw = await env.IP_DATA.get('pool') || '';
     globalPoolAfter = poolAfterRaw ? poolAfterRaw.split('\n').filter(l => l.trim()).length : 0;
     
-    // 修复问题1：通知策略
     const shouldNotify = isManual || 
         allReports.some(r => r.added.length > 0 || r.removed.length > 0) ||
         allReports.some(r => r.poolExhausted);
@@ -830,6 +937,7 @@ async function sendTG(reports, poolBefore, poolAfter) {
 function renderHTML(C) {
     const targetsJson = JSON.stringify(C.targets);
     const settingsJson = JSON.stringify(GLOBAL_SETTINGS);
+    const ipInfoEnabled = C.ipInfoEnabled;
     
     return `
 <!DOCTYPE html>
@@ -837,7 +945,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v4.1 - IP管理面板</title>
+    <title>DDNS Pro v4.2 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -875,6 +983,16 @@ function renderHTML(C) {
             font-weight: 600;
             margin-left: 8px;
             box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+        .feature-badge {
+            display: inline-block;
+            background: #34c759;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 8px;
         }
         .domain-selector {
             max-width: 600px;
@@ -1011,6 +1129,15 @@ function renderHTML(C) {
             padding: 4px 10px;
             border-radius: 8px;
         }
+        .ip-info-tag {
+            display: inline-block;
+            background: #e8f4ff;
+            color: var(--primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 4px;
+        }
     </style>
 </head>
 <body class="pb-5">
@@ -1018,7 +1145,8 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v4.1</span>
+        <span class="version-badge">v4.2</span>
+        ${ipInfoEnabled ? '<span class="feature-badge">🌍 IP归属地</span>' : ''}
     </h1>
     <div class="domain-selector">
         <select id="domain-select" class="form-select" onchange="switchDomain()">
@@ -1054,6 +1182,7 @@ function renderHTML(C) {
                         <th>机房</th>
                         <th>延迟</th>
                         <th>状态</th>
+                        ${ipInfoEnabled ? '<th>归属地</th>' : ''}
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -1150,11 +1279,11 @@ function renderHTML(C) {
 <script>
     const TARGETS = ${targetsJson};
     const SETTINGS = ${settingsJson};
+    const IP_INFO_ENABLED = ${ipInfoEnabled};
     let currentTargetIndex = 0;
     let currentSource = 'manual';
     let abortController = null;
     
-    // 修复问题3：区分前端和后端日志
     const log = (m, t='info', skipTimestamp=false) => {
         const w = document.getElementById('log-window');
         const colors = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
@@ -1200,6 +1329,19 @@ function renderHTML(C) {
         }
         
         return null;
+    }
+    
+    function formatIPInfo(ipInfo) {
+        if (!ipInfo) return '';
+        
+        let html = '';
+        if (ipInfo.country) {
+            html += \`<span class="ip-info-tag">\${ipInfo.country}</span>\`;
+        }
+        if (ipInfo.asn) {
+            html += \`<span class="ip-info-tag">\${ipInfo.asn}</span>\`;
+        }
+        return html;
     }
     
     function switchDomain() {
@@ -1397,7 +1539,8 @@ function renderHTML(C) {
     async function refreshStatus() {
         const t = document.getElementById('status-table');
         const txtDiv = document.getElementById('txt-status');
-        t.innerHTML = '<tr><td colspan="5" class="text-secondary p-4">🔄 查询中...</td></tr>';
+        const colspan = IP_INFO_ENABLED ? '6' : '5';
+        t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 查询中...</td></tr>\`;
         txtDiv.innerHTML = '';
         
         try {
@@ -1409,7 +1552,10 @@ function renderHTML(C) {
                 record.ips.forEach(ip => {
                     html += \`<div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-white rounded">
                         <code>\${ip.ip}</code>
-                        <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
+                        <div>
+                            <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
+                            \${IP_INFO_ENABLED && ip.ipInfo ? formatIPInfo(ip.ipInfo) : ''}
+                        </div>
                     </div>\`;
                 });
                 html += '</div>';
@@ -1418,7 +1564,7 @@ function renderHTML(C) {
             
             if (data.mode === 'A' || data.mode === 'ALL') {
                 if (!data.aRecords || data.aRecords.length === 0) {
-                    t.innerHTML = '<tr><td colspan="5" class="text-secondary p-4">暂无A记录</td></tr>';
+                    t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">暂无A记录</td></tr>\`;
                 } else {
                     t.innerHTML = data.aRecords.map(r => \`
                         <tr>
@@ -1426,15 +1572,16 @@ function renderHTML(C) {
                             <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
                             <td>\${r.time}ms</td>
                             <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
+                            \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
                             <td><a href="javascript:deleteRecord('\${r.id}')" class="text-danger text-decoration-none small fw-bold">🗑️</a></td>
                         </tr>
                     \`).join('');
                 }
             } else if (data.mode === 'TXT') {
-                t.innerHTML = '<tr><td colspan="5" class="text-secondary p-4">TXT模式，查看下方TXT记录</td></tr>';
+                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">TXT模式，查看下方TXT记录</td></tr>\`;
             }
         } catch (e) {
-            t.innerHTML = '<tr><td colspan="5" class="text-danger p-4">❌ 查询失败</td></tr>';
+            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 查询失败</td></tr>\`;
         }
     }
     
@@ -1468,8 +1615,6 @@ function renderHTML(C) {
         }
     }
     
-    // 修复问题2：简化lookupDomain逻辑
-    // 接口本身支持域名/IP/IPv6，我们只需要区分"DNS查询"和"直接检测"
     async function lookupDomain() {
         const input = document.getElementById('lookup-domain');
         const val = input.value.trim();
@@ -1482,7 +1627,6 @@ function renderHTML(C) {
         log(\`🔍 查询: \${val}\`, 'info');
         
         try {
-            // txt@domain 查询TXT记录
             if (val.startsWith('txt@')) {
                 const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
@@ -1495,17 +1639,14 @@ function renderHTML(C) {
                 return;
             }
             
-            // 判断是否为纯IP或IP:PORT格式（直接检测）
             const isIP = /^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$/.test(val);
             
             if (isIP) {
-                // 直接检测IP
                 log(\`🔌 直接检测: \${val}\`, 'info');
                 const res = document.getElementById('lookup-results');
                 res.innerHTML = '';
                 await checkAndDisplayIP(val, res);
             } else {
-                // 查询域名的A记录
                 const data = await fetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 
                 if (!data.ips || data.ips.length === 0) {
@@ -1528,7 +1669,6 @@ function renderHTML(C) {
         }
     }
     
-    // 辅助函数：检测并显示IP
     async function checkAndDisplayIP(ip, container) {
         const id = 'check-' + Math.random().toString(36).substr(2, 9);
         const div = document.createElement('div');
@@ -1546,7 +1686,18 @@ function renderHTML(C) {
             const btn = document.getElementById('btn-' + id);
             
             if (result.success) {
-                info.innerHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
+                let infoHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
+                
+                // 如果启用了IP信息查询，获取并显示
+                if (IP_INFO_ENABLED) {
+                    const ipOnly = ip.split(':')[0];
+                    const ipInfo = await fetch(\`/api/ip-info?ip=\${encodeURIComponent(ipOnly)}\`).then(r => r.json());
+                    if (ipInfo && !ipInfo.error) {
+                        infoHTML += formatIPInfo(ipInfo);
+                    }
+                }
+                
+                info.innerHTML = infoHTML;
                 btn.style.display = 'block';
                 log(\`  ✅ \${ip} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
             } else {
@@ -1585,7 +1736,6 @@ function renderHTML(C) {
         }
     }
     
-    // 修复问题1：手动维护添加manual参数
     async function runMaintain() {
         log('🔧 启动维护...', 'warn');
         
@@ -1596,7 +1746,6 @@ function renderHTML(C) {
                 r.reports.forEach(report => {
                     log(\`\\n━━ \${report.domain} ━━\`, 'info');
                     if (report.logs) {
-                        // 后端日志已带时间戳
                         report.logs.forEach(msg => log(msg, 'info', true));
                     }
                 });
@@ -1618,6 +1767,9 @@ function renderHTML(C) {
     window.addEventListener('DOMContentLoaded', () => {
         log('🚀 系统就绪', 'success');
         log(\`⚙️  配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CHECK_TIMEOUT}ms\`, 'info');
+        if (IP_INFO_ENABLED) {
+            log('🌍 IP归属地查询: 已启用', 'info');
+        }
         switchDomain();
         refreshPoolCount();
     });
