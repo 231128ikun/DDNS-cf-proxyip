@@ -266,7 +266,7 @@ function initConfig(env, request = null) {
     CONFIG.minActive = parseInt(env.MIN_ACTIVE) || 3;
     CONFIG.tgToken = env.TG_TOKEN || '';
     CONFIG.tgId = env.TG_ID || '';
-    CONFIG.checkApi = env.CHECK_API || 'https://check.dwb.pp.ua/check?proxyip=';
+    CONFIG.checkApi = env.CHECK_API || 'https://check.proxyip.cmliussss.net/check?proxyip=';
     CONFIG.dohApi = env.DOH_API || 'https://cloudflare-dns.com/dns-query';
     
     // 新增：IP信息查询配置
