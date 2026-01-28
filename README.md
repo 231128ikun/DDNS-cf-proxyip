@@ -202,6 +202,8 @@ txt@example.com
 | `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 |
 | `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` |
+| `IP_INFO_ENABLED` | 查询ip归属地开关 | false | `true` |
+| `IP_INFO_API` | 查询ip归属地api | http://ip-api.com/json | `https://example.com/json` |
 
 ### CF_DOMAIN 格式说明
 
