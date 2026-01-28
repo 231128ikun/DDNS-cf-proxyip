@@ -187,9 +187,9 @@ txt@example.com
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `CF_MAIL` | Cloudflare 账号邮箱 | `user@example.com` |
-| `CF_KEY` | Cloudflare API Token | `abcd1234...` |
-| `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
+| `CF_MAIL` | 目标维护域名所托管的Cloudflare 账号邮箱 | `user@example.com` |
+| `CF_KEY` | 目标维护域名所托管的Cloudflare API Token（带dns编辑即可 ）| `abcd1234...` |
+| `CF_ZONEID` | 目标维护域名的 Zone ID | `1a2b3c4d...` |
 | `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `ddns.example.com` |
 | `MIN_ACTIVE` | 最少活跃IP数量 | `3` |
 | `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` |
