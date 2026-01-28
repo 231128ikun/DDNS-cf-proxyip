@@ -1,5 +1,5 @@
 /**
- * DDNS Pro & Proxy IP Manager v4.2
+ * DDNS Pro & Proxy IP Manager v4.3
  * 新增：IP归属地查询功能（可选）
  */
 
@@ -846,7 +846,7 @@ async function maintainAllDomains(env, isManual = false) {
         allReports.some(r => r.poolExhausted);
     
     if (shouldNotify) {
-        await sendTG(allReports, globalPoolBefore, globalPoolAfter);
+        await sendTG(allReports, globalPoolBefore, globalPoolAfter, isManual);
     }
     
     return {
@@ -858,65 +858,133 @@ async function maintainAllDomains(env, isManual = false) {
     };
 }
 
-async function sendTG(reports, poolBefore, poolAfter) {
+// ========== 重构的TG通知函数 ==========
+async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
     if (!CONFIG.tgToken || !CONFIG.tgId) return;
     
     const modeLabel = { 'A': 'A记录', 'TXT': 'TXT记录', 'ALL': '双模式' };
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
     
-    let msg = `🔧 <b>DDNS 维护报告</b>\n`;
-    msg += `━━━━━━━━━━━━━━━━━━\n`;
-    msg += `⏰ <b>时间:</b> ${timestamp}\n\n`;
+    // 标题区分手动/自动维护
+    let msg = isManual 
+        ? `🔧 <b>DDNS 手动维护报告</b>\n`
+        : `⚙️ <b>DDNS 自动维护报告</b>\n`;
     
+    msg += `━━━━━━━━━━━━━━━━━━\n`;
+    msg += `⏰ ${timestamp}\n\n`;
+    
+    // 遍历每个域名的维护报告
     reports.forEach((report, index) => {
-        msg += `<b>${index + 1}. ${report.domain}</b> (${modeLabel[report.mode]}`;
+        // 域名分隔线
+        if (index > 0) {
+            msg += `\n`;
+        }
+        
+        msg += `━━ <code>${report.domain}</code> ━━\n`;
+        msg += `${modeLabel[report.mode]}`;
         if (report.mode === 'A' || report.mode === 'ALL') {
-            msg += ` · 端口${report.port}`;
+            msg += ` · 端口 ${report.port}`;
         }
-        msg += `)\n`;
+        msg += `\n\n`;
         
-        if (report.logs && report.logs.length > 0) {
-            const keyLogs = report.logs.filter(log => 
-                log.includes('当前') || 
-                log.includes('✅') ||
-                log.includes('已更新') ||
-                log.includes('已创建') ||
-                log.includes('完成')
-            );
-            keyLogs.forEach(log => {
-                msg += `<code>${log}</code>\n`;
+        // 显示详细的检测信息
+        if (report.checkDetails && report.checkDetails.length > 0) {
+            report.checkDetails.forEach(detail => {
+                const statusIcon = detail.status.includes('✅') ? '✅' : '❌';
+                
+                // IP:PORT 可复制
+                msg += `${statusIcon} <code>${detail.ip}</code>\n`;
+                
+                // 详细信息不可复制，正常排版
+                let info = `   ${detail.colo} · ${detail.time}ms`;
+                if (detail.ipInfo) {
+                    info += ` · ${detail.ipInfo.country}`;
+                    if (detail.ipInfo.asn) {
+                        info += ` · ${detail.ipInfo.asn}`;
+                    }
+                    if (detail.ipInfo.isp) {
+                        info += ` · ${detail.ipInfo.isp}`;
+                    }
+                }
+                msg += `${info}\n`;
             });
+            msg += `\n`;
         }
         
-        if (report.mode === 'ALL' && report.txtLogs) {
-            const txtKeyLogs = report.txtLogs.filter(log =>
-                log.includes('当前TXT') ||
-                log.includes('✅') ||
-                log.includes('TXT已')
-            );
-            txtKeyLogs.forEach(log => {
-                msg += `<code>${log}</code>\n`;
-            });
+        // 维护结果摘要
+        if (report.mode === 'A' || report.mode === 'ALL') {
+            if (report.added.length > 0) {
+                msg += `📈 新增 ${report.added.length} 个IP\n`;
+            }
+            if (report.removed.length > 0) {
+                msg += `📉 移除 ${report.removed.length} 个IP\n`;
+            }
+            if (report.added.length === 0 && report.removed.length === 0) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
+            
+            msg += `✅ 完成: ${report.afterActive}/${CONFIG.minActive}\n`;
         }
         
-        msg += `\n`;
+        // TXT记录维护结果（双模式）
+        if (report.mode === 'ALL' && report.txtActive !== undefined) {
+            msg += `\n<b>📝 TXT记录</b>\n`;
+            
+            if (report.txtAdded && report.txtAdded.length > 0) {
+                msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
+            }
+            if (report.txtRemoved && report.txtRemoved.length > 0) {
+                msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
+            }
+            if ((!report.txtAdded || report.txtAdded.length === 0) && 
+                (!report.txtRemoved || report.txtRemoved.length === 0)) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
+            
+            msg += `✅ 完成: ${report.txtActive}/${CONFIG.minActive}\n`;
+        }
+        
+        // TXT模式独立处理
+        if (report.mode === 'TXT') {
+            if (report.added.length > 0) {
+                msg += `📈 新增 ${report.added.length} 个IP\n`;
+            }
+            if (report.removed.length > 0) {
+                msg += `📉 移除 ${report.removed.length} 个IP\n`;
+            }
+            if (report.added.length === 0 && report.removed.length === 0) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
+            
+            msg += `✅ 完成: ${report.afterActive}/${CONFIG.minActive}\n`;
+        }
+        
+        // IP不足警告
+        if (report.poolExhausted) {
+            msg += `\n⚠️ <b>警告：IP库存不足！</b>\n`;
+        }
     });
     
+    // IP库存变化
+    msg += `\n━━━━━━━━━━━━━━━━━━\n`;
     msg += `📦 <b>IP库存变化</b>\n`;
     msg += `   维护前: ${poolBefore} 个\n`;
     msg += `   维护后: ${poolAfter} 个\n`;
     const poolChange = poolAfter - poolBefore;
     if (poolChange !== 0) {
-        msg += `   变化: ${poolChange > 0 ? '+' : ''}${poolChange}\n`;
+        const changeSymbol = poolChange > 0 ? '📈' : '📉';
+        msg += `   ${changeSymbol} 变化: ${poolChange > 0 ? '+' : ''}${poolChange}\n`;
     }
     
+    // 全局警告
     const hasExhausted = reports.some(r => r.poolExhausted);
     if (hasExhausted) {
-        msg += `\n⚠️ <b>警告：部分域名IP不足！</b>\n`;
+        msg += `\n⚠️ <b>警告：部分域名IP库存不足！</b>\n`;
     }
     
-    if (CONFIG.projectUrl) {
-        msg += `\n🔗 <b>管理面板:</b> ${CONFIG.projectUrl}\n`;
+    // 仅手动维护时显示管理面板链接
+    if (isManual && CONFIG.projectUrl) {
+        msg += `\n🔗 <a href="${CONFIG.projectUrl}">打开管理面板</a>\n`;
     }
     
     try {
@@ -926,7 +994,8 @@ async function sendTG(reports, poolBefore, poolAfter) {
             body: JSON.stringify({
                 chat_id: CONFIG.tgId,
                 text: msg,
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                disable_web_page_preview: true
             })
         });
     } catch (e) {
@@ -966,6 +1035,7 @@ function renderHTML(C) {
         }
         .hero {
             padding: 40px 0 20px;
+            position: relative;
         }
         .hero h1 {
             font-size: 1.5rem;
@@ -993,6 +1063,40 @@ function renderHTML(C) {
             font-size: 10px;
             font-weight: 600;
             margin-left: 8px;
+        }
+        /* GitHub图标样式 */
+        .github-corner {
+            position: fixed;
+            top: 0;
+            right: 0;
+            z-index: 9999;
+        }
+        .github-corner svg {
+            fill: #86868b;
+            color: #fff;
+            width: 60px;
+            height: 60px;
+            transition: fill 0.3s;
+        }
+        .github-corner:hover svg {
+            fill: #667eea;
+        }
+        .github-corner .octo-arm {
+            transform-origin: 130px 106px;
+        }
+        .github-corner:hover .octo-arm {
+            animation: octocat-wave 560ms ease-in-out;
+        }
+        @keyframes octocat-wave {
+            0%, 100% { transform: rotate(0); }
+            20%, 60% { transform: rotate(-25deg); }
+            40%, 80% { transform: rotate(10deg); }
+        }
+        @media (max-width: 768px) {
+            .github-corner svg {
+                width: 50px;
+                height: 50px;
+            }
         }
         .domain-selector {
             max-width: 600px;
@@ -1141,6 +1245,15 @@ function renderHTML(C) {
     </style>
 </head>
 <body class="pb-5">
+
+<!-- GitHub Corner -->
+<a href="https://github.com/231128ikun/DDNS-cf-proxyip" class="github-corner" aria-label="View source on GitHub" target="_blank">
+    <svg viewBox="0 0 250 250" aria-hidden="true">
+        <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path>
+        <path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path>
+        <path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path>
+    </svg>
+</a>
 
 <div class="container hero">
     <h1>
