@@ -1258,7 +1258,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v4.2</span>
+        <span class="version-badge">v4.3</span>
         ${ipInfoEnabled ? '<span class="feature-badge">🌍 IP归属地</span>' : ''}
     </h1>
     <div class="domain-selector">
