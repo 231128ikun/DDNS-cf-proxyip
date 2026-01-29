@@ -198,7 +198,6 @@ txt@example.com
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
-| `DOMAIN` | 别人维护好的优质域名（自动解析为候选IP） | 无 | `source.example.com:443` |
 | `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 |
 | `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` |
