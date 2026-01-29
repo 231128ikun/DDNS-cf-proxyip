@@ -1,6 +1,5 @@
 /**
  * DDNS Pro & Proxy IP Manager v5.1
- * 新增：维护的不同域名支持绑定不同的ip池
  */
 
 // ========== 运行时配置 ==========
@@ -968,6 +967,7 @@ async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
         }
         msg += `\n\n`;
         
+        // 显示所有IP的检测状态
         if (report.checkDetails && report.checkDetails.length > 0) {
             report.checkDetails.forEach(detail => {
                 const statusIcon = detail.status.includes('✅') ? '✅' : '❌';
@@ -984,26 +984,102 @@ async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
             msg += `\n`;
         }
         
+        // ========== A记录模式 ==========
         if (report.mode === 'A' || report.mode === 'ALL') {
-            if (report.added.length > 0) msg += `📈 新增 ${report.added.length} 个IP\n`;
-            if (report.removed.length > 0) msg += `📉 移除 ${report.removed.length} 个IP\n`;
-            if (report.added.length === 0 && report.removed.length === 0) msg += `✨ 所有IP正常，无变化\n`;
+            // 显示新增IP的详细信息
+            if (report.added.length > 0) {
+                msg += `📈 新增 ${report.added.length} 个IP\n`;
+                report.added.forEach(item => {
+                    msg += `   ✅ <code>${item.ip}</code>\n`;
+                    let info = `      ${item.colo} · ${item.time}ms`;
+                    if (item.ipInfo) {
+                        info += ` · ${item.ipInfo.country}`;
+                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
+                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
+                    }
+                    msg += `${info}\n`;
+                });
+            }
+            
+            // 显示移除IP的详细信息
+            if (report.removed.length > 0) {
+                msg += `📉 移除 ${report.removed.length} 个IP\n`;
+                report.removed.forEach(item => {
+                    msg += `   ❌ <code>${item.ip}</code>\n`;
+                    msg += `      原因: ${item.reason}\n`;
+                });
+            }
+            
+            if (report.added.length === 0 && report.removed.length === 0) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
             msg += `✅ 完成: ${report.afterActive}/${CONFIG.minActive}\n`;
         }
         
+        // ========== 双模式中的TXT记录 ==========
         if (report.mode === 'ALL' && report.txtActive !== undefined) {
             msg += `\n<b>📝 TXT记录</b>\n`;
-            if (report.txtAdded && report.txtAdded.length > 0) msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
-            if (report.txtRemoved && report.txtRemoved.length > 0) msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
+            
+            // 显示TXT新增IP的详细信息
+            if (report.txtAdded && report.txtAdded.length > 0) {
+                msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
+                report.txtAdded.forEach(item => {
+                    msg += `   ✅ <code>${item.ip}</code>\n`;
+                    let info = `      ${item.colo} · ${item.time}ms`;
+                    if (item.ipInfo) {
+                        info += ` · ${item.ipInfo.country}`;
+                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
+                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
+                    }
+                    msg += `${info}\n`;
+                });
+            }
+            
+            // 显示TXT移除IP的详细信息
+            if (report.txtRemoved && report.txtRemoved.length > 0) {
+                msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
+                report.txtRemoved.forEach(item => {
+                    msg += `   ❌ <code>${item.ip}</code>\n`;
+                    msg += `      原因: ${item.reason}\n`;
+                });
+            }
+            
             if ((!report.txtAdded || report.txtAdded.length === 0) && 
-                (!report.txtRemoved || report.txtRemoved.length === 0)) msg += `✨ 所有IP正常，无变化\n`;
+                (!report.txtRemoved || report.txtRemoved.length === 0)) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
             msg += `✅ 完成: ${report.txtActive}/${CONFIG.minActive}\n`;
         }
         
+        // ========== 纯TXT模式 ==========
         if (report.mode === 'TXT') {
-            if (report.added.length > 0) msg += `📈 新增 ${report.added.length} 个IP\n`;
-            if (report.removed.length > 0) msg += `📉 移除 ${report.removed.length} 个IP\n`;
-            if (report.added.length === 0 && report.removed.length === 0) msg += `✨ 所有IP正常，无变化\n`;
+            // 显示TXT新增IP的详细信息
+            if (report.added.length > 0) {
+                msg += `📈 新增 ${report.added.length} 个IP\n`;
+                report.added.forEach(item => {
+                    msg += `   ✅ <code>${item.ip}</code>\n`;
+                    let info = `      ${item.colo} · ${item.time}ms`;
+                    if (item.ipInfo) {
+                        info += ` · ${item.ipInfo.country}`;
+                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
+                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
+                    }
+                    msg += `${info}\n`;
+                });
+            }
+            
+            // 显示TXT移除IP的详细信息
+            if (report.removed.length > 0) {
+                msg += `📉 移除 ${report.removed.length} 个IP\n`;
+                report.removed.forEach(item => {
+                    msg += `   ❌ <code>${item.ip}</code>\n`;
+                    msg += `      原因: ${item.reason}\n`;
+                });
+            }
+            
+            if (report.added.length === 0 && report.removed.length === 0) {
+                msg += `✨ 所有IP正常，无变化\n`;
+            }
             msg += `✅ 完成: ${report.afterActive}/${CONFIG.minActive}\n`;
         }
         
@@ -2091,4 +2167,3 @@ window.addEventListener('DOMContentLoaded', () => {
 </html>
     `;
 }
-
