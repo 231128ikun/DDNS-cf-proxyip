@@ -452,7 +452,9 @@ async function resolveTXTRecord(domain) {
             return { raw: '', ips: [] };
         }
         
-        const raw = d.Answer[0].data.replace(/^"|"$/g, '');
+        // 修改：去掉DNS返回的引号
+        let raw = d.Answer[0].data;
+        raw = raw.replace(/^"|"$/g, ''); // 去掉首尾引号
         const ips = raw.split(',').map(ip => ip.trim()).filter(ip => ip);
         
         return { raw, ips };
@@ -528,7 +530,9 @@ async function getDomainStatus(target) {
     if (target.mode === 'TXT' || target.mode === 'ALL') {
         const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=TXT`);
         if (records && records.length > 0) {
-            const txtContent = records[0].content;
+            // 修改：去掉引号后再解析
+            let txtContent = records[0].content;
+            txtContent = txtContent.replace(/^"|"$/g, ''); // 去掉首尾引号
             const ips = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
             
             const checkPromises = ips.map(addr => checkProxyIP(addr));
@@ -830,8 +834,9 @@ async function maintainTXTRecords(env, target, addLog, report) {
         }
     }
     
-    const newContent = validIPs.join(',');
-    const currentContent = currentIPs.join(',');
+    // 修改：TXT内容用引号包裹
+    const newContent = `"${validIPs.join(',')}"`;
+    const currentContent = currentIPs.length > 0 ? `"${currentIPs.join(',')}"` : '';
     
     if (newContent !== currentContent) {
         if (recordId) {
@@ -927,9 +932,16 @@ async function maintainAllDomains(env, isManual = false) {
     const poolAfterRaw = await env.IP_DATA.get('pool') || '';
     globalPoolAfter = poolAfterRaw ? poolAfterRaw.split('\n').filter(l => l.trim()).length : 0;
     
-    const shouldNotify = isManual || 
-        allReports.some(r => r.added.length > 0 || r.removed.length > 0) ||
-        allReports.some(r => r.poolExhausted);
+    // 修改通知条件：手动维护 OR 有IP变动 OR 有库存枯竭
+    const hasIPChanges = allReports.some(r => 
+        r.added.length > 0 || 
+        r.removed.length > 0 || 
+        (r.txtAdded && r.txtAdded.length > 0) || 
+        (r.txtRemoved && r.txtRemoved.length > 0)
+    );
+    const hasExhausted = allReports.some(r => r.poolExhausted);
+    
+    const shouldNotify = isManual || hasIPChanges || hasExhausted;
     
     if (shouldNotify) {
         await sendTG(allReports, globalPoolBefore, globalPoolAfter, isManual);
@@ -990,7 +1002,8 @@ async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
             if (report.added.length > 0) {
                 msg += `📈 新增 ${report.added.length} 个IP\n`;
                 report.added.forEach(item => {
-                    msg += `   ✅ <code>${item.ip}</code>\n`;
+                    const displayIP = item.ip.includes(':') ? item.ip : `${item.ip}:${report.port}`;
+                    msg += `   ✅ <code>${displayIP}</code>\n`;
                     let info = `      ${item.colo} · ${item.time}ms`;
                     if (item.ipInfo) {
                         info += ` · ${item.ipInfo.country}`;
@@ -1083,6 +1096,7 @@ async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
             msg += `✅ 完成: ${report.afterActive}/${CONFIG.minActive}\n`;
         }
         
+        // 域名级别的库存不足警告
         if (report.poolExhausted) msg += `\n⚠️ <b>警告：IP库存不足！</b>\n`;
     });
     
@@ -1095,9 +1109,6 @@ async function sendTG(reports, poolBefore, poolAfter, isManual = false) {
         const changeSymbol = poolChange > 0 ? '📈' : '📉';
         msg += `   ${changeSymbol} 变化: ${poolChange > 0 ? '+' : ''}${poolChange}\n`;
     }
-    
-    const hasExhausted = reports.some(r => r.poolExhausted);
-    if (hasExhausted) msg += `\n⚠️ <b>警告：部分域名IP库存不足！</b>\n`;
     
     if (isManual && CONFIG.projectUrl) {
         msg += `\n🔗 <a href="${CONFIG.projectUrl}">打开管理面板</a>\n`;
