@@ -234,6 +234,7 @@ const GLOBAL_SETTINGS = {
     CONCURRENT_CHECKS: 10,      // 并发数：10（网络好可改为15-20）
     CHECK_TIMEOUT: 6000,        // 超时：6秒
     REMOTE_LOAD_TIMEOUT: 10000  // 远程加载超时：10秒
+    IP_INFO_TIMEOUT: 6000       // ip归属地查询超时：6秒
 };
 ```
 
