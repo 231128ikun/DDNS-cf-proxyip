@@ -1,6 +1,5 @@
 /**
  * DDNS Pro & Proxy IP Manager v5.3
- * 修复并完善了若干细节
  */
 
 // ========== 运行时配置 ==========
@@ -284,6 +283,38 @@ async function handleIPInfo(url) {
 
 async function handleDeleteRecord(url) {
     const id = url.searchParams.get('id');
+    const ip = url.searchParams.get('ip');
+    const isTxt = url.searchParams.get('isTxt') === 'true';
+    
+    if (isTxt && ip) {
+        // TXT记录删除单个IP
+        const record = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`);
+        if (!record) {
+            return new Response(JSON.stringify({ success: false, error: '获取记录失败' }), { status: 400 });
+        }
+        
+        let txtContent = record.content.replace(/^"|"$/g, '');
+        let ips = txtContent.split(',').map(i => i.trim()).filter(i => i);
+        
+        // 移除指定IP
+        ips = ips.filter(i => i !== ip);
+        
+        if (ips.length === 0) {
+            // 如果没有IP了，删除整个TXT记录
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`, 'DELETE');
+        } else {
+            // 更新TXT记录
+            const newContent = `"${ips.join(',')}"`;
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`, 'PUT', {
+                type: 'TXT',
+                name: record.name,
+                content: newContent,
+                ttl: 60
+            });
+        }
+        
+        return new Response(JSON.stringify({ success: true }));
+    }
     await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`, 'DELETE');
     return new Response(JSON.stringify({ success: true }));
 }
@@ -2136,9 +2167,10 @@ example.com:443 (自动解析域名)"></textarea>
                 record.ips.forEach(ip => {
                     html += \`<div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-white rounded">
                         <code>\${ip.ip}</code>
-                        <div>
+                        <div class="d-flex align-items-center gap-2">
                             <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
                             \${IP_INFO_ENABLED && ip.ipInfo ? formatIPInfo(ip.ipInfo) : ''}
+                            <a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>
                         </div>
                     </div>\`;
                 });
@@ -2330,6 +2362,18 @@ example.com:443 (自动解析域名)"></textarea>
             refreshStatus();
         } catch (e) {
             log(\`❌ 失败\`, 'error');
+        }
+    }
+
+    async function deleteTxtIP(recordId, ip) {
+        if (!confirm(\`确认删除 \${ip}？\`)) return;
+        
+        try {
+            await fetch(\`/api/delete-record?id=\${recordId}&ip=\${encodeURIComponent(ip)}&isTxt=true\`);
+            log('🗑️ 已从TXT记录删除', 'success');
+            refreshStatus();
+        } catch (e) {
+            log(\`❌ 删除失败\`, 'error');
         }
     }
     
