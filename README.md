@@ -55,8 +55,7 @@
 CF_MAIL = your-email@example.com
 CF_KEY = your-cloudflare-api-token
 CF_ZONEID = your-zone-id
-CF_DOMAIN = ddns.example.com:port （不填端口默认443）
-MIN_ACTIVE = 3
+CF_DOMAIN = ddns.example.com:port&3 （前缀不填默认维护a记录，端口不填默认443，最小活跃数不填默认为3）
 ```
 
 #### 创建 KV 绑定
@@ -74,7 +73,7 @@ MIN_ACTIVE = 3
 Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger**
 
 ```
-0 */6 * * *  # 每6小时执行一次
+0 */3 * * *  # 每3小时执行一次
 ```
 
 ## 3️⃣ 使用管理面板
@@ -108,7 +107,7 @@ https://ddns-pro.你的子域名.workers.dev
 点击 **执行全部维护** 按钮，系统会：
 - 检测现有DNS记录
 - 删除失效IP
-- 从库存补充新IP
+- 若低于最小活跃数，则从库存补充新IP
 - 发送Telegram通知（如已配置）
 
 ## 4️⃣ 配置自动维护（可选）
@@ -118,7 +117,7 @@ https://ddns-pro.你的子域名.workers.dev
 在 `Worker → Triggers → Cron Triggers` 中：
 ```
 [triggers]
-crons = ["0 */6 * * *"]  # 每6小时
+crons = ["0 */3 * * *"]  # 每3小时更新
 ```
 
 ### 配置 Telegram 通知
@@ -190,8 +189,7 @@ txt@example.com
 | `CF_MAIL` | 目标维护域名所托管的Cloudflare 账号邮箱 | `user@example.com` |
 | `CF_KEY` | 目标维护域名所托管的Cloudflare API Token（带dns编辑即可 ）| `abcd1234...` |
 | `CF_ZONEID` | 目标维护域名的 Zone ID | `1a2b3c4d...` |
-| `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `ddns.example.com` |
-| `MIN_ACTIVE` | 最少活跃IP数量 | `3` |
+| `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `txt@ddns.example.com:port&3` |
 | `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` |
 
 ### 可选变量
@@ -206,21 +204,23 @@ txt@example.com
 
 ### CF_DOMAIN 格式说明
 
+CF_DOMAIN="ddns.example.com:2053&5"   #表示维护a记录模式，指定端口2053，最小活跃数为5 (最小活跃数：去除域名解析中无效ip后，保留的活跃ip要大于等于 `最小活跃数` )
+
 支持三种模式，多个域名用逗号分隔：
 
 ```bash
-# A记录模式（默认。就是将活跃的ip解析到维护的域名的a记录）
-CF_DOMAIN="ddns.example.com"                    # 默认端口443
+# A记录模式（默认。就是将活跃的ip解析到维护的域名的a记录，最常用）
+CF_DOMAIN="ddns.example.com"                    # 默认端口443  
 CF_DOMAIN="ddns.example.com:8443"               # 指定端口8443
 
 # TXT记录模式（就是将活跃的ip解析到维护域名的txt记录中）
-CF_DOMAIN="txt@txt.example.com"                 # TXT记录，存储 IP:PORT 列表
+CF_DOMAIN="txt@txt.example.com"                 # TXT记录，存储 IP:PORT 列表，所以无需设置端口
 
 # 双模式（同时维护A和TXT记录）
-CF_DOMAIN="all@multi.example.com:8080"          # 同时创建A记录和TXT记录
+CF_DOMAIN="all@multi.example.com:8080"          # 同时创建A记录和TXT记录,其中a记录为8080端口
 
 # 多域名配置（逗号分隔）
-CF_DOMAIN="ddns.example.com,txt@txt.example.com,all@multi.example.com:8080"
+CF_DOMAIN="ddns.example.com,txt@txt.example.com&5,all@multi.example.com:8080&5"
 ```
 
 ## 🔧 高级配置
@@ -262,16 +262,13 @@ const GLOBAL_SETTINGS = {
 3. 删除失效IP 
    ↓
 4. 如果活跃IP < MIN_ACTIVE（最小活跃ip数）
-   ├─ 从 DOMAIN（若配置） 解析新IP
    └─ 从 IP_DATA (KV) 加载库存
    ↓
-5. 检测候选IP
+5. 检测有效ip并添加到DNS/txt记录
    ↓
-6. 添加有效IP到DNS/txt记录
+6. 更新记录和库存数量
    ↓
-7. 更新库存
-   ↓
-8. 发送Telegram通知
+7. 发送Telegram通知
 ```
 
 ## 📚 相关项目
