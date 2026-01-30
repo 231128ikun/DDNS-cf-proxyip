@@ -26,10 +26,11 @@
 3. 左侧菜单 **API Tokens** → **Create Token**
 4. 选择 **Edit zone DNS** 模板
 5. 配置权限：
-   - **Permissions**: Zone - DNS - Edit
    - **Zone Resources**: 选择你的域名
-6. 点击 **Continue to summary** → **Create Token**
-7. **复制保存** 生成的 Token（只显示一次）
+   - **Permissions**: Zone - DNS - Edit
+   - **Permissions**: Zone - DNS - Read
+7. 点击 **Continue to summary** → **Create Token**
+8. **复制保存** 生成的 Token（只显示一次）
 
 ### 获取 Zone ID
 
@@ -203,9 +204,9 @@ txt@example.com
 | `IP_INFO_API` | 查询ip归属地api | `http://ip-api.com/json` | `https://example.com/json` |
 
 ### CF_DOMAIN 格式说明
-
+```
 CF_DOMAIN="ddns.example.com:2053&5"   #表示维护a记录模式，指定端口2053，最小活跃数为5 (最小活跃数：去除域名解析中无效ip后，保留的活跃ip要大于等于 `最小活跃数` )
-
+```
 支持三种模式，多个域名用逗号分隔：
 
 ```bash
