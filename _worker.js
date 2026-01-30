@@ -1,10 +1,6 @@
 /**
- * DDNS Pro & Proxy IP Manager v5.2 - 优化版
- * 主要优化：
- * 1. 添加KV缓存机制，减少KV读取次数
- * 2. 优化错误处理和日志记录
- * 3. 提取重复代码为函数
- * 4. 添加性能监控
+ * DDNS Pro & Proxy IP Manager v5.3
+ * 修复并完善了若干细节
  */
 
 // ========== 运行时配置 ==========
@@ -28,103 +24,9 @@ const GLOBAL_SETTINGS = {
     CHECK_TIMEOUT: 6000,         // 超时：6秒
     REMOTE_LOAD_TIMEOUT: 10000,  // 远程加载超时：10秒
     IP_INFO_TIMEOUT: 6000,       // ip归属地查询超时：6秒
-    KV_CACHE_TTL: 30000,         // KV缓存30秒
-    MAX_CACHE_SIZE: 100          // 最大缓存条目数
 };
 
-// ========== KV缓存管理器 ==========
-class KVCacheManager {
-    constructor() {
-        this.cache = new Map();
-        this.timestamps = new Map();
-        this.hits = 0;
-        this.misses = 0;
-    }
-
-    async get(env, key) {
-        // 检查缓存
-        if (this.cache.has(key)) {
-            const timestamp = this.timestamps.get(key);
-            const age = Date.now() - timestamp;
-            
-            if (age < GLOBAL_SETTINGS.KV_CACHE_TTL) {
-                this.hits++;
-                return this.cache.get(key);
-            }
-            // 缓存过期，删除
-            this.cache.delete(key);
-            this.timestamps.delete(key);
-        }
-
-        // 从KV读取
-        this.misses++;
-        const value = await env.IP_DATA.get(key);
-        
-        // 存入缓存
-        if (value !== null && this.cache.size < GLOBAL_SETTINGS.MAX_CACHE_SIZE) {
-            this.cache.set(key, value);
-            this.timestamps.set(key, Date.now());
-        }
-        
-        return value;
-    }
-
-    async put(env, key, value) {
-        // 更新KV
-        await env.IP_DATA.put(key, value);
-        
-        // 更新缓存
-        this.cache.set(key, value);
-        this.timestamps.set(key, Date.now());
-        
-        // 如果缓存过大，清理最旧的条目
-        if (this.cache.size > GLOBAL_SETTINGS.MAX_CACHE_SIZE) {
-            const oldestKey = Array.from(this.timestamps.entries())
-                .sort((a, b) => a[1] - b[1])[0]?.[0];
-            if (oldestKey) {
-                this.cache.delete(oldestKey);
-                this.timestamps.delete(oldestKey);
-            }
-        }
-    }
-
-    async delete(env, key) {
-        await env.IP_DATA.delete(key);
-        this.cache.delete(key);
-        this.timestamps.delete(key);
-    }
-
-    invalidate(key) {
-        this.cache.delete(key);
-        this.timestamps.delete(key);
-    }
-
-    clear() {
-        this.cache.clear();
-        this.timestamps.clear();
-    }
-
-    getStats() {
-        return {
-            size: this.cache.size,
-            hits: this.hits,
-            misses: this.misses,
-            hitRate: this.hits + this.misses > 0 ? (this.hits / (this.hits + this.misses) * 100).toFixed(2) : 0
-        };
-    }
-}
-
-// 全局缓存实例
-const kvCache = new KVCacheManager();
-
 // ========== 工具函数 ==========
-function logPerformance(label, startTime) {
-    const duration = Date.now() - startTime;
-    if (duration > 1000) {
-        console.log(`⏱️ ${label} 耗时: ${duration}ms`);
-    }
-}
-
 function safeJSONParse(str, defaultValue = null) {
     try {
         return str ? JSON.parse(str) : defaultValue;
@@ -159,15 +61,13 @@ export default {
         }
 
         try {
-            // API路由处理
             const apiStart = Date.now();
             const response = await handleAPIRequest(url, request, env);
             console.log(`🔧 API请求 ${url.pathname} 处理耗时: ${Date.now() - apiStart}ms`);
             
-            // 添加性能头信息
+            // 添加性能头信息（移除缓存统计）
             const headers = new Headers(response.headers);
             headers.set('X-Processing-Time', `${Date.now() - requestStart}ms`);
-            headers.set('X-Cache-Stats', JSON.stringify(kvCache.getStats()));
             
             return new Response(response.body, {
                 status: response.status,
@@ -284,7 +184,7 @@ async function handleGetPool(url, env) {
     const poolKey = url.searchParams.get('poolKey') || 'pool';
     const onlyCount = url.searchParams.get('onlyCount') === 'true';
     
-    const pool = await kvCache.get(env, poolKey) || '';
+    const pool = await env.IP_DATA.get(poolKey) || '';
     const count = pool.trim() ? pool.trim().split('\n').length : 0;
     
     if (onlyCount) {
@@ -302,7 +202,7 @@ async function handleSavePool(request, env) {
         return new Response(JSON.stringify({ success: false, error: '没有有效IP' }), { status: 400 });
     }
     
-    const existingPool = await kvCache.get(env, poolKey) || '';
+    const existingPool = await env.IP_DATA.get(poolKey) || '';
     const existingSet = new Set(existingPool.split('\n').filter(l => l.trim()));
     
     newIPs.split('\n').forEach(ip => {
@@ -310,7 +210,7 @@ async function handleSavePool(request, env) {
     });
     
     const finalPool = Array.from(existingSet).join('\n');
-    await kvCache.put(env, poolKey, finalPool);
+    await env.IP_DATA.put(poolKey, finalPool);
     
     return new Response(JSON.stringify({
         success: true,
@@ -398,15 +298,65 @@ async function handleAddARecord(request) {
         return new Response(JSON.stringify({ success: false, error: '参数错误' }), { status: 400 });
     }
     
-    const check = await checkProxyIP(`${ip}:${target.port}`);
+    // 格式化IP:PORT
+    const addr = ip.includes(':') ? ip : `${ip}:${target.port}`;
+    
+    const check = await checkProxyIP(addr);
     if (!check.success) {
         return new Response(JSON.stringify({ success: false, error: 'IP检测失败' }));
     }
     
+    // TXT模式：追加到TXT记录
+    if (target.mode === 'TXT') {
+        const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=TXT`);
+        
+        let currentIPs = [];
+        let recordId = null;
+        
+        if (records && records.length > 0) {
+            recordId = records[0].id;
+            let txtContent = records[0].content.replace(/^"|"$/g, '');
+            currentIPs = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
+        }
+        
+        // 检查是否已存在
+        if (currentIPs.includes(addr)) {
+            return new Response(JSON.stringify({ success: false, error: 'IP已存在于TXT记录' }));
+        }
+        
+        // 追加新IP
+        currentIPs.push(addr);
+        const newContent = `"${currentIPs.join(',')}"`;
+        
+        if (recordId) {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${recordId}`, 'PUT', {
+                type: 'TXT',
+                name: target.domain,
+                content: newContent,
+                ttl: 60
+            });
+        } else {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
+                type: 'TXT',
+                name: target.domain,
+                content: newContent,
+                ttl: 60
+            });
+        }
+        
+        return new Response(JSON.stringify({ 
+            success: true,
+            colo: check.colo,
+            time: check.responseTime,
+            mode: 'TXT'
+        }));
+    }
+    
+    // A记录模式
     const result = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
         type: 'A',
         name: target.domain,
-        content: ip,
+        content: ip.split(':')[0], // A记录只需要IP部分
         ttl: 60,
         proxied: false
     });
@@ -414,21 +364,27 @@ async function handleAddARecord(request) {
     return new Response(JSON.stringify({ 
         success: !!result,
         colo: check.colo,
-        time: check.responseTime
+        time: check.responseTime,
+        mode: 'A'
     }));
 }
 
 async function handleMaintain(url, env) {
     const isManual = url.searchParams.get('manual') === 'true';
     const res = await maintainAllDomains(env, isManual);
-    return new Response(JSON.stringify(res));
+    
+    // 将日志包含在响应中
+    return new Response(JSON.stringify({
+        ...res,
+        // 确保所有日志都返回给前端
+        allLogs: res.reports.flatMap(r => r.logs)
+    }));
 }
 
 async function handleGetDomainPoolMapping(env) {
-    const mappingJson = await kvCache.get(env, 'domain_pool_mapping') || '{}';
+    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
     const mapping = safeJSONParse(mappingJson, {});
     
-    // 获取所有池列表（使用缓存优化）
     const allKeys = await env.IP_DATA.list();
     const pools = allKeys.keys
         .filter(k => k.name.startsWith('pool'))
@@ -443,7 +399,7 @@ async function handleGetDomainPoolMapping(env) {
 
 async function handleSaveDomainPoolMapping(request, env) {
     const body = await request.json();
-    await kvCache.put(env, 'domain_pool_mapping', JSON.stringify(body.mapping));
+    await env.IP_DATA.put('domain_pool_mapping', JSON.stringify(body.mapping));
     return new Response(JSON.stringify({ success: true }));
 }
 
@@ -463,12 +419,12 @@ async function handleCreatePool(request, env) {
         return new Response(JSON.stringify({ success: false, error: '该池名称为系统保留' }), { status: 400 });
     }
     
-    const existing = await kvCache.get(env, poolKey);
+    const existing = await env.IP_DATA.get(poolKey);
     if (existing !== null) {
         return new Response(JSON.stringify({ success: false, error: '池已存在' }), { status: 400 });
     }
     
-    await kvCache.put(env, poolKey, '');
+    await env.IP_DATA.put(poolKey, '');
     return new Response(JSON.stringify({ success: true }));
 }
 
@@ -479,11 +435,11 @@ async function handleDeletePool(url, env) {
         return new Response(JSON.stringify({ success: false, error: '不能删除通用池' }), { status: 400 });
     }
     
-    await kvCache.delete(env, poolKey);
+    await env.IP_DATA.delete(poolKey);
     return new Response(JSON.stringify({ success: true }));
 }
 
-// ========== 核心函数（保持原有功能不变） ==========
+// ========== 核心函数  ==========
 
 function parseDomainPort(input, defaultPort = '443') {
     if (!input) return { domain: '', port: defaultPort };
@@ -724,11 +680,16 @@ async function getDomainStatus(target) {
         domain: target.domain,
         port: target.port,
         aRecords: [],
-        txtRecords: []
+        txtRecords: [],
+        error: null
     };
     
     if (target.mode === 'A' || target.mode === 'ALL') {
         const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=A`);
+        if (records === null) {
+            result.error = 'CF配置错误或API调用失败';
+            return result;
+        }
         if (records) {
             const checkPromises = records.map(r => checkProxyIP(`${r.content}:${target.port}`));
             const ipInfoPromises = CONFIG.ipInfoEnabled
@@ -754,10 +715,13 @@ async function getDomainStatus(target) {
     
     if (target.mode === 'TXT' || target.mode === 'ALL') {
         const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=TXT`);
+        if (records === null) {
+            result.error = 'CF配置错误或API调用失败';
+            return result;
+        }
         if (records && records.length > 0) {
-            // 去掉引号后再解析
             let txtContent = records[0].content;
-            txtContent = txtContent.replace(/^"|"$/g, ''); // 去掉首尾引号
+            txtContent = txtContent.replace(/^"|"$/g, '');
             const ips = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
             
             const checkPromises = ips.map(addr => checkProxyIP(addr));
@@ -806,6 +770,15 @@ async function checkProxyIP(input) {
 }
 
 async function fetchCF(path, method = 'GET', body = null) {
+    if (!CONFIG.email || !CONFIG.apiKey || !CONFIG.zoneId) {
+        console.error('❌ Cloudflare配置不完整:', {
+            email: !!CONFIG.email,
+            apiKey: !!CONFIG.apiKey,
+            zoneId: !!CONFIG.zoneId
+        });
+        return null;
+    }
+    
     const init = {
         method: method,
         headers: {
@@ -819,40 +792,43 @@ async function fetchCF(path, method = 'GET', body = null) {
     try {
         const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
         const d = await r.json();
+        
+        if (!d.success) {
+            console.error('❌ Cloudflare API错误:', {
+                path,
+                method,
+                errors: d.errors,
+                messages: d.messages
+            });
+            return null;
+        }
+        
         return d.result;
     } catch (e) {
-        console.error('Cloudflare API error:', e);
+        console.error('❌ Cloudflare API请求失败:', {
+            path,
+            method,
+            error: e.message
+        });
         return null;
     }
 }
 
 // ========== 维护相关函数 ==========
 async function getPoolConfig(env, domain) {
-    const mappingJson = await kvCache.get(env, 'domain_pool_mapping') || '{}';
+    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
     const mapping = safeJSONParse(mappingJson, {});
     const poolKey = mapping[domain] || 'pool';
     return { poolKey, mapping };
 }
 
 async function updatePoolInKV(env, poolKey, poolList) {
-    await kvCache.put(env, poolKey, poolList.join('\n'));
-}
-
-async function checkIPWithInfo(ip, port) {
-    const addr = `${ip}:${port}`;
-    const checkResult = await checkProxyIP(addr);
-    
-    let ipInfo = null;
-    if (CONFIG.ipInfoEnabled) {
-        ipInfo = await getIPInfo(ip);
-    }
-    
-    return { addr, checkResult, ipInfo };
+    await env.IP_DATA.put(poolKey, poolList.join('\n'));
 }
 
 async function getCandidateIPs(env, target, addLog) {
     const { poolKey } = await getPoolConfig(env, target.domain);
-    const pool = await kvCache.get(env, poolKey) || '';
+    const pool = await env.IP_DATA.get(poolKey) || '';
     
     if (!pool) {
         addLog(`⚠️ ${poolKey} 为空`);
@@ -863,13 +839,11 @@ async function getCandidateIPs(env, target, addLog) {
     
     // TXT模式不过滤端口，A模式才过滤
     if (target.mode === 'A') {
-        // A记录需要匹配端口
         candidates = candidates.filter(l => {
             const [_, port] = l.split(':');
             return port === target.port;
         });
     }
-    // TXT模式：不过滤端口，任何端口的IP都可以
     
     addLog(`📦 使用 ${poolKey}: ${candidates.length} 个候选IP`);
     return candidates;
@@ -878,34 +852,37 @@ async function getCandidateIPs(env, target, addLog) {
 async function maintainARecords(env, target, addLog, report) {
     addLog(`📋 维护A记录: ${target.domain}:${target.port} (最小活跃数: ${target.minActive})`);
     
-    const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=A`) || [];
+    const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=A`);
+    
+    if (records === null) {
+        addLog(`❌ 无法获取A记录 - 请检查CF配置`);
+        report.configError = true;
+        return;
+    }
+    
     addLog(`当前A记录: ${records.length} 条`);
     
     const { poolKey } = await getPoolConfig(env, target.domain);
-    let poolRaw = await kvCache.get(env, poolKey) || '';
+    let poolRaw = await env.IP_DATA.get(poolKey) || '';
     let poolList = poolRaw.split('\n').filter(l => l.trim());
     
     let activeIPs = [];
     
+    // 检测现有记录
     for (const r of records) {
-        const { addr, checkResult, ipInfo } = await checkIPWithInfo(r.content, target.port);
+        const addr = `${r.content}:${target.port}`;
+        const checkResult = await checkProxyIP(addr);
         
         report.checkDetails.push({
             ip: addr,
             status: checkResult.success ? '✅ 活跃' : '❌ 失效',
             colo: checkResult.colo || 'N/A',
-            time: checkResult.responseTime || '-',
-            ipInfo: ipInfo
+            time: checkResult.responseTime || '-'
         });
         
         if (checkResult.success) {
             activeIPs.push(r.content);
-            
-            let logMsg = `  ✅ ${addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`;
-            if (ipInfo) {
-                logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
-            }
-            addLog(logMsg);
+            addLog(`  ✅ ${addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
         } else {
             await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${r.id}`, 'DELETE');
             report.removed.push({ ip: r.content, reason: '检测失效' });
@@ -917,6 +894,7 @@ async function maintainARecords(env, target, addLog, report) {
     
     report.beforeActive = activeIPs.length;
     
+    // 补充IP
     if (activeIPs.length < target.minActive) {
         addLog(`需补充: ${target.minActive - activeIPs.length} 个`);
         
@@ -928,7 +906,7 @@ async function maintainARecords(env, target, addLog, report) {
             const [ip, port] = item.split(':');
             if (activeIPs.includes(ip) || port !== target.port) continue;
             
-            const { checkResult, ipInfo } = await checkIPWithInfo(ip, port);
+            const checkResult = await checkProxyIP(item);
             
             if (checkResult.success) {
                 await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
@@ -943,15 +921,10 @@ async function maintainARecords(env, target, addLog, report) {
                 report.added.push({
                     ip: ip,
                     colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-',
-                    ipInfo: ipInfo
+                    time: checkResult.responseTime || '-'
                 });
                 
-                let logMsg = `  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`;
-                if (ipInfo) {
-                    logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
-                }
-                addLog(logMsg);
+                addLog(`  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
             } else {
                 poolList = poolList.filter(p => p !== item);
                 report.poolRemoved++;
@@ -977,6 +950,13 @@ async function maintainTXTRecords(env, target, addLog, report) {
     addLog(`📝 维护TXT: ${target.domain} (最小活跃数: ${target.minActive})`);
     
     const records = await fetchCF(`/zones/${CONFIG.zoneId}/dns_records?name=${target.domain}&type=TXT`);
+    
+    if (records === null) {
+        addLog(`❌ 无法获取TXT记录 - 请检查CF配置`);
+        report.configError = true;
+        return;
+    }
+    
     let currentIPs = [];
     let recordId = null;
     
@@ -989,37 +969,25 @@ async function maintainTXTRecords(env, target, addLog, report) {
     }
     
     const { poolKey } = await getPoolConfig(env, target.domain);
-    let poolRaw = await kvCache.get(env, poolKey) || '';
+    let poolRaw = await env.IP_DATA.get(poolKey) || '';
     let poolList = poolRaw.split('\n').filter(l => l.trim());
     
     let validIPs = [];
     
-    // 第一步：检测现有IP
+    // 检测现有IP
     for (const addr of currentIPs) {
-        const c = await checkProxyIP(addr);
-        
-        const ipOnly = addr.split(':')[0];
-        let ipInfo = null;
-        if (CONFIG.ipInfoEnabled) {
-            ipInfo = await getIPInfo(ipOnly);
-        }
+        const checkResult = await checkProxyIP(addr);
         
         report.checkDetails.push({
             ip: addr,
-            status: c.success ? '✅ 活跃' : '❌ 失效',
-            colo: c.colo || 'N/A',
-            time: c.responseTime || '-',
-            ipInfo: ipInfo
+            status: checkResult.success ? '✅ 活跃' : '❌ 失效',
+            colo: checkResult.colo || 'N/A',
+            time: checkResult.responseTime || '-'
         });
         
-        if (c.success) {
+        if (checkResult.success) {
             validIPs.push(addr);
-            
-            let logMsg = `  ✅ ${addr} - ${c.colo} (${c.responseTime}ms)`;
-            if (ipInfo) {
-                logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
-            }
-            addLog(logMsg);
+            addLog(`  ✅ ${addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
         } else {
             report.removed.push({ ip: addr, reason: '检测失效' });
             poolList = poolList.filter(p => p !== addr);
@@ -1030,7 +998,7 @@ async function maintainTXTRecords(env, target, addLog, report) {
     
     report.beforeActive = validIPs.length;
     
-    // 第二步：补充IP到最小活跃数
+    // 补充IP到最小活跃数
     if (validIPs.length < target.minActive) {
         addLog(`需补充: ${target.minActive - validIPs.length} 个`);
         
@@ -1045,24 +1013,13 @@ async function maintainTXTRecords(env, target, addLog, report) {
             if (checkResult.success) {
                 validIPs.push(item);
                 
-                const ipOnly = item.split(':')[0];
-                let ipInfo = null;
-                if (CONFIG.ipInfoEnabled) {
-                    ipInfo = await getIPInfo(ipOnly);
-                }
-                
                 report.added.push({
                     ip: item,
                     colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-',
-                    ipInfo: ipInfo
+                    time: checkResult.responseTime || '-'
                 });
                 
-                let logMsg = `  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`;
-                if (ipInfo) {
-                    logMsg += ` | ${ipInfo.country} ${ipInfo.asn} ${ipInfo.isp}`;
-                }
-                addLog(logMsg);
+                addLog(`  ✅ ${item} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
             } else {
                 poolList = poolList.filter(p => p !== item);
                 report.poolRemoved++;
@@ -1082,13 +1039,12 @@ async function maintainTXTRecords(env, target, addLog, report) {
         }
     }
     
-    // 第三步：更新TXT记录（只有在实际有变化时才更新）
+    // 更新TXT记录
     const newContent = validIPs.length > 0 ? `"${validIPs.join(',')}"` : '';
     const currentContent = currentIPs.length > 0 ? `"${currentIPs.join(',')}"` : '';
     
     if (newContent !== currentContent) {
         if (newContent === '' && recordId) {
-            // 如果新内容为空且记录存在，删除TXT记录
             await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${recordId}`, 'DELETE');
             addLog(`📝 TXT记录已删除（所有IP失效）`);
         } else if (newContent !== '') {
@@ -1111,11 +1067,6 @@ async function maintainTXTRecords(env, target, addLog, report) {
             }
         }
         report.txtUpdated = true;
-    } else {
-        // 只有在满足最小活跃数的情况下才说"无变化"
-        if (validIPs.length >= target.minActive) {
-            addLog(`📝 TXT无变化，跳过更新`);
-        }
     }
     
     report.afterActive = validIPs.length;
@@ -1130,7 +1081,7 @@ async function maintainAllDomains(env, isManual = false) {
     const allKeys = await env.IP_DATA.list();
     for (const key of allKeys.keys) {
         if (key.name.startsWith('pool')) {
-            const poolRaw = await kvCache.get(env, key.name) || '';
+            const poolRaw = await env.IP_DATA.get(key.name) || '';
             const count = poolRaw ? poolRaw.split('\n').filter(l => l.trim()).length : 0;
             poolStats.set(key.name, { before: count, after: count });
         }
@@ -1151,12 +1102,15 @@ async function maintainAllDomains(env, isManual = false) {
             removed: [],
             poolRemoved: 0,
             poolExhausted: false,
+            configError: false,
             checkDetails: [],
             logs: []
         };
         
         const addLog = (m) => {
-            report.logs.push(formatLogMessage(m));
+            const formattedMsg = formatLogMessage(m);
+            report.logs.push(formattedMsg);
+            console.log(formattedMsg);
         };
         
         addLog(`🚀 开始维护: ${target.domain}`);
@@ -1168,10 +1122,9 @@ async function maintainAllDomains(env, isManual = false) {
         } else if (target.mode === 'ALL') {
             await maintainARecords(env, target, addLog, report);
             
-            // 创建TXT专用的target对象，mode设为TXT
             const txtTarget = {
                 ...target,
-                mode: 'TXT'  // 重要：设置为TXT模式，这样getCandidateIPs就不会过滤端口
+                mode: 'TXT'
             };
             
             const txtReport = {
@@ -1183,10 +1136,13 @@ async function maintainAllDomains(env, isManual = false) {
                 checkDetails: [],
                 logs: [],
                 poolRemoved: 0,
-                poolExhausted: false
+                poolExhausted: false,
+                configError: false
             };
             const addTxtLog = (m) => {
-                txtReport.logs.push(formatLogMessage(m));
+                const formattedMsg = formatLogMessage(m);
+                txtReport.logs.push(formattedMsg);
+                console.log(formattedMsg);
             };
             await maintainTXTRecords(env, txtTarget, addTxtLog, txtReport);
             
@@ -1198,6 +1154,9 @@ async function maintainAllDomains(env, isManual = false) {
             if (txtReport.poolExhausted) {
                 report.poolExhausted = true;
             }
+            if (txtReport.configError) {
+                report.configError = true;
+            }
         }
         
         addLog(`✅ 完成: ${report.afterActive}/${target.minActive}`);
@@ -1206,7 +1165,7 @@ async function maintainAllDomains(env, isManual = false) {
     
     for (const key of allKeys.keys) {
         if (key.name.startsWith('pool')) {
-            const poolRaw = await kvCache.get(env, key.name) || '';
+            const poolRaw = await env.IP_DATA.get(key.name) || '';
             const count = poolRaw ? poolRaw.split('\n').filter(l => l.trim()).length : 0;
             if (poolStats.has(key.name)) {
                 poolStats.get(key.name).after = count;
@@ -1221,6 +1180,8 @@ async function maintainAllDomains(env, isManual = false) {
         (r.txtRemoved && r.txtRemoved.length > 0)
     );
     
+    const hasConfigError = allReports.some(r => r.configError);
+    
     const exhaustedPools = [];
     for (const [poolKey, stats] of poolStats) {
         if (stats.after === 0 && stats.before > 0) {
@@ -1229,10 +1190,11 @@ async function maintainAllDomains(env, isManual = false) {
     }
     const hasPoolExhausted = exhaustedPools.length > 0;
     
-    const shouldNotify = isManual || hasIPChanges || hasPoolExhausted;
+    const shouldNotify = isManual || hasIPChanges || hasPoolExhausted || hasConfigError;
     
+    let tgResult = { sent: false, reason: 'no_need' };
     if (shouldNotify) {
-        await sendTG(allReports, poolStats, exhaustedPools, isManual);
+        tgResult = await sendTG(allReports, poolStats, exhaustedPools, isManual);
     }
     
     console.log(`✅ 维护任务完成，总耗时: ${Date.now() - startTime}ms，处理域名: ${CONFIG.targets.length}个`);
@@ -1242,13 +1204,18 @@ async function maintainAllDomains(env, isManual = false) {
         reports: allReports,
         poolStats: Object.fromEntries(poolStats),
         exhaustedPools,
-        notified: shouldNotify,
+        notified: tgResult.sent,
+        tgStatus: tgResult,
         processingTime: Date.now() - startTime
     };
 }
 
 async function sendTG(reports, poolStats, exhaustedPools, isManual = false) {
-    if (!CONFIG.tgToken || !CONFIG.tgId) return;
+    // 检查配置
+    if (!CONFIG.tgToken || !CONFIG.tgId) {
+        console.log('📱 TG未配置，跳过通知');
+        return { sent: false, reason: 'not_configured', message: 'TG未配置' };
+    }
     
     const modeLabel = { 'A': 'A记录', 'TXT': 'TXT记录', 'ALL': '双模式' };
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
@@ -1260,6 +1227,46 @@ async function sendTG(reports, poolStats, exhaustedPools, isManual = false) {
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `⏰ ${timestamp}\n\n`;
     
+    // 检查配置错误
+    const hasConfigError = reports.some(r => r.configError);
+    if (hasConfigError) {
+        msg += `⚠️ <b>警告: 检测到配置错误</b>\n`;
+        msg += `请检查 CF_MAIL, CF_KEY, CF_ZONEID 是否正确配置\n\n`;
+    }
+    
+    // 为TG通知批量查询IP归属地
+    const allIPsForInfo = new Set();
+    reports.forEach(report => {
+        if (report.checkDetails) {
+            report.checkDetails.forEach(detail => {
+                const ipOnly = detail.ip.split(':')[0];
+                allIPsForInfo.add(ipOnly);
+            });
+        }
+        if (report.added) {
+            report.added.forEach(item => {
+                const ipOnly = item.ip.split(':')[0];
+                allIPsForInfo.add(ipOnly);
+            });
+        }
+        if (report.txtAdded) {
+            report.txtAdded.forEach(item => {
+                const ipOnly = item.ip.split(':')[0];
+                allIPsForInfo.add(ipOnly);
+            });
+        }
+    });
+    
+    // 批量查询归属地
+    const ipInfoMap = new Map();
+    if (CONFIG.ipInfoEnabled && allIPsForInfo.size > 0) {
+        const ipInfoPromises = Array.from(allIPsForInfo).map(async ip => {
+            const info = await getIPInfo(ip);
+            if (info) ipInfoMap.set(ip, info);
+        });
+        await Promise.all(ipInfoPromises);
+    }
+    
     reports.forEach((report, index) => {
         if (index > 0) msg += `\n`;
         
@@ -1270,111 +1277,123 @@ async function sendTG(reports, poolStats, exhaustedPools, isManual = false) {
         }
         msg += ` · 最小活跃数 ${report.minActive}\n\n`;
         
-        if (report.checkDetails && report.checkDetails.length > 0) {
-            report.checkDetails.forEach(detail => {
-                const statusIcon = detail.status.includes('✅') ? '✅' : '❌';
-                msg += `${statusIcon} <code>${detail.ip}</code>\n`;
-                
-                let info = `   ${detail.colo} · ${detail.time}ms`;
-                if (detail.ipInfo) {
-                    info += ` · ${detail.ipInfo.country}`;
-                    if (detail.ipInfo.asn) info += ` · ${detail.ipInfo.asn}`;
-                    if (detail.ipInfo.isp) info += ` · ${detail.ipInfo.isp}`;
+        if (report.configError) {
+            msg += `❌ <b>配置错误，无法获取记录</b>\n`;
+        } else {
+            if (report.checkDetails && report.checkDetails.length > 0) {
+                report.checkDetails.forEach(detail => {
+                    const statusIcon = detail.status.includes('✅') ? '✅' : '❌';
+                    msg += `${statusIcon} <code>${detail.ip}</code>\n`;
+                    
+                    let info = `   ${detail.colo} · ${detail.time}ms`;
+                    const ipOnly = detail.ip.split(':')[0];
+                    const ipInfo = ipInfoMap.get(ipOnly);
+                    if (ipInfo) {
+                        info += ` · ${ipInfo.country}`;
+                        if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
+                        if (ipInfo.isp) info += ` · ${ipInfo.isp}`;
+                    }
+                    msg += `${info}\n`;
+                });
+                msg += `\n`;
+            }
+            
+            if (report.mode === 'A' || report.mode === 'ALL') {
+                if (report.added.length > 0) {
+                    msg += `📈 新增 ${report.added.length} 个IP\n`;
+                    report.added.forEach(item => {
+                        const displayIP = item.ip.includes(':') ? item.ip : `${item.ip}:${report.port}`;
+                        msg += `   ✅ <code>${displayIP}</code>\n`;
+                        let info = `      ${item.colo} · ${item.time}ms`;
+                        const ipOnly = item.ip.split(':')[0];
+                        const ipInfo = ipInfoMap.get(ipOnly);
+                        if (ipInfo) {
+                            info += ` · ${ipInfo.country}`;
+                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
+                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
+                        }
+                        msg += `${info}\n`;
+                    });
                 }
-                msg += `${info}\n`;
-            });
-            msg += `\n`;
-        }
-        
-        if (report.mode === 'A' || report.mode === 'ALL') {
-            if (report.added.length > 0) {
-                msg += `📈 新增 ${report.added.length} 个IP\n`;
-                report.added.forEach(item => {
-                    const displayIP = item.ip.includes(':') ? item.ip : `${item.ip}:${report.port}`;
-                    msg += `   ✅ <code>${displayIP}</code>\n`;
-                    let info = `      ${item.colo} · ${item.time}ms`;
-                    if (item.ipInfo) {
-                        info += ` · ${item.ipInfo.country}`;
-                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
-                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
-                    }
-                    msg += `${info}\n`;
-                });
+                
+                if (report.removed.length > 0) {
+                    msg += `📉 移除 ${report.removed.length} 个IP\n`;
+                    report.removed.forEach(item => {
+                        msg += `   ❌ <code>${item.ip}</code>\n`;
+                        msg += `      原因: ${item.reason}\n`;
+                    });
+                }
+                
+                if (report.added.length === 0 && report.removed.length === 0) {
+                    msg += `✨ 所有IP正常，无变化\n`;
+                }
+                msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
             }
             
-            if (report.removed.length > 0) {
-                msg += `📉 移除 ${report.removed.length} 个IP\n`;
-                report.removed.forEach(item => {
-                    msg += `   ❌ <code>${item.ip}</code>\n`;
-                    msg += `      原因: ${item.reason}\n`;
-                });
+            if (report.mode === 'ALL' && report.txtActive !== undefined) {
+                msg += `\n<b>📝 TXT记录</b>\n`;
+                
+                if (report.txtAdded && report.txtAdded.length > 0) {
+                    msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
+                    report.txtAdded.forEach(item => {
+                        msg += `   ✅ <code>${item.ip}</code>\n`;
+                        let info = `      ${item.colo} · ${item.time}ms`;
+                        const ipOnly = item.ip.split(':')[0];
+                        const ipInfo = ipInfoMap.get(ipOnly);
+                        if (ipInfo) {
+                            info += ` · ${ipInfo.country}`;
+                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
+                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
+                        }
+                        msg += `${info}\n`;
+                    });
+                }
+                
+                if (report.txtRemoved && report.txtRemoved.length > 0) {
+                    msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
+                    report.txtRemoved.forEach(item => {
+                        msg += `   ❌ <code>${item.ip}</code>\n`;
+                        msg += `      原因: ${item.reason}\n`;
+                    });
+                }
+                
+                if ((!report.txtAdded || report.txtAdded.length === 0) && 
+                    (!report.txtRemoved || report.txtRemoved.length === 0)) {
+                    msg += `✨ 所有IP正常，无变化\n`;
+                }
+                msg += `✅ 完成: ${report.txtActive}/${report.minActive}\n`;
             }
             
-            if (report.added.length === 0 && report.removed.length === 0) {
-                msg += `✨ 所有IP正常，无变化\n`;
+            if (report.mode === 'TXT') {
+                if (report.added.length > 0) {
+                    msg += `📈 新增 ${report.added.length} 个IP\n`;
+                    report.added.forEach(item => {
+                        msg += `   ✅ <code>${item.ip}</code>\n`;
+                        let info = `      ${item.colo} · ${item.time}ms`;
+                        const ipOnly = item.ip.split(':')[0];
+                        const ipInfo = ipInfoMap.get(ipOnly);
+                        if (ipInfo) {
+                            info += ` · ${ipInfo.country}`;
+                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
+                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
+                        }
+                        msg += `${info}\n`;
+                    });
+                }
+                
+                if (report.removed.length > 0) {
+                    msg += `📉 移除 ${report.removed.length} 个IP\n`;
+                    report.removed.forEach(item => {
+                        msg += `   ❌ <code>${item.ip}</code>\n`;
+                        msg += `      原因: ${item.reason}\n`;
+                    });
+                }
+                
+                if (report.added.length === 0 && report.removed.length === 0) {
+                    msg += `✨ 所有IP正常，无变化\n`;
+                }
+                msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
             }
-            msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
-        }
-        
-        if (report.mode === 'ALL' && report.txtActive !== undefined) {
-            msg += `\n<b>📝 TXT记录</b>\n`;
-            
-            if (report.txtAdded && report.txtAdded.length > 0) {
-                msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
-                report.txtAdded.forEach(item => {
-                    msg += `   ✅ <code>${item.ip}</code>\n`;
-                    let info = `      ${item.colo} · ${item.time}ms`;
-                    if (item.ipInfo) {
-                        info += ` · ${item.ipInfo.country}`;
-                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
-                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
-                    }
-                    msg += `${info}\n`;
-                });
-            }
-            
-            if (report.txtRemoved && report.txtRemoved.length > 0) {
-                msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
-                report.txtRemoved.forEach(item => {
-                    msg += `   ❌ <code>${item.ip}</code>\n`;
-                    msg += `      原因: ${item.reason}\n`;
-                });
-            }
-            
-            if ((!report.txtAdded || report.txtAdded.length === 0) && 
-                (!report.txtRemoved || report.txtRemoved.length === 0)) {
-                msg += `✨ 所有IP正常，无变化\n`;
-            }
-            msg += `✅ 完成: ${report.txtActive}/${report.minActive}\n`;
-        }
-        
-        if (report.mode === 'TXT') {
-            if (report.added.length > 0) {
-                msg += `📈 新增 ${report.added.length} 个IP\n`;
-                report.added.forEach(item => {
-                    msg += `   ✅ <code>${item.ip}</code>\n`;
-                    let info = `      ${item.colo} · ${item.time}ms`;
-                    if (item.ipInfo) {
-                        info += ` · ${item.ipInfo.country}`;
-                        if (item.ipInfo.asn) info += ` · ${item.ipInfo.asn}`;
-                        if (item.ipInfo.isp) info += ` ${item.ipInfo.isp}`;
-                    }
-                    msg += `${info}\n`;
-                });
-            }
-            
-            if (report.removed.length > 0) {
-                msg += `📉 移除 ${report.removed.length} 个IP\n`;
-                report.removed.forEach(item => {
-                    msg += `   ❌ <code>${item.ip}</code>\n`;
-                    msg += `      原因: ${item.reason}\n`;
-                });
-            }
-            
-            if (report.added.length === 0 && report.removed.length === 0) {
-                msg += `✨ 所有IP正常，无变化\n`;
-            }
-            msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
         }
     });
     
@@ -1405,7 +1424,7 @@ async function sendTG(reports, poolStats, exhaustedPools, isManual = false) {
     }
     
     try {
-        await fetch(`https://api.telegram.org/bot${CONFIG.tgToken}/sendMessage`, {
+        const response = await fetch(`https://api.telegram.org/bot${CONFIG.tgToken}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1415,8 +1434,28 @@ async function sendTG(reports, poolStats, exhaustedPools, isManual = false) {
                 disable_web_page_preview: true
             })
         });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error('❌ TG配置错误，发送失败。请检查TG_TOKEN和TG_ID是否正确:', errorData);
+            return { 
+                sent: false, 
+                reason: 'config_error',
+                message: 'TG配置错误，请检查TG_TOKEN和TG_ID',
+                detail: errorData.description || '未知错误'
+            };
+        } else {
+            console.log('✅ TG通知发送成功');
+            return { sent: true, reason: 'success', message: 'TG通知发送成功' };
+        }
     } catch (e) {
-        console.error('Telegram notification failed:', e);
+        console.error('❌ TG发送失败，网络错误:', e.message);
+        return { 
+            sent: false, 
+            reason: 'network_error',
+            message: 'TG发送失败，网络错误',
+            detail: e.message
+        };
     }
 }
 
@@ -1426,19 +1465,15 @@ function renderHTML(C) {
     const settingsJson = JSON.stringify(GLOBAL_SETTINGS);
     const ipInfoEnabled = C.ipInfoEnabled;
     
-    // 注意：这里保持完全相同的HTML代码，包括所有前端JavaScript
-    // 由于代码过长，这里只显示函数签名，实际代码与原始版本完全相同
-    // 完整的HTML代码将直接复制原始版本
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v5.2 - IP管理面板</title>
+    <title>DDNS Pro v5.3 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        /* 完全相同的CSS样式 */
         :root {
             --primary: #007aff;
             --success: #34c759;
@@ -1636,7 +1671,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v5.2</span>
+        <span class="version-badge">v5.3</span>
     </h1>
     <div class="domain-selector">
         <select id="domain-select" class="form-select" onchange="switchDomain()">
@@ -1659,7 +1694,7 @@ function renderHTML(C) {
         
         <div id="manual-add-section" class="mb-3">
             <div class="input-group">
-                <input type="text" id="manual-add-ip" class="form-control" placeholder="手动添加IP (如: 1.2.3.4)">
+                <input type="text" id="manual-add-ip" class="form-control" placeholder="手动添加IP (如: 1.2.3.4 或 1.2.3.4:443)">
                 <button class="btn btn-success" onclick="manualAddIP()">➕ 添加</button>
             </div>
         </div>
@@ -1684,7 +1719,7 @@ function renderHTML(C) {
     </div>
 
     <div class="row">
-        <!-- ✅ 优化：合并IP管理 -->
+        <!-- IP管理 -->
         <div class="col-lg-7">
             <div class="card p-4 mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -1874,12 +1909,9 @@ example.com:443 (自动解析域名)"></textarea>
         const target = TARGETS[currentTargetIndex];
         log(\`切换到: \${target.domain} (\${target.mode})\`);
         
+        // 所有模式都显示手动添加（TXT模式现在也支持追加）
         const manualSection = document.getElementById('manual-add-section');
-        if (target.mode === 'A' || target.mode === 'ALL') {
-            manualSection.style.display = 'block';
-        } else {
-            manualSection.style.display = 'none';
-        }
+        manualSection.style.display = 'block';
         
         refreshStatus();
     }
@@ -2093,6 +2125,11 @@ example.com:443 (自动解析域名)"></textarea>
         try {
             const data = await fetch(\`/api/current-status?target=\${currentTargetIndex}\`).then(r => r.json());
             
+            if (data.error) {
+                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ \${data.error}<br><small>请检查 CF_MAIL, CF_KEY, CF_ZONEID 配置</small></td></tr>\`;
+                return;
+            }
+            
             if ((data.mode === 'TXT' || data.mode === 'ALL') && data.txtRecords && data.txtRecords.length > 0) {
                 const record = data.txtRecords[0];
                 let html = '<h6 class="fw-bold mb-2 mt-3">📝 TXT记录内容</h6><div class="p-3 bg-light rounded-3">';
@@ -2128,7 +2165,7 @@ example.com:443 (自动解析域名)"></textarea>
                 t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">TXT模式，查看下方TXT记录</td></tr>\`;
             }
         } catch (e) {
-            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 查询失败</td></tr>\`;
+            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 查询失败<br><small>请检查网络连接和CF配置</small></td></tr>\`;
         }
     }
     
@@ -2141,7 +2178,10 @@ example.com:443 (自动解析域名)"></textarea>
             return;
         }
         
-        log(\`➕ 添加: \${ip}\`, 'info');
+        const target = TARGETS[currentTargetIndex];
+        const modeLabel = {'A': 'A记录', 'TXT': 'TXT记录', 'ALL': '双模式'};
+        
+        log(\`➕ 添加到\${modeLabel[target.mode]}: \${ip}\`, 'info');
         
         try {
             const r = await fetch('/api/add-a-record', {
@@ -2151,14 +2191,15 @@ example.com:443 (自动解析域名)"></textarea>
             }).then(r => r.json());
             
             if (r.success) {
-                log(\`✅ 成功 - \${r.colo} (\${r.time}ms)\`, 'success');
+                const mode = r.mode || 'A';
+                log(\`✅ 成功添加到\${mode}记录 - \${r.colo} (\${r.time}ms)\`, 'success');
                 input.value = '';
                 refreshStatus();
             } else {
                 log(\`❌ 失败: \${r.error || '未知错误'}\`, 'error');
             }
         } catch (e) {
-            log(\`❌ 出错\`, 'error');
+            log(\`❌ 出错: \${e.message}\`, 'error');
         }
     }
     
@@ -2298,25 +2339,43 @@ example.com:443 (自动解析域名)"></textarea>
         try {
             const r = await fetch('/api/maintain?manual=true').then(r => r.json());
             
-            if (r.reports) {
-                r.reports.forEach(report => {
-                    log(\`\\n━━ \${report.domain} ━━\`, 'info');
-                    if (report.logs) {
-                        report.logs.forEach(msg => log(msg, 'info', true));
-                    }
-                });
+            // 显示所有详细日志
+            if (r.allLogs && r.allLogs.length > 0) {
+                r.allLogs.forEach(msg => log(msg, 'info', true));
             }
             
-            log(\`✅ 维护完成\`, 'success');
-            if (r.notified) {
-                log(\`📱 已发送TG通知\`, 'info');
-            } else {
-                log(\`📱 无变化，未发送通知\`, 'info');
+            log(\`✅ 维护完成，耗时: \${r.processingTime}ms\`, 'success');
+            
+            // 根据 tgStatus 显示不同的通知状态
+            if (r.tgStatus) {
+                switch (r.tgStatus.reason) {
+                    case 'success':
+                        log(\`📱 TG通知发送成功\`, 'success');
+                        break;
+                    case 'not_configured':
+                        log(\`📱 TG未配置，跳过通知\`, 'info');
+                        break;
+                    case 'config_error':
+                        log(\`📱 TG配置错误，发送失败 - \${r.tgStatus.message}\`, 'error');
+                        if (r.tgStatus.detail) {
+                            log(\`   详情: \${r.tgStatus.detail}\`, 'error');
+                        }
+                        break;
+                    case 'network_error':
+                        log(\`📱 TG发送失败，网络错误 - \${r.tgStatus.detail}\`, 'error');
+                        break;
+                    case 'no_need':
+                        log(\`📱 无需通知（无变化）\`, 'info');
+                        break;
+                    default:
+                        log(\`📱 未发送通知\`, 'info');
+                }
             }
+            
             refreshStatus();
             showPoolInfo();
         } catch (e) {
-            log(\`❌ 失败: \${e.message}\`, 'error');
+            log(\`❌ 维护失败: \${e.message}\`, 'error');
         }
     }
     
@@ -2458,7 +2517,7 @@ example.com:443 (自动解析域名)"></textarea>
     
     window.addEventListener('DOMContentLoaded', () => {
         log('🚀 系统就绪', 'success');
-        log(\`⚙️ 配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CONCURRENT_CHECKS}ms\`, 'info');
+        log(\`⚙️ 配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CHECK_TIMEOUT}ms\`, 'info');
         if (IP_INFO_ENABLED) {
             log('🌍 IP归属地查询: 已启用', 'info');
         }
