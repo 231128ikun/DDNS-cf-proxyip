@@ -237,7 +237,7 @@ txt@example.com
 ### 可选变量（按需设置）
 
 | 变量名 | 说明 | 默认值 | 示例 |
-|--------|------|--------|------|-------------------|
+|--------|------|--------|------|
 | `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 | 
 | `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` | 
