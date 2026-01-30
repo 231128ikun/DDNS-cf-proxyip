@@ -1573,6 +1573,14 @@ function renderHTML(C) {
                 width: 50px;
                 height: 50px;
             }
+            .hero h1 {
+                font-size: 1.2rem;
+            }
+            .version-badge {
+                display: block;
+                margin: 8px 0 0 0;
+                width: fit-content;
+            }
         }
         .domain-selector {
             max-width: 600px;
@@ -1583,6 +1591,12 @@ function renderHTML(C) {
             font-size: 1.1rem;
             font-weight: 600;
             border: 2px solid #e5e5e7;
+        }
+        @media (max-width: 768px) {
+            .domain-selector select {
+                font-size: 0.95rem;
+                padding: 10px 12px;
+            }
         }
         .card {
             border: none;
@@ -1609,6 +1623,13 @@ function renderHTML(C) {
             background: #3a3a3c;
             border-radius: 4px;
         }
+        @media (max-width: 768px) {
+            .console {
+                height: 250px;
+                font-size: 11px;
+                padding: 12px;
+            }
+        }
         .table th {
             border: none;
             font-size: 12px;
@@ -1622,6 +1643,15 @@ function renderHTML(C) {
             padding: 15px;
             vertical-align: middle;
         }
+        @media (max-width: 768px) {
+            .table th, .table td {
+                padding: 8px 4px;
+                font-size: 11px;
+            }
+            .table {
+                font-size: 12px;
+            }
+        }
         .btn {
             border-radius: 12px;
             font-weight: 600;
@@ -1632,6 +1662,16 @@ function renderHTML(C) {
         .btn:hover {
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        @media (max-width: 768px) {
+            .btn {
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            .btn-sm {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
         }
         .form-control, .form-select {
             border-radius: 12px;
@@ -1678,6 +1718,12 @@ function renderHTML(C) {
             padding: 4px 10px;
             border-radius: 8px;
         }
+        @media (max-width: 768px) {
+            .config-info {
+                font-size: 9px;
+                padding: 3px 6px;
+            }
+        }
         .ip-info-tag {
             display: inline-block;
             background: #e8f4ff;
@@ -1686,6 +1732,87 @@ function renderHTML(C) {
             border-radius: 4px;
             font-size: 11px;
             margin-left: 4px;
+        }
+        @media (max-width: 768px) {
+            .ip-info-tag {
+                font-size: 9px;
+                padding: 2px 4px;
+                margin-left: 2px;
+            }
+        }
+        
+        /* TXT记录移动端优化 */
+        .txt-record-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            background: #fff;
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+        .txt-ip-line {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .txt-ip-code {
+            font-family: 'SF Mono', monospace;
+            font-size: 13px;
+            word-break: break-all;
+            flex: 0 1 auto;
+            min-width: 0;
+        }
+        .txt-info-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        @media (max-width: 768px) {
+            .txt-record-item {
+                padding: 10px;
+                gap: 6px;
+            }
+            .txt-ip-line {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 6px;
+            }
+            .txt-ip-code {
+                font-size: 11px;
+                width: 100%;
+            }
+            .txt-info-group {
+                width: 100%;
+                justify-content: space-between;
+            }
+            .badge {
+                font-size: 10px;
+                padding: 3px 6px;
+            }
+        }
+        
+        /* 响应式优化 */
+        @media (max-width: 768px) {
+            .card {
+                border-radius: 16px;
+                margin-bottom: 16px;
+            }
+            .card.p-3, .card.p-4 {
+                padding: 1rem !important;
+            }
+            .row.g-2 {
+                gap: 8px !important;
+            }
+            .input-group {
+                flex-wrap: nowrap;
+            }
+            .input-group .btn {
+                white-space: nowrap;
+            }
         }
     </style>
 </head>
@@ -1753,7 +1880,7 @@ function renderHTML(C) {
         <!-- IP管理 -->
         <div class="col-lg-7">
             <div class="card p-4 mb-3">
-                <div class="d-flex justify-content-between align-items-center mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
                     <div>
                         <h6 class="m-0 fw-bold d-inline">📦 IP库管理</h6>
                         <div class="config-info ms-2">
@@ -2165,12 +2292,14 @@ example.com:443 (自动解析域名)"></textarea>
                 const record = data.txtRecords[0];
                 let html = '<h6 class="fw-bold mb-2 mt-3">📝 TXT记录内容</h6><div class="p-3 bg-light rounded-3">';
                 record.ips.forEach(ip => {
-                    html += \`<div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-white rounded">
-                        <code>\${ip.ip}</code>
-                        <div class="d-flex align-items-center gap-2">
-                            <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
-                            \${IP_INFO_ENABLED && ip.ipInfo ? formatIPInfo(ip.ipInfo) : ''}
-                            <a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>
+                    html += \`<div class="txt-record-item">
+                        <div class="txt-ip-line">
+                            <code class="txt-ip-code">\${ip.ip}</code>
+                            <div class="txt-info-group">
+                                <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
+                                \${IP_INFO_ENABLED && ip.ipInfo ? formatIPInfo(ip.ipInfo) : ''}
+                                <a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>
+                            </div>
                         </div>
                     </div>\`;
                 });
