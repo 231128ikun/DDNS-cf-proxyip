@@ -1,5 +1,5 @@
 /**
- * DDNS Pro & Proxy IP Manager v5.4
+ * DDNS Pro & Proxy IP Manager v5.5
  */
 
 // ========== 运行时配置 ==========
@@ -997,6 +997,253 @@ async function fetchCF(path, method = 'GET', body = null) {
     }
 }
 
+// ========== 远程源订阅功能 ==========
+
+// 按条件过滤IP
+function filterIPsByConditions(ipsText, filters) {
+    if (!filters) return ipsText;
+    
+    const lines = ipsText.split('\n').filter(l => l.trim());
+    const filtered = [];
+    
+    for (const line of lines) {
+        const normalized = parseIPLine(line);
+        if (!normalized) continue;
+        
+        const ipPort = normalized.split('#')[0].trim();
+        const [ip, port] = ipPort.split(':');
+        const commentIndex = line.indexOf('#');
+        const comment = commentIndex > 0 ? line.substring(commentIndex + 1).trim() : '';
+        
+        // 检查端口
+        if (filters.ports && filters.ports.length > 0) {
+            if (!filters.ports.includes(port)) {
+                continue;
+            }
+        }
+        
+        // 检查标签
+        if (filters.tags && filters.tags.length > 0) {
+            const hasTag = filters.tags.some(tag => comment.includes(tag));
+            if (!hasTag) {
+                continue;
+            }
+        }
+        
+        filtered.push(normalized);
+    }
+    
+    return filtered.join('\n');
+}
+
+// 批量检测IP（支持中断）
+async function checkIPsWithInterrupt(ipsText, checkConfig) {
+    const lines = ipsText.split('\n').filter(l => l.trim());
+    const maxConcurrent = checkConfig.maxConcurrent || 5;
+    const maxCheckTime = checkConfig.maxCheckTime || 25000; // 25秒
+    
+    const validIPs = [];
+    let checked = 0;
+    let valid = 0;
+    let interrupted = false;
+    
+    const startTime = Date.now();
+    
+    // 分批检测
+    for (let i = 0; i < lines.length; i += maxConcurrent) {
+        // 检查是否超时
+        if (Date.now() - startTime > maxCheckTime) {
+            console.log(`⚠️ 检测超时，已检测 ${checked}/${lines.length}`);
+            interrupted = true;
+            break;
+        }
+        
+        const chunk = lines.slice(i, i + maxConcurrent);
+        
+        const promises = chunk.map(async (line) => {
+            const ipPort = line.split('#')[0].trim();
+            
+            try {
+                const result = await checkProxyIP(ipPort);
+                checked++;
+                
+                if (result.success) {
+                    valid++;
+                    validIPs.push(line);
+                }
+            } catch (e) {
+                checked++;
+                console.error(`检测失败: ${ipPort}`, e.message);
+            }
+        });
+        
+        await Promise.all(promises);
+    }
+    
+    return {
+        validIPs: validIPs.join('\n'),
+        checked: checked,
+        valid: valid,
+        interrupted: interrupted
+    };
+}
+
+// 导入IP到指定池
+async function importIPsToPool(env, ipsText, poolKey) {
+    const poolKey_ = poolKey || 'pool';
+    
+    // 获取现有池
+    const existingPool = await env.IP_DATA.get(poolKey_) || '';
+    const existingMap = new Map();
+    
+    existingPool.split('\n').forEach(line => {
+        if (line.trim()) {
+            const key = line.split('#')[0].trim();
+            existingMap.set(key, line.trim());
+        }
+    });
+    
+    const beforeCount = existingMap.size;
+    
+    // 添加新IP
+    ipsText.split('\n').forEach(line => {
+        if (line.trim()) {
+            const key = line.split('#')[0].trim();
+            existingMap.set(key, line.trim());
+        }
+    });
+    
+    // 检查KV容量
+    const finalPool = Array.from(existingMap.values()).join('\n');
+    const estimatedSize = finalPool.length;
+    
+    if (estimatedSize > 25 * 1024 * 1024) { // 25MB限制
+        console.warn(`⚠️ 池容量超限: ${(estimatedSize / 1024 / 1024).toFixed(2)}MB`);
+        throw new Error('池容量超限');
+    }
+    
+    // 保存
+    await env.IP_DATA.put(poolKey_, finalPool);
+    
+    return existingMap.size - beforeCount;
+}
+
+// 处理单个远程源
+async function processRemoteSource(env, source) {
+    const startTime = Date.now();
+    const stats = {
+        fetched: 0,
+        filtered: 0,
+        checked: 0,
+        valid: 0,
+        imported: 0
+    };
+    
+    console.log(`🌐 处理远程源: ${source.url}`);
+    
+    // 第一步：拉取远程内容
+    let ips = await loadFromRemoteUrl(source.url);
+    if (!ips) {
+        throw new Error('无法加载远程URL');
+    }
+    
+    stats.fetched = ips.split('\n').filter(l => l.trim()).length;
+    console.log(`📥 拉取: ${stats.fetched} 个IP`);
+    
+    // 第二步：过滤IP
+    ips = filterIPsByConditions(ips, source.filters);
+    stats.filtered = ips.split('\n').filter(l => l.trim()).length;
+    console.log(`🔍 过滤后: ${stats.filtered} 个IP`);
+    
+    if (stats.filtered === 0) {
+        source.status = 'success';
+        source.stats = stats;
+        source.lastUpdate = new Date().toISOString();
+        return {
+            id: source.id,
+            status: 'success',
+            stats: stats,
+            message: '过滤结果为空'
+        };
+    }
+    
+    // 第三步：批量检测（支持中断）
+    let validIPs = '';
+    if (source.checkConfig && source.checkConfig.enabled) {
+        const checkResult = await checkIPsWithInterrupt(ips, source.checkConfig);
+        validIPs = checkResult.validIPs;
+        stats.checked = checkResult.checked;
+        stats.valid = checkResult.valid;
+        
+        console.log(`✅ 检测完成: ${stats.valid}/${stats.checked} 有效`);
+        
+        // 如果被中断，记录状态
+        if (checkResult.interrupted) {
+            source.status = 'partial';
+            console.log(`⚠️ 检测被中断（超时限制）`);
+        }
+    } else {
+        // 不检测，直接使用过滤后的IP
+        validIPs = ips;
+        stats.checked = stats.filtered;
+        stats.valid = stats.filtered;
+    }
+    
+    // 第四步：导入到指定池
+    if (validIPs) {
+        const imported = await importIPsToPool(env, validIPs, source.poolKey);
+        stats.imported = imported;
+        console.log(`💾 导入: ${imported} 个IP到 ${source.poolKey}`);
+    }
+    
+    // 更新源状态
+    source.status = source.status || 'success';
+    source.stats = stats;
+    source.lastUpdate = new Date().toISOString();
+    
+    const duration = Date.now() - startTime;
+    console.log(`✅ 完成: ${duration}ms`);
+    
+    return {
+        id: source.id,
+        status: source.status,
+        stats: stats,
+        duration: duration
+    };
+}
+
+// 处理所有远程源
+async function processRemoteSources(env) {
+    const sourcesJson = await env.IP_DATA.get('remote_sources') || '[]';
+    const sources = safeJSONParse(sourcesJson, []);
+    
+    const results = [];
+    const startTime = Date.now();
+    
+    for (const source of sources) {
+        if (!source.enabled) continue;
+        
+        try {
+            const result = await processRemoteSource(env, source);
+            results.push(result);
+        } catch (e) {
+            console.error(`❌ 处理远程源失败 ${source.url}:`, e);
+            source.status = 'failed';
+            source.error = e.message;
+            results.push({
+                id: source.id,
+                status: 'failed',
+                error: e.message
+            });
+        }
+    }
+    
+    // 保存更新后的源配置
+    await env.IP_DATA.put('remote_sources', JSON.stringify(sources));
+    
+    return results;
+}
+
 // ========== 维护相关函数 ==========
 async function getPoolConfig(env, domain) {
     const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
@@ -1681,7 +1928,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v5.4 - IP管理面板</title>
+    <title>DDNS Pro v5.5 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -2009,7 +2256,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v5.4</span>
+        <span class="version-badge">v5.5</span>
     </h1>
     <div class="domain-selector">
         <select id="domain-select" class="form-select" onchange="switchDomain()">
@@ -2094,12 +2341,12 @@ function renderHTML(C) {
                 <div id="input-manual" class="input-section">
                 <!-- 端口筛选工具栏 -->
                 <div class="mb-2 d-flex gap-2 align-items-center flex-wrap">
-                    <span class="text-secondary small">🔍 智能筛选:</span>
-                    <input type="text" id="custom-port" class="form-control form-control-sm" style="width:160px" placeholder="端口/标签">
-                    <button class="btn btn-outline-success btn-sm" onclick="smartFilter('keep')">✓ 保留</button>
-                    <button class="btn btn-outline-danger btn-sm" onclick="smartFilter('exclude')">✗ 排除</button>
-                    <button class="btn btn-outline-info btn-sm" onclick="deduplicateIPs()">去重</button>
-                </div>
+                <span class="text-secondary small">🔍 智能筛选:</span>
+                <input type="text" id="custom-port" class="form-control form-control-sm" style="width:140px" placeholder="端口(443,8443)">
+                <input type="text" id="custom-tag" class="form-control form-control-sm" style="width:140px" placeholder="标签(日本,韩国)">
+                <button class="btn btn-outline-success btn-sm" onclick="smartFilter('keep')">✓ 保留</button>
+                <button class="btn btn-outline-danger btn-sm" onclick="smartFilter('exclude')">✗ 排除</button>
+            </div>
                     
                     <textarea id="ip-input" class="form-control mb-2" rows="8" placeholder="每行一个，支持以下格式：
 1.2.3.4:443
@@ -2122,16 +2369,19 @@ example.com:443 (自动解析域名)"></textarea>
                 </div>
                 
                 <div class="row g-2 mt-2">
-                    <div class="col-4">
-                        <button id="btn-check" class="btn btn-warning btn-sm w-100 text-white" onclick="batchCheck()">⚡ 检测清洗</button>
-                    </div>
-                    <div class="col-4">
-                        <button class="btn btn-success btn-sm w-100" onclick="saveToCurrentPool()">💾 保存到当前池</button>
-                    </div>
-                    <div class="col-4">
-                        <button class="btn btn-outline-info btn-sm w-100" onclick="showPoolInfo()">📊 当前池: <span id="pool-count">0</span></button>
-                    </div>
+                <div class="col-3">
+                    <button id="btn-check" class="btn btn-warning btn-sm w-100 text-white" onclick="batchCheck()">⚡ 检测清洗</button>
                 </div>
+                <div class="col-3">
+                    <button class="btn btn-outline-secondary btn-sm w-100" onclick="quickDeduplicate()">🔄 快速去重</button>
+                </div>
+                <div class="col-3">
+                    <button class="btn btn-success btn-sm w-100" onclick="saveToCurrentPool()">💾 保存到当前池</button>
+                </div>
+                <div class="col-3">
+                    <button class="btn btn-outline-info btn-sm w-100" onclick="showPoolInfo()">📊 当前池: <span id="pool-count">0</span></button>
+                </div>
+            </div>
                 
                 <!-- 垃圾桶专用操作 -->
                 <div id="trash-actions" style="display:none" class="mt-2">
@@ -2422,12 +2672,17 @@ example.com:443 (自动解析域名)"></textarea>
         const pg = document.getElementById('pg-bar');
         
         log(\`🚀 开始检测 \${total} 个IP (并发: \${SETTINGS.CONCURRENT_CHECKS})\`, 'warn');
+        log(\`💡 可随时中断，已验证的有效IP将自动保留\`, 'info');
         
         const chunkSize = SETTINGS.CONCURRENT_CHECKS;
+        let wasAborted = false;
         
         try {
             for (let i = 0; i < lines.length; i += chunkSize) {
-                if (signal.aborted) break;
+                if (signal.aborted) {
+                    wasAborted = true;
+                    break;
+                }
                 
                 const chunk = lines.slice(i, i + chunkSize);
                 
@@ -2473,13 +2728,35 @@ example.com:443 (自动解析域名)"></textarea>
                 }));
             }
             
-            if (!signal.aborted) {
+            // 核心改进：无论是否中断，都保留有效IP
+            if (valid.length > 0) {
                 input.value = valid.join('\\n');
-                log(\`✅ 检测完成: \${valid.length}/\${total} 有效\`, 'success');
+                
+                if (wasAborted) {
+                    const rate = ((valid.length / checked) * 100).toFixed(1);
+                    log(\`⏸️ 检测已中断，已保留 \${valid.length} 个有效IP (共检测 \${checked}/\${total}, 有效率 \${rate}%)\`, 'warn');
+                    log(\`💡 提示: 您可以继续处理这些有效IP，或重新开始检测\`, 'info');
+                } else {
+                    const rate = ((valid.length / total) * 100).toFixed(1);
+                    log(\`✅ 检测完成: \${valid.length}/\${total} 有效 (\${rate}%)\`, 'success');
+                }
+            } else {
+                if (wasAborted) {
+                    log(\`⏸️ 检测已中断，尚未发现有效IP (已检测 \${checked}/\${total})\`, 'warn');
+                } else {
+                    log(\`❌ 检测完成: 0/\${total} 有效\`, 'error');
+                    input.value = '';
+                }
             }
+            
         } catch (e) {
             if (e.name !== 'AbortError') {
                 log(\`❌ 出错: \${e.message}\`, 'error');
+            }
+            // 异常时也保留已验证的IP
+            if (valid.length > 0) {
+                input.value = valid.join('\\n');
+                log(\`⚠️ 检测异常，已保留 \${valid.length} 个有效IP\`, 'warn');
             }
         } finally {
             abortController = null;
@@ -2487,6 +2764,39 @@ example.com:443 (自动解析域名)"></textarea>
             btn.classList.remove('btn-danger');
             btn.classList.add('btn-warning');
             setTimeout(() => { pg.style.width = '0%'; }, 1000);
+        }
+    }
+
+    function quickDeduplicate() {
+        const input = getCurrentInput();
+        const lines = input.value.split('\\n').filter(l => l.trim());
+        
+        if (lines.length === 0) {
+            log('❌ 输入为空', 'error');
+            return;
+        }
+        
+        const before = lines.length;
+        const seen = new Map();
+        
+        // 去重逻辑：IP:PORT 相同即判断为重复，保留最后出现的
+        lines.forEach(line => {
+            const normalized = normalizeIPFormat(line);
+            if (normalized) {
+                // 使用 IP:PORT 作为唯一标识
+                const key = normalized.split('#')[0].trim();
+                seen.set(key, normalized);
+            }
+        });
+        
+        const unique = Array.from(seen.values());
+        input.value = unique.join('\\n');
+        
+        const removed = before - unique.length;
+        if (removed > 0) {
+            log(\`✅ 去重完成: \${before} → \${unique.length} (移除 \${removed} 个重复)\`, 'success');
+        } else {
+            log(\`✨ 无重复IP\`, 'info');
         }
     }
     
@@ -3010,102 +3320,93 @@ example.com:443 (自动解析域名)"></textarea>
  
     function smartFilter(mode) {
         const input = getCurrentInput();
-        const filterValue = document.getElementById('custom-port').value.trim();
+        const portFilter = document.getElementById('custom-port').value.trim();
+        const tagFilter = document.getElementById('custom-tag').value.trim();
         
-        if (!filterValue) {
-            log('❌ 请输入筛选条件', 'error');
+        if (!portFilter && !tagFilter) {
+            log('❌ 请输入端口或标签筛选条件', 'error');
             return;
         }
         
         const lines = input.value.split('\\n').filter(l => l.trim());
-        let filtered = [];
+        let filtered = lines;
         
-        // 判断是端口筛选还是标签筛选
-        const isPortFilter = /^\\d+$/.test(filterValue) || 
-                            /^\\d+-\\d+$/.test(filterValue) || 
-                            /^\\d+(,\\d+)+$/.test(filterValue);
-        
-        if (isPortFilter) {
-            // 端口筛选逻辑
-            if (filterValue.includes(',')) {
-                // 多端口: 443,8443,2053
-                const ports = filterValue.split(',').map(p => p.trim()).filter(p => /^\\d+$/.test(p));
-                if (ports.length === 0) {
-                    log('❌ 请输入有效端口号', 'error');
-                    return;
-                }
-                
-                filtered = lines.filter(line => {
-                    const normalized = normalizeIPFormat(line);
-                    if (!normalized) return false;
-                    const ipPort = normalized.split('#')[0].trim();
-                    const [_, linePort] = ipPort.split(':');
-                    return mode === 'keep' ? ports.includes(linePort) : !ports.includes(linePort);
-                });
-                
-                const action = mode === 'keep' ? '保留' : '排除';
-                log(\`✅ 已筛选: \${action}端口 \${ports.join(', ')} 的IP，共 \${filtered.length} 个\`, 'success');
-                
-            } else if (filterValue.includes('-')) {
-                // 端口范围: 443-8443
-                const [start, end] = filterValue.split('-').map(p => parseInt(p.trim()));
-                if (!start || !end || start < 1 || end > 65535 || start > end) {
-                    log('❌ 端口范围无效 (1-65535)', 'error');
-                    return;
-                }
-                
-                filtered = lines.filter(line => {
-                    const normalized = normalizeIPFormat(line);
-                    if (!normalized) return false;
-                    const ipPort = normalized.split('#')[0].trim();
-                    const [_, linePort] = ipPort.split(':');
-                    const portNum = parseInt(linePort);
-                    const inRange = portNum >= start && portNum <= end;
-                    return mode === 'keep' ? inRange : !inRange;
-                });
-                
-                const action = mode === 'keep' ? '保留' : '排除';
-                log(\`✅ 已筛选: \${action}端口 \${start}-\${end} 的IP，共 \${filtered.length} 个\`, 'success');
-                
-            } else {
-                // 单端口
-                const portNum = parseInt(filterValue);
-                if (portNum < 1 || portNum > 65535) {
-                    log('❌ 端口范围: 1-65535', 'error');
-                    return;
-                }
-                
-                filtered = lines.filter(line => {
-                    const normalized = normalizeIPFormat(line);
-                    if (!normalized) return false;
-                    const ipPort = normalized.split('#')[0].trim();
-                    const [_, linePort] = ipPort.split(':');
-                    return mode === 'keep' ? linePort === filterValue : linePort !== filterValue;
-                });
-                
-                const action = mode === 'keep' ? '保留' : '排除';
-                log(\`✅ 已筛选: \${action}端口 \${filterValue} 的IP，共 \${filtered.length} 个\`, 'success');
+        if (portFilter) {
+            const ports = parsePortFilter(portFilter);
+            if (!ports) {
+                log('❌ 端口格式无效 (示例: 443,8443 或 443-2053)', 'error');
+                return;
             }
             
-        } else {
-            // 标签筛选逻辑
-            filtered = lines.filter(line => {
+            filtered = filtered.filter(line => {
+                const normalized = normalizeIPFormat(line);
+                if (!normalized) return false;
+                const ipPort = normalized.split('#')[0].trim();
+                const [_, linePort] = ipPort.split(':');
+                const portNum = parseInt(linePort);
+                
+                const matchesPort = ports.some(p => {
+                    if (typeof p === 'number') {
+                        return portNum === p;
+                    } else if (p.start && p.end) {
+                        return portNum >= p.start && portNum <= p.end;
+                    }
+                    return false;
+                });
+                
+                return mode === 'keep' ? matchesPort : !matchesPort;
+            });
+            
+            const action = mode === 'keep' ? '保留' : '排除';
+            log(\`📊 端口筛选: \${action} [\${portFilter}], 剩余 \${filtered.length} 个\`, 'info');
+        }
+        
+        if (tagFilter) {
+            const tags = tagFilter.split(',').map(t => t.trim()).filter(t => t);
+            
+            filtered = filtered.filter(line => {
                 const commentIndex = line.indexOf('#');
                 if (commentIndex === -1) {
-                    // 没有标签的处理
                     return mode === 'exclude';
                 }
                 
                 const comment = line.substring(commentIndex + 1).trim();
-                const matches = comment.includes(filterValue);
-                return mode === 'keep' ? matches : !matches;
+                const matchesAnyTag = tags.some(tag => comment.includes(tag));
+                
+                return mode === 'keep' ? matchesAnyTag : !matchesAnyTag;
             });
             
             const action = mode === 'keep' ? '保留' : '排除';
-            log(\`✅ 已筛选: \${action}标签"\${filterValue}"的IP，共 \${filtered.length} 个\`, 'success');
+            log(\`🏷️ 标签筛选: \${action} [\${tags.join(', ')}], 剩余 \${filtered.length} 个\`, 'info');
         }
         
         input.value = filtered.join('\\n');
+        log(\`✅ 筛选完成: \${lines.length} → \${filtered.length}\`, 'success');
+    }
+    
+    function parsePortFilter(portStr) {
+        const parts = portStr.split(',').map(p => p.trim()).filter(p => p);
+        const result = [];
+        
+        for (const part of parts) {
+            if (part.includes('-')) {
+                const [start, end] = part.split('-').map(p => parseInt(p.trim()));
+                if (!start || !end || start < 1 || end > 65535 || start > end) {
+                    return null;
+                }
+                result.push({ start, end });
+            } else if (/^\\d+$/.test(part)) {
+                const portNum = parseInt(part);
+                if (portNum < 1 || portNum > 65535) {
+                    return null;
+                }
+                result.push(portNum);
+            } else {
+                return null;
+            }
+        }
+        
+        return result.length > 0 ? result : null;
     }
     
     function deduplicateIPs() {
