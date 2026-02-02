@@ -2412,7 +2412,7 @@ function renderHTML(C) {
 1.2.3.4:443
 1.2.3.4 443
 1.2.3.4
-example.com:443 (自动解析域名)"></textarea>
+"></textarea>
                     <div class="format-hint">
                         💡 <strong>支持从Excel/CSV直接复制粘贴</strong><br>
                         支持注释: 1.2.3.4:443#日本 | 1.2.3.4 443 #美国
