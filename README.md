@@ -88,7 +88,6 @@
 进入 Worker → **Settings** → **Variables**，添加：
 
 ```
-CF_MAIL = your-email@example.com
 CF_KEY = your-cloudflare-api-token
 CF_ZONEID = your-zone-id
 CF_DOMAIN = ddns.example.com:port&3 （前缀不填默认维护a记录，端口不填默认443，最小活跃数不填默认为3）
@@ -145,6 +144,9 @@ https://ddns-pro.你的子域名.workers.dev
 - 删除失效IP
 - 若低于最小活跃数，则从库存补充新IP
 - 发送Telegram通知（如已配置）
+
+补充说明：
+- 失效/剔除的 IP 会进入 **垃圾桶**；在垃圾桶里点“恢复”，会自动恢复到该 IP 的**来源域名绑定池**（若无来源信息则恢复到通用池）。
 
 ## 4️⃣ 配置自动维护（可选）
 
@@ -228,7 +230,6 @@ txt@example.com
 
 | 变量名 | 说明 | 示例 | 备注 |
 |--------|------|------|----------|
-| `CF_MAIL` | 目标维护域名所托管的Cloudflare 账号邮箱 | `user@example.com` | 目标维护域名托管的账号邮箱 |
 | `CF_KEY` | 目标维护域名所托管的Cloudflare API Token（带dns编辑即可 ）| `abcd1234...` | 目标维护域名的API Token |
 | `CF_ZONEID` | 目标维护域名的 Zone ID | `1a2b3c4d...` | 你刚才复制的Zone ID |
 | `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `txt@ddns.example.com:port&3` | 你想管理的域名（最重要！） |
@@ -238,11 +239,20 @@ txt@example.com
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
+| `AUTH_KEY` | 管理面板访问保护（开启后访问需带key） | 无 | `your-strong-key` |
 | `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 | 
 | `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` | 
 | `IP_INFO_ENABLED` | 查询ip归属地开关 | `false` | `true` | 
 | `IP_INFO_API` | 查询ip归属地api | `http://ip-api.com/json` | `https://example.com/json` | 
+
+### 🔒 可选：开启访问保护（推荐单人自用）
+
+如果你担心 Worker 地址泄露后被别人操作，可以设置 `AUTH_KEY`：
+
+1. 在 Worker 环境变量添加 `AUTH_KEY`
+2. 第一次打开面板用：`https://你的worker域名/?key=你的AUTH_KEY`
+3. 浏览器会保存登录状态，之后可直接打开面板（无需每次带 key）
 
 ### 🎯 CF_DOMAIN 配置详解（这是最重要的配置！）
 
