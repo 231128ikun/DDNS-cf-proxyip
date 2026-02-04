@@ -2,60 +2,24 @@
 
 基于 cmliu 的 CheckProxyIP 项目提供的 API 做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。借助 CF 平台，无需服务器。
 
-## 📑 目录
-
-- [📋 主要功能](#-主要功能)
-- [🎯 新手必读](#-新手必读这是什么怎么用)
-- [🚀 快速部署](#-快速部署5分钟完成)
-- [📖 使用教程](#-使用教程)
-- [⚙️ 环境变量详解](#️-环境变量详解)
-- [🔧 高级配置](#-高级配置)
-- [🛠️ 工作原理](#️-工作原理)
-- [❓ 常见问题](#-常见问题)
-- [📚 相关项目](#-相关项目)
-
----
-
 ## 📋 主要功能
 
 - ✅ **多域名管理** - 支持同时管理多个域名的DNS记录
 - ✅ **三种模式** - A记录、TXT记录、双模式（ALL）
 - ✅ **自动维护** - 定时检测失效IP并自动补充
-- ✅ **批量检测** - 并发检测IP可用性，提高效率
-- ✅ **追加入库** - 新IP追加到库存，不覆盖现有数据
 - ✅ **Telegram通知** - 维护完成后推送详细报告
 - ✅ **Web管理界面** - 直观的可视化操作面板
 - ✅ **域名池绑定** - 支持不同域名绑定到不同的IP池
-- ✅ **IP归属地查询** - 显示IP的地理位置和ISP信息
-- ✅ **垃圾桶恢复** - 失效IP自动移入垃圾桶，可一键恢复
-- ✅ **一键洗库** - 自动检测并清洗IP池，保持库存质量
-- ✅ **智能检测中断** - 批量检测可中断，保留已验证IP
-- ✅ **多端口筛选** - 支持端口范围和标签筛选IP
 
-> 💡 主要用途：维护一个任意端口的 ProxyIP 域名用于访问 CF 类网站，定时监控自动维护来保证域名中的 IP 始终可用。例如：`kr.example.com:50001`
 
----
-
-<details>
-<summary><strong>🎯 新手必读：这是什么？怎么用？</strong></summary>
 
 ### 简单理解
 
-这是一个**自动管理维护cf-proxyip的工具**，让你的域名始终指向可用的反代cf的IP地址。
+这是一个**自动管理维护cf-proxyip的工具**，让你的域名始终指向可用的反代cf的IP地址。例如：`kr.dwb.cc.cd:50001`
 
 具体应用场景可参考[什么是PROCYIP?](https://github.com/231128ikun/CF-Workers-CheckProxyIP/blob/main/README.md#-%E4%BB%80%E4%B9%88%E6%98%AF-proxyip-)
 
-### 三种模式怎么选？
 
-| 模式 | 适用场景 | 示例 |
-|------|----------|------|
-| **A记录模式** | 最常用，将IP直接解析到域名 | `proxy.example.com:443` |
-| **TXT记录模式** | 需要IP列表的场景 | `txt@ip-list.example.com` |
-| **双模式** | 同时需要A记录和TXT记录 | `all@multi.example.com:8080` |
-
-</details>
-
----
 
 <details>
 <summary><strong>🚀 快速部署（5分钟完成）</strong></summary>
@@ -101,6 +65,7 @@
 | `CF_KEY` | 你的 API Token |
 | `CF_ZONEID` | 你的 Zone ID |
 | `CF_DOMAIN` | `你的域名:端口&最小活跃数`（如 `ddns.example.com:443&3`） |
+> 💡建议后续部署自己的`CHECK_API`ip检测api，公益的稳定性差。
 
 ### 5️⃣ 创建 KV 绑定
 
@@ -153,27 +118,17 @@ Worker → **Triggers** → **Cron Triggers** → 添加 `0 */3 * * *`（每3小
 3. 粘贴到管理面板 → **检测清洗** → **追加入库**
 
 **从远程URL加载：**
-1. 切换到 **远程TXT** 标签页
-2. 输入TXT文件URL → **加载** → **追加入库**
+
+ 输入TXT文件URL → **加载** → **追加入库**
 
 #### 域名探测
 
-在 **Check ProxyIP** 区域输入域名，自动检测IP可用性：
+在 **Check ProxyIP** （实况解析右边输入框）输入域名，自动检测IP可用性：
 ```
 example.com          # 探测A记录
 example.com:8080     # 指定端口
 txt@example.com      # 探测TXT记录
 ```
-
-### v6.5 新增功能
-
-| 功能 | 说明 |
-|------|------|
-| 📊 **域名池绑定** | 为每个域名绑定独立的IP池 |
-| 🗑️ **垃圾桶管理** | 失效IP自动移入垃圾桶，可恢复 |
-| 🧹 **一键洗库** | 自动检测并清洗IP池 |
-| 🔍 **智能筛选** | 按端口范围、标签筛选IP |
-| ⚡ **检测中断** | 批量检测可中断，保留已验证IP |
 
 </details>
 
@@ -190,15 +145,19 @@ txt@example.com      # 探测TXT记录
 | `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
 | `CF_DOMAIN` | 要维护的域名配置 | `ddns.example.com:443&3` |
 
+
 ### 可选变量
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `CHECK_API` | IP检测API地址 | `https://check.proxyip.cmliussss.net/check?proxyip=` |
+| `CHECK_API` | IP检测API地址 | `https://check.proxyip.cmliussss.net/check?proxyip=（建议自建）` |
+| `CHECK_API_TOKEN` | 检测接口认证Token | 无 |
+| `DOH_API` | DNS over HTTPS 接口 | `https://cloudflare-dns.com/dns-query` |
 | `AUTH_KEY` | 管理面板访问密钥 | 无 |
 | `TG_TOKEN` | Telegram Bot Token | 无 |
 | `TG_ID` | Telegram Chat ID | 无 |
 | `IP_INFO_ENABLED` | 开启IP归属地查询 | `false` |
+| `IP_INFO_API` | IP归属地查询接口 | `http://ip-api.com/json` |
 
 ### CF_DOMAIN 配置格式
 
