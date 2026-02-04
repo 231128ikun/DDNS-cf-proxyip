@@ -1,4 +1,4 @@
-# DDNS Pro - Cloudflare Workers 动态DNS & IP管理
+# DDNS Pro  - Cloudflare Workers 动态DNS & IP管理
 
 基于cmliu 的check proxyip项目提供的api做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。借助cf平台，无需服务器。
 
@@ -11,6 +11,12 @@
 - ✅ **追加入库** - 新IP追加到库存，不覆盖现有数据
 - ✅ **Telegram通知** - 维护完成后推送详细报告
 - ✅ **Web管理界面** - 直观的可视化操作面板
+- ✅ **域名池绑定** - 支持不同域名绑定到不同的IP池
+- ✅ **IP归属地查询** - 显示IP的地理位置和ISP信息
+- ✅ **垃圾桶恢复** - 失效IP自动移入垃圾桶，可一键恢复
+- ✅ **一键洗库** - 自动检测并清洗IP池，保持库存质量
+- ✅ **智能检测中断** - 批量检测可中断，保留已验证IP
+- ✅ **多端口筛选** - 支持端口范围和标签筛选IP
 
 > 主要就是为了维护一个任意端口的proxyip域名用于访问cf类网站，达到的效果就是定时监控自动维护来保证域名中的ip始终可用。比如kr.dwb.cc.cd:50001
 
@@ -146,7 +152,34 @@ https://ddns-pro.你的子域名.workers.dev
 - 发送Telegram通知（如已配置）
 
 补充说明：
-- 失效/剔除的 IP 会进入 **垃圾桶**；在垃圾桶里点“恢复”，会自动恢复到该 IP 的**来源域名绑定池**（若无来源信息则恢复到通用池）。
+- 失效/剔除的 IP 会进入 **垃圾桶**；在垃圾桶里点"恢复"，会自动恢复到该 IP 的**来源域名绑定池**（若无来源信息则恢复到通用池）。
+
+### 🆕 v6.5 新增功能使用指南
+
+#### 📊 域名池绑定
+1. 访问 **域名池绑定** 区域
+2. 为每个域名选择要绑定的IP池
+3. 系统会自动记录映射关系
+
+#### 🗑️ 垃圾桶管理
+1. 切换到 **垃圾桶** 池
+2. 选择要恢复的IP，点击"恢复选中"
+3. 或使用 **一键洗库** 自动恢复有效IP
+
+#### 🧹 一键洗库
+1. 切换到要清洗的IP池
+2. 点击 **🧹 一键洗库** 按钮
+3. 系统自动检测并清洗IP
+
+#### 🔍 智能筛选
+1. 在IP库管理区域输入端口范围（如：443,8443）
+2. 输入标签关键词（如：HK,US）
+3. 点击 ✓ 保留匹配或 ✗ 排除匹配
+
+#### ⚡ 智能检测中断
+1. 点击 **⚡ 检测清洗** 开始检测
+2. 点击 **🛑 停止检测** 可随时中断
+3. 中断后已检测的有效IP自动保留
 
 ## 4️⃣ 配置自动维护（可选）
 
@@ -245,6 +278,7 @@ txt@example.com
 | `TG_ID` | Telegram Chat ID | 无 | `123456789` | 
 | `IP_INFO_ENABLED` | 查询ip归属地开关 | `false` | `true` | 
 | `IP_INFO_API` | 查询ip归属地api | `http://ip-api.com/json` | `https://example.com/json` | 
+| `CHECK_API_TOKEN` | ProxyIP检测API认证Token | 无 | `your-check-api-token` | 
 
 ### 🔒 可选：开启访问保护（推荐单人自用）
 
@@ -322,10 +356,12 @@ CF_DOMAIN="proxy1.example.com:443,txt@ip-list.example.com,proxy2.example.com:808
 
 ```javascript
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 10,      // 并发数：10（网络好可改为15-20）
-    CHECK_TIMEOUT: 6000,        // 超时：6秒
-    REMOTE_LOAD_TIMEOUT: 10000  // 远程加载超时：10秒
-    IP_INFO_TIMEOUT: 6000       // ip归属地查询超时：6秒
+    CONCURRENT_CHECKS: 10,       // 并发数：10（网络好可改为15-20）
+    CHECK_TIMEOUT: 6000,         // 超时：6秒
+    REMOTE_LOAD_TIMEOUT: 10000,  // 远程加载超时：10秒
+    IP_INFO_TIMEOUT: 6000,       // IP归属地查询超时：6秒
+    CHECK_RETRY_COUNT: 2,        // IP检测重试次数
+    CHECK_RETRY_DELAY: 3000      // 重试间隔：3秒
 };
 ```
 
@@ -333,7 +369,7 @@ const GLOBAL_SETTINGS = {
 
 参考项目：[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 
-部署后修改 `CHECK_API` 环境变量为你的 API 地址。
+部署后修改 `CHECK_API` 环境变量为你的 API 地址。新版默认检测API地址为：`https://check.proxyip.cmliussss.net/check?proxyip=`
 
 ### Telegram 通知配置
 
