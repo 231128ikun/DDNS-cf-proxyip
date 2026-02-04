@@ -854,6 +854,9 @@ async function cleanIPListAsync(text, resolveDomains = true) {
         // 检测域名格式
         const domainMatch = mainPart.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}):?(\d+)?$/);
         if (domainMatch) {
+            // 如果不解析域名，跳过域名格式的行
+            if (!resolveDomains) continue;
+            
             const domain = domainMatch[1];
             const port = domainMatch[2] || '443';
             
@@ -1193,7 +1196,6 @@ async function maintainRecordsCommon(options) {
         report,
         poolKey,
         checkFn,
-        recordType,
         getCurrentIPs,
         deleteRecord,
         addRecord,
@@ -1299,7 +1301,6 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn = 
         report,
         poolKey,
         checkFn,
-        recordType: 'A',
         getCurrentIPs: () => records.map(r => ({ id: r.id, addr: `${r.content}:${target.port}`, ip: r.content })),
         deleteRecord: async (id) => {
             await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`, 'DELETE');
@@ -1352,7 +1353,6 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn 
         report,
         poolKey,
         checkFn,
-        recordType: 'TXT',
         getCurrentIPs: () => currentIPs.map(addr => ({ id: recordId, addr, ip: addr })),
         deleteRecord: async () => { /* TXT模式延迟到最后统一更新 */ },
         addRecord: async () => { /* TXT模式延迟到最后统一更新 */ },
@@ -2455,6 +2455,7 @@ function renderHTML(C) {
     let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
     let checkWasAbandoned = false; // 标记是否放弃了检测
     
+    
     // 自定义模态对话框
     function showCheckInterruptModal(stats) {
         return new Promise((resolve) => {
@@ -2794,36 +2795,64 @@ function renderHTML(C) {
                     const item = line.trim();
                     if (!item) return;
                     
-                    const normalized = normalizeIPFormat(item);
-                    if (!normalized) {
-                        log(\`  ⚠️  格式错误: \${item}\`, 'warn');
-                        checked++;
-                        pg.style.width = (checked / total * 100) + '%';
-                        return;
-                    }
+                    // 检测是否为域名格式 (example.com 或 example.com:443)
+                    const domainMatch = item.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\\.[a-zA-Z]{2,}):?(\\d+)?$/);
+                    let checkTargets = [];
                     
-                    const checkTarget = normalized.split('#')[0].trim();
-                    
-                    try {
-                        const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\`, {
-                            signal: signal
-                        }).then(r => r.json());
-                        
-                        checked++;
-                        
-                        if (r.success) {
-                            valid.push(normalized);
-                            log(\`  ✅ \${checkTarget} - \${r.colo} (\${r.responseTime}ms)\`, 'success');
-                        } else {
-                            log(\`  ❌ \${checkTarget}\`, 'error');
-                        }
-                    } catch (e) {
-                        if (e.name !== 'AbortError') {
+                    if (domainMatch) {
+                        // 域名格式：调用后端解析
+                        const domain = domainMatch[1];
+                        const port = domainMatch[2] || '443';
+                        try {
+                            const data = await apiFetch(\`/api/lookup-domain?domain=\${encodeURIComponent(domain + ':' + port)}\`).then(r => r.json());
+                            if (data.ips && data.ips.length > 0) {
+                                checkTargets = data.ips.map(ip => \`\${ip}:\${port}\`);
+                                log(\`  🌐 \${domain} → \${data.ips.length} 个IP\`, 'info');
+                            } else {
+                                log(\`  ⚠️ 域名无解析: \${domain}\`, 'warn');
+                                checked++;
+                                pg.style.width = (checked / total * 100) + '%';
+                                return;
+                            }
+                        } catch (e) {
+                            log(\`  ⚠️ 域名解析失败: \${domain}\`, 'warn');
                             checked++;
-                            log(\`  ❌ \${checkTarget}\`, 'error');
+                            pg.style.width = (checked / total * 100) + '%';
+                            return;
+                        }
+                    } else {
+                        // IP格式
+                        const normalized = normalizeIPFormat(item);
+                        if (!normalized) {
+                            log(\`  ⚠️  格式错误: \${item}\`, 'warn');
+                            checked++;
+                            pg.style.width = (checked / total * 100) + '%';
+                            return;
+                        }
+                        checkTargets = [normalized.split('#')[0].trim()];
+                    }
+                    
+                    // 检测所有目标IP
+                    for (const checkTarget of checkTargets) {
+                        try {
+                            const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\`, {
+                                signal: signal
+                            }).then(r => r.json());
+                            
+                            if (r.success) {
+                                valid.push(checkTarget);
+                                log(\`  ✅ \${checkTarget} - \${r.colo} (\${r.responseTime}ms)\`, 'success');
+                            } else {
+                                log(\`  ❌ \${checkTarget}\`, 'error');
+                            }
+                        } catch (e) {
+                            if (e.name !== 'AbortError') {
+                                log(\`  ❌ \${checkTarget}\`, 'error');
+                            }
                         }
                     }
                     
+                    checked++;
                     if (!signal.aborted) {
                         pg.style.width = (checked / total * 100) + '%';
                     }
@@ -3144,7 +3173,6 @@ function renderHTML(C) {
             
             const isIP = /^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$/.test(val);
             let targets = [];
-            let displayDomain = val;
             
             if (isIP) {
                 const normalized = normalizeIPFormat(val);
@@ -3158,7 +3186,6 @@ function renderHTML(C) {
                     return;
                 }
                 
-                displayDomain = data.domain;
                 targets = data.ips.map(ip => \`\${ip}:\${data.port}\`);
                 log(\`📡 \${data.ips.length} 个IP (端口: \${data.port})\`, 'success');
             }
@@ -3514,7 +3541,6 @@ function renderHTML(C) {
     // 一键洗库状态
     let cleaningPool = null;
     let cleaningOriginalCount = 0;
-    let cleaningUncheckedIPs = []; // 未检测的IP
     
     // 一键洗库：加载池 → 检测 → 自动保存
     // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
@@ -3539,7 +3565,6 @@ function renderHTML(C) {
             allIPs = [...originalLines];
             document.getElementById('ip-input').value = r.pool;
             cleaningOriginalCount = r.count;
-            cleaningUncheckedIPs = [...allIPs];
             log(\`📂 已加载 \${r.count} 个IP\`, 'info');
         } catch (e) {
             log('❌ 加载失败', 'error');
@@ -3575,7 +3600,6 @@ function renderHTML(C) {
         
         cleaningPool = null;
         cleaningOriginalCount = 0;
-        cleaningUncheckedIPs = [];
     }
     
     // 普通池洗库结果保存：有效IP覆盖保存，失效IP移入垃圾桶
