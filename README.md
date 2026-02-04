@@ -1,6 +1,20 @@
-# DDNS Pro  - Cloudflare Workers 动态DNS & IP管理
+# DDNS Pro - Cloudflare Workers 动态DNS & IP管理
 
-基于cmliu 的check proxyip项目提供的api做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。借助cf平台，无需服务器。
+基于 cmliu 的 CheckProxyIP 项目提供的 API 做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。借助 CF 平台，无需服务器。
+
+## 📑 目录
+
+- [📋 主要功能](#-主要功能)
+- [🎯 新手必读](#-新手必读这是什么怎么用)
+- [🚀 快速部署](#-快速部署5分钟完成)
+- [📖 使用教程](#-使用教程)
+- [⚙️ 环境变量详解](#️-环境变量详解)
+- [🔧 高级配置](#-高级配置)
+- [🛠️ 工作原理](#️-工作原理)
+- [❓ 常见问题](#-常见问题)
+- [📚 相关项目](#-相关项目)
+
+---
 
 ## 📋 主要功能
 
@@ -18,337 +32,207 @@
 - ✅ **智能检测中断** - 批量检测可中断，保留已验证IP
 - ✅ **多端口筛选** - 支持端口范围和标签筛选IP
 
-> 主要就是为了维护一个任意端口的proxyip域名用于访问cf类网站，达到的效果就是定时监控自动维护来保证域名中的ip始终可用。比如kr.dwb.cc.cd:50001
+> 💡 主要用途：维护一个任意端口的 ProxyIP 域名用于访问 CF 类网站，定时监控自动维护来保证域名中的 IP 始终可用。例如：`kr.example.com:50001`
 
-### 🎯 新手入门指南
-
-如果你是第一次接触动态DNS，这里有一个快速理解：
-
-1. **这是什么？** - 一个自动管理域名IP地址的工具，让你的域名始终指向可用的IP地址
-2. **有什么用？** - 比如你有域名 `example.com:8080`，这个工具会：
-   - 自动检查域名当前的IP是否可用
-   - 如果不可用，自动从你的IP库存中挑选新的可用IP
-   - 更新域名解析，让域名始终指向可用的IP
-3. **三种模式选择建议**：
-   - **A记录模式**：最常用，将IP直接解析到域名（如 `example.com:443`）
-   - **TXT记录模式**：将IP列表存储在TXT记录中，适合需要IP列表的场景
-   - **双模式**：同时维护A记录和TXT记录
-
+---
 
 <details>
-<summary><strong>🚀 快速开始指南（点击展开）</strong></summary>
+<summary><strong>🎯 新手必读：这是什么？怎么用？</strong></summary>
 
-### 📊 完整部署流程图
+### 简单理解
+
+这是一个**自动管理维护cf-proxyip的工具**，让你的域名始终指向可用的反代cf的IP地址。
+
+具体应用场景可参考[什么是PROCYIP?](https://github.com/231128ikun/CF-Workers-CheckProxyIP/blob/main/README.md#-%E4%BB%80%E4%B9%88%E6%98%AF-proxyip-)
+
+### 三种模式怎么选？
+
+| 模式 | 适用场景 | 示例 |
+|------|----------|------|
+| **A记录模式** | 最常用，将IP直接解析到域名 | `proxy.example.com:443` |
+| **TXT记录模式** | 需要IP列表的场景 | `txt@ip-list.example.com` |
+| **双模式** | 同时需要A记录和TXT记录 | `all@multi.example.com:8080` |
+
+</details>
+
+---
+
+<details>
+<summary><strong>🚀 快速部署（5分钟完成）</strong></summary>
+
+### 📊 部署流程
 
 ```
-1. 准备工作 → 2. 部署Worker → 3. 配置环境 → 4. 添加IP → 5. 开始使用
-   ↓                ↓                ↓            ↓          ↓
-获取API Token     复制代码       设置环境变量   导入IP库   访问管理面板
-获取Zone ID       部署到CF     配置KV绑定     检测清洗    执行维护
+准备工作 → 部署Worker → 配置环境 → 开始使用
+   ↓           ↓            ↓           ↓
+获取Token   复制代码    设置变量    访问面板
+获取ZoneID  部署到CF    绑定KV      导入IP
 ```
 
-## 1️⃣ 准备工作
+### 1️⃣ 获取 Cloudflare API Token
 
-### 获取 Cloudflare API Token
-
-**什么是API Token？** - 这是Cloudflare给你的一串密码，用来安全地管理你的域名DNS记录。
-
-**详细步骤：**
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. 点击右上角头像 → **My Profile**
-3. 左侧菜单 **API Tokens** → **Create Token**
-4. 选择 **Edit zone DNS** 模板
-5. 配置权限：
-   - **Zone Resources**: 选择你的域名
-   - **Permissions**: Zone - DNS - Edit
-   - **Permissions**: Zone - DNS - Read
-6. 点击 **Continue to summary** → **Create Token**
-7. **复制保存** 生成的 Token（只显示一次）
+2. 右上角头像 → **My Profile** → **API Tokens**
+3. **Create Token** → 选择 **Edit zone DNS** 模板
+4. 配置权限：Zone Resources 选择你的域名
+5. **Create Token** → **复制保存**（只显示一次！）
 
-**⚠️ 重要提醒：**
-- 这个Token只显示一次，请立即保存到安全的地方
-- Token权限足够管理DNS即可，不需要其他权限
+> 💡这个api token 和zone id 都是为了可以修改要维护的域名，所以别填错账号了，要填维护的域名所在账号。而这个项目可以部署在任意账号。
 
-### 获取 Zone ID
+### 2️⃣ 获取 Zone ID
 
-**什么是Zone ID？** - 这是你的域名在Cloudflare系统中的唯一标识符。
-
-**获取步骤：**
-1. 在 [Cloudflare Dashboard](https://dash.cloudflare.com/) 中选择你的域名
+1. 在 Cloudflare Dashboard 中选择你的域名
 2. 右侧 **API** 区域可以看到 **Zone ID**
 3. 复制保存
 
-
-## 2️⃣ 部署 Worker
-
-### 通过 Cloudflare Dashboard
+### 3️⃣ 部署 Worker
 
 1. 访问 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)
-2. 点击 **Create Application** → **Create Worker**
-3. 复制 `worker.js` 的全部内容
-4. 粘贴到编辑器 → **Save and Deploy**
-5. 配置环境变量和KV绑定（见下方）
+2. **Create Application** → **Create Worker**
+3. 复制 `_worker.js` 的全部内容，粘贴到编辑器
+4. **Save and Deploy**
 
-#### 配置环境变量
+### 4️⃣ 配置环境变量
 
 进入 Worker → **Settings** → **Variables**，添加：
 
-```
-CF_KEY = your-cloudflare-api-token
-CF_ZONEID = your-zone-id
-CF_DOMAIN = ddns.example.com:port&3 （前缀不填默认维护a记录，端口不填默认443，最小活跃数不填默认为3）
-```
+| 变量名 | 值 |
+|--------|-----|
+| `CF_KEY` | 你的 API Token |
+| `CF_ZONEID` | 你的 Zone ID |
+| `CF_DOMAIN` | `你的域名:端口&最小活跃数`（如 `ddns.example.com:443&3`） |
 
-#### 创建 KV 绑定
+### 5️⃣ 创建 KV 绑定
 
-1. 在 [KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间
-2. 名称：`IP_DATA`
-3. 回到 Worker → **Settings** → **Bindings**
-4. 点击 **Add binding**
-   - Type: **KV Namespace**
-   - Variable name: `IP_DATA`
-   - KV namespace: 选择刚创建的命名空间
+1. 在 [KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间，名称：`IP_DATA`
+2. 回到 Worker → **Settings** → **Bindings** → **Add binding**
+3. Type: **KV Namespace**，Variable name: `IP_DATA`，选择刚创建的命名空间
 
-#### 配置定时任务
+### 6️⃣ 配置定时任务（可选）
 
-Worker → **Triggers** → **Cron Triggers** → **Add Cron Trigger**
+Worker → **Triggers** → **Cron Triggers** → 添加 `0 */3 * * *`（每3小时执行）
 
-```
-0 */3 * * *  # 每3小时执行一次
-```
+### ✅ 部署完成！
 
-## 3️⃣ 使用管理面板
+访问 `https://你的worker名.你的子域名.workers.dev` 即可使用管理面板
 
-访问你的 Worker 地址：
-```
-https://ddns-pro.你的子域名.workers.dev
-```
+</details>
+
+---
+
+<details>
+<summary><strong>📖 使用教程</strong></summary>
 
 ### 第一次使用
 
 #### Step 1: 添加IP到库存
 
-1. 在 **手动输入** 标签页输入IP列表：
+1. 在 **手动输入** 标签页输入IP列表（格式：`IP:端口`）
 ```
 1.2.3.4:443
 5.6.7.8:8080
 ```
-
-2. 点击 **检测清洗**（自动验证IP可用性）
-
+2. 点击 **检测清洗**（验证IP可用性）
 3. 点击 **追加入库**（保存到库存）
 
-#### Step 2: 查看解析状态
+#### Step 2: 执行维护
 
-1. 选择要管理的域名（顶部下拉框）
-2. 点击 **刷新** 查看当前DNS记录
-
-#### Step 3: 执行维护
-
-点击 **执行全部维护** 按钮，系统会：
-- 检测现有DNS记录
+点击 **执行全部维护**，系统会自动：
+- 检测现有DNS记录中的IP
 - 删除失效IP
-- 若低于最小活跃数，则从库存补充新IP
+- 从库存补充新IP（若低于最小活跃数）
 - 发送Telegram通知（如已配置）
 
-补充说明：
-- 失效/剔除的 IP 会进入 **垃圾桶**；在垃圾桶里点"恢复"，会自动恢复到该 IP 的**来源域名绑定池**（若无来源信息则恢复到通用池）。
+### 日常操作
 
-### 🆕 v6.5 新增功能使用指南
+#### 批量导入IP
 
-#### 📊 域名池绑定
-1. 访问 **域名池绑定** 区域
-2. 为每个域名选择要绑定的IP池
-3. 系统会自动记录映射关系
-
-#### 🗑️ 垃圾桶管理
-1. 切换到 **垃圾桶** 池
-2. 选择要恢复的IP，点击"恢复选中"
-3. 或使用 **一键洗库** 自动恢复有效IP
-
-#### 🧹 一键洗库
-1. 切换到要清洗的IP池
-2. 点击 **🧹 一键洗库** 按钮
-3. 系统自动检测并清洗IP
-
-#### 🔍 智能筛选
-1. 在IP库管理区域输入端口范围（如：443,8443）
-2. 输入标签关键词（如：HK,US）
-3. 点击 ✓ 保留匹配或 ✗ 排除匹配
-
-#### ⚡ 智能检测中断
-1. 点击 **⚡ 检测清洗** 开始检测
-2. 点击 **🛑 停止检测** 可随时中断
-3. 中断后已检测的有效IP自动保留
-
-## 4️⃣ 配置自动维护（可选）
-
-### 设置定时任务
-
-在 `Worker → Triggers → Cron Triggers` 中：
-```
-[triggers]
-crons = ["0 */3 * * *"]  # 每3小时更新
-```
-
-### 配置 Telegram 通知
-
-1. 创建 Telegram Bot:
-   - 与 [@BotFather](https://t.me/botfather) 对话
-   - 发送 `/newbot` 并按提示操作
-   - 获得 Token: `123456789:ABCdef...`
-
-2. 获取 Chat ID:
-   - 与 [@userinfobot](https://t.me/userinfobot) 对话
-   - 发送任意消息
-   - 获得 ID: `123456789`
-
-3. 在 `环境变量` 中添加：
-```
-TG_TOKEN = "your-bot-token"
-TG_ID = "your-chat-id"
-```
-
-4. 重新部署
-
-## 5️⃣ 日常使用
-
-### 批量导入IP（从Excel）
-
-1. 在Excel中准备两列：
-```
-IP地址         端口
-1.2.3.4       443
-5.6.7.8       8080
-```
-
+**从Excel导入：**
+1. Excel中准备 `IP地址` 和 `端口` 两列
 2. 选中数据 → Ctrl+C 复制
+3. 粘贴到管理面板 → **检测清洗** → **追加入库**
 
-3. 粘贴到管理面板的输入框
-
-4. 点击 **检测清洗** → **追加入库**
-
-### 从远程URL加载IP
-
+**从远程URL加载：**
 1. 切换到 **远程TXT** 标签页
+2. 输入TXT文件URL → **加载** → **追加入库**
 
-2. 输入TXT文件URL（如GitHub Raw文件）
+#### 域名探测
 
-3. 点击 **加载** → **追加入库**
-
-### 域名探测
-
-在 **Check ProxyIP** 区域：
+在 **Check ProxyIP** 区域输入域名，自动检测IP可用性：
 ```
-# 探测A记录
-example.com
-example.com:8080
-
-# 探测TXT记录
-txt@example.com
+example.com          # 探测A记录
+example.com:8080     # 指定端口
+txt@example.com      # 探测TXT记录
 ```
 
-自动检测IP可用性，点击 **➕** 添加到输入框
+### v6.5 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 📊 **域名池绑定** | 为每个域名绑定独立的IP池 |
+| 🗑️ **垃圾桶管理** | 失效IP自动移入垃圾桶，可恢复 |
+| 🧹 **一键洗库** | 自动检测并清洗IP池 |
+| 🔍 **智能筛选** | 按端口范围、标签筛选IP |
+| ⚡ **检测中断** | 批量检测可中断，保留已验证IP |
 
 </details>
 
+---
+
 <details>
-<summary><strong>⚙️ 环境变量说明（点击展开）</strong></summary>
+<summary><strong>⚙️ 环境变量详解</strong></summary>
 
-### 📝 环境变量是什么？
+### 必填变量
 
-**环境变量**就像是应用程序的配置参数，你告诉程序"谁"（哪个账号）、"管理什么"（哪些域名）、"怎么工作"（用什么模式）。
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `CF_KEY` | Cloudflare API Token | `abcd1234...` |
+| `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
+| `CF_DOMAIN` | 要维护的域名配置 | `ddns.example.com:443&3` |
 
-### 必填变量（必须设置）
+### 可选变量
 
-| 变量名 | 说明 | 示例 | 备注 |
-|--------|------|------|----------|
-| `CF_KEY` | 目标维护域名所托管的Cloudflare API Token（带dns编辑即可 ）| `abcd1234...` | 目标维护域名的API Token |
-| `CF_ZONEID` | 目标维护域名的 Zone ID | `1a2b3c4d...` | 你刚才复制的Zone ID |
-| `CF_DOMAIN` | 目标要维护的域名，具体配置（见下方格式说明） | `txt@ddns.example.com:port&3` | 你想管理的域名（最重要！） |
-| `CHECK_API` | ProxyIP检测API地址（下方有项目地址） | `https://check.dwb.pp.ua/check?proxyip=` | IP检测服务地址（建议自建） |
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `CHECK_API` | IP检测API地址 | `https://check.proxyip.cmliussss.net/check?proxyip=` |
+| `AUTH_KEY` | 管理面板访问密钥 | 无 |
+| `TG_TOKEN` | Telegram Bot Token | 无 |
+| `TG_ID` | Telegram Chat ID | 无 |
+| `IP_INFO_ENABLED` | 开启IP归属地查询 | `false` |
 
-### 可选变量（按需设置）
-
-| 变量名 | 说明 | 默认值 | 示例 |
-|--------|------|--------|------|
-| `AUTH_KEY` | 管理面板访问保护（开启后访问需带key） | 无 | `your-strong-key` |
-| `DOH_API` | DNS over HTTPS API | `https://cloudflare-dns.com/dns-query` | 其他DoH服务 | 
-| `TG_TOKEN` | Telegram Bot Token | 无 | `1234567890:ABCdef...` |
-| `TG_ID` | Telegram Chat ID | 无 | `123456789` | 
-| `IP_INFO_ENABLED` | 查询ip归属地开关 | `false` | `true` | 
-| `IP_INFO_API` | 查询ip归属地api | `http://ip-api.com/json` | `https://example.com/json` | 
-| `CHECK_API_TOKEN` | ProxyIP检测API认证Token | 无 | `your-check-api-token` | 
-
-### 🔒 可选：开启访问保护（推荐单人自用）
-
-如果你担心 Worker 地址泄露后被别人操作，可以设置 `AUTH_KEY`：
-
-1. 在 Worker 环境变量添加 `AUTH_KEY`
-2. 第一次打开面板用：`https://你的worker域名/?key=你的AUTH_KEY`
-3. 浏览器会保存登录状态，之后可直接打开面板（无需每次带 key）
-
-### 🎯 CF_DOMAIN 配置详解（这是最重要的配置！）
+### CF_DOMAIN 配置格式
 
 ```
-# 基础格式：
-# [模式]@域名:[端口]&[最小活跃数]
-
-# 示例：维护域名 ddns.example.com
-CF_DOMAIN="ddns.example.com:2053&5"
-# 解读：维护A记录，端口2053，最少保持5个活跃IP
+[模式]@域名:[端口]&[最小活跃数]
 ```
 
-#### 三种模式选择：
-
-**1. A记录模式（最常用）**
+**示例：**
 ```bash
-CF_DOMAIN="ddns.example.com"                    # 默认端口443
-CF_DOMAIN="ddns.example.com:8443"               # 指定端口8443
-CF_DOMAIN="ddns.example.com:8080&3"             # 端口8080，最少3个活跃IP
+# A记录模式
+ddns.example.com:443&3
+
+# TXT记录模式
+txt@txt.example.com&5
+
+# 双模式
+all@multi.example.com:8080&3
+
+# 多域名（逗号分隔）
+ddns1.example.com:443,txt@txt.example.com,all@multi.example.com:8080&3
 ```
 
-**2. TXT记录模式**
-```bash
-CF_DOMAIN="txt@txt.example.com"                 # TXT记录，存储IP:PORT列表
-CF_DOMAIN="txt@txt.example.com&5"              # 最少5个活跃IP
-```
+### 访问保护
 
-**3. 双模式（高级）**
-```bash
-CF_DOMAIN="all@multi.example.com:8080"          # 同时维护A和TXT记录
-```
+设置 `AUTH_KEY` 后，首次访问需带参数：`https://你的域名/?key=你的AUTH_KEY`
 
-#### 多域名配置（同时管理多个域名）
-
-```bash
-# 用逗号分隔不同域名的配置
-CF_DOMAIN="ddns1.example.com:443,txt@txt.example.com,all@multi.example.com:8080&3"
-
-# 解读：
-# 1. ddns1.example.com:443 - A记录模式，端口443
-# 2. txt@txt.example.com   - TXT记录模式
-# 3. all@multi.example.com:8080&3 - 双模式，端口8080，最少3个活跃IP
-```
-
-### ⚡ 快速配置建议
-
-对于大多数用户，建议这样配置：
-
-```bash
-# 新手推荐：管理一个域名，端口443，最少3个活跃IP
-CF_DOMAIN="your-domain.com:443&3"
-
-# 进阶用户：管理多个域名
-CF_DOMAIN="proxy1.example.com:443,txt@ip-list.example.com,proxy2.example.com:8080&5"
-```
-
-**配置后记得**：保存配置 → 重新部署Worker → 测试是否正常工作
+浏览器会保存登录状态，之后可直接访问。
 
 </details>
 
+---
+
 <details>
-<summary><strong>🔧 参数配置（点击展开）</strong></summary>
+<summary><strong>🔧 高级配置</strong></summary>
 
 ### 调整并发检测数量
 
@@ -356,11 +240,9 @@ CF_DOMAIN="proxy1.example.com:443,txt@ip-list.example.com,proxy2.example.com:808
 
 ```javascript
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 10,       // 并发数：10（网络好可改为15-20）
+    CONCURRENT_CHECKS: 10,       // 并发数（网络好可改为15-20）
     CHECK_TIMEOUT: 6000,         // 超时：6秒
-    REMOTE_LOAD_TIMEOUT: 10000,  // 远程加载超时：10秒
-    IP_INFO_TIMEOUT: 6000,       // IP归属地查询超时：6秒
-    CHECK_RETRY_COUNT: 2,        // IP检测重试次数
+    CHECK_RETRY_COUNT: 2,        // 重试次数
     CHECK_RETRY_DELAY: 3000      // 重试间隔：3秒
 };
 ```
@@ -369,117 +251,69 @@ const GLOBAL_SETTINGS = {
 
 参考项目：[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 
-部署后修改 `CHECK_API` 环境变量为你的 API 地址。新版默认检测API地址为：`https://check.proxyip.cmliussss.net/check?proxyip=`
+部署后修改 `CHECK_API` 环境变量为你的 API 地址。
 
 ### Telegram 通知配置
 
-1. 创建 Telegram Bot：与 [@BotFather](https://t.me/botfather) 对话
-2. 获取 Token：`123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
-3. 获取 Chat ID：与 [@userinfobot](https://t.me/userinfobot) 对话
-4. 配置环境变量 `TG_TOKEN` 和 `TG_ID`
+1. 与 [@BotFather](https://t.me/botfather) 对话，发送 `/newbot` 创建机器人
+2. 与 [@userinfobot](https://t.me/userinfobot) 对话获取 Chat ID
+3. 配置环境变量 `TG_TOKEN` 和 `TG_ID`
 
 </details>
 
+---
+
 <details>
-<summary><strong>🛠️ 工作原理（点击展开）</strong></summary>
+<summary><strong>🛠️ 工作原理</strong></summary>
 
 ### 维护流程
 
 ```
-1. 定时触发（Cron）或手动触发
-   ↓
-2. 检测现有DNS记录中的IP/txt记录中的ip
-   ↓
-3. 删除失效IP 
-   ↓
-4. 如果活跃IP < MIN_ACTIVE（最小活跃ip数）
-   └─ 从 IP_DATA (KV) 加载库存
-   ↓
-5. 检测有效ip并添加到DNS/txt记录
-   ↓
-6. 更新记录和库存数量
-   ↓
-7. 发送Telegram通知
+定时触发 / 手动触发
+        ↓
+检测现有DNS记录中的IP
+        ↓
+删除失效IP → 移入垃圾桶
+        ↓
+活跃IP < 最小活跃数？
+    ├─ 是 → 从库存加载IP → 检测有效性 → 添加到DNS
+    └─ 否 → 跳过
+        ↓
+发送Telegram通知
 ```
 
 </details>
 
+---
+
 <details>
-<summary><strong>❓ 常见问题（点击展开）</strong></summary>
+<summary><strong>❓ 常见问题</strong></summary>
 
-### 🆘 常见问题
+### 1. 检测清洗后库存没变化？
 
-#### 1. 为什么检测清洗后库存没变化？
+检测清洗只验证IP可用性，**不会自动保存**。请点击 **追加入库** 按钮保存。
 
-**问题描述**：我输入了一些IP，点击了"检测清洗"，但是库存数量没有增加。
+### 2. 定时任务不工作？
 
-**原因**：检测清洗只验证当前输入框中的IP是否可用，并不会自动保存到库存。
+- 检查 Worker → **Triggers** → **Cron Triggers** 是否已添加
+- 检查 Cron 表达式格式（如 `0 */3 * * *`）
+- 查看 Worker → **Logs** 是否有执行记录
 
-**解决方案**：检测清洗后，请点击 **追加入库** 按钮，这样才会把可用的IP保存到库存中。
+### 3. IP检测一直失败？
 
-#### 2. 如何获取 Cloudflare API Token？
+- 确保IP格式正确：`IP:端口`（如 `1.2.3.4:443`）
+- 检查 `CHECK_API` 环境变量是否配置正确
+- 确保目标IP的端口是开放的
 
-**获取步骤**：
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
-2. 右上角头像 → **My Profile** → **API Tokens**
-3. **Create Token** → 使用 **Edit zone DNS** 模板
-4. 选择需要管理的域名 → **Continue to summary** → **Create Token**
+### 4. 如何获取 API Token 和 Zone ID？
 
-**重要提醒**：
-- Token只显示一次！请立即复制保存
-- 使用"Edit zone DNS"模板就足够了，不需要其他权限
-- 如果Token丢失，需要重新创建一个
+👆 请参考上方 **🚀 快速部署** 章节的详细步骤。
 
-#### 3. 如何找到 Zone ID？
+</details>
 
-**方法一**：
-1. 登录 Cloudflare Dashboard
-2. 点击左侧你的域名
-3. 右侧 **API** 区域可以看到 **Zone ID**
-
-**方法二**：
-1. 在域名概览页面的右侧边栏
-2. 找到"API"部分，点击"Zone ID"旁边的复制按钮
-
-#### 4. 定时任务不工作？
-
-**可能原因和检查步骤**：
-
-1. **检查Cron配置**：
-   - 进入 Worker → **Triggers** → **Cron Triggers**
-   - 确保已添加了Cron表达式（如 `0 */3 * * *`）
-   - 检查状态是否为"Enabled"
-
-2. **检查执行日志**：
-   - Dashboard → Worker → **Logs**
-   - 查看是否有定时触发的日志记录
-
-3. **常见问题**：
-   - **免费计划限制**：Cloudflare Workers免费计划支持Cron，但可能有延迟
-   - **Cron表达式错误**：确保格式正确，如 `0 */3 * * *` 表示每3小时执行
-
-#### 5. IP检测一直失败？
-
-**检查清单**：
-
-1. **检查CHECK_API配置**：
-   - 确保 `CHECK_API` 环境变量配置正确
-   - 默认值：`https://check.dwb.pp.ua/check?proxyip=`
-   - 可以浏览器打开测试：`https://check.dwb.pp.ua/check?proxyip=1.2.3.4:443`
-
-2. **检查IP格式**：
-   - 必须包含端口，如 `1.2.3.4:443`
-   - 不能是 `1.2.3.4`（缺少端口）
-   - 端口必须在1-65535范围内
-
-3. **检查目标端口**：
-   - 确保目标IP的端口是开放的
-   - 可以使用 `telnet IP 端口` 命令测试连通性
-
+---
 
 ## 📚 相关项目
-
-本项目基于以下优秀项目：
 
 - [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP) - CF ProxyIP检测API
 - [CF-Workers-DD2D](https://github.com/cmliu/CF-Workers-DD2D) - DDNS-cf域名
