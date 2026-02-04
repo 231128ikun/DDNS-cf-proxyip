@@ -1,46 +1,69 @@
 /**
- * DDNS Pro & Proxy IP Manager v6.0
+ * DDNS Pro & Proxy IP Manager v6.5
  */
 
-// ========== 运行时配置（默认值） ==========
+// ==================== 默认配置（环境变量未设置时使用） ====================
 const DEFAULT_CONFIG = {
-    apiKey: '',
-    zoneId: '',
-    targets: [],
-    tgToken: '',
-    tgId: '',
-    checkApi: '',
-    dohApi: '',
-    projectUrl: '',
-    ipInfoEnabled: false,
-    ipInfoApi: '',
-    authKey: ''
+    // 目标维护域名的Cloudflare 配置
+    apiKey: '',              // CF_KEY: Cloudflare API Token
+    zoneId: '',              // CF_ZONEID: Cloudflare Zone ID
+    
+    // 目标维护域名的配置
+    targets: [],             // CF_DOMAIN: 域名配置（解析后的目标列表）
+    
+    // Telegram 通知配置
+    tgToken: '',             // TG_TOKEN: Telegram Bot Token
+    tgId: '',                // TG_ID: Telegram Chat ID
+    
+    // 检测 API 配置
+    checkApi: 'https://check.proxyip.cmliussss.net/check?proxyip=',  // CHECK_API: ProxyIP 检测接口
+    checkApiToken: '',       // CHECK_API_TOKEN: 检测接口认证Token
+    
+    // DNS 配置
+    dohApi: 'https://cloudflare-dns.com/dns-query',  // DOH_API: DNS over HTTPS 接口
+    
+    // IP 归属地查询配置
+    ipInfoEnabled: false,    // IP_INFO_ENABLED: 是否启用IP归属地查询
+    ipInfoApi: 'http://ip-api.com/json',  // IP_INFO_API: IP归属地查询接口
+    
+    // 访问控制配置
+    authKey: '',             // AUTH_KEY: 面板访问密钥
+    
+    // 运行时配置（非环境变量）
+    projectUrl: ''           // 项目URL（自动获取）
 };
+// ==================== 默认配置结束 ====================
 
 let CONFIG = { ...DEFAULT_CONFIG };
 
-// ========== 全局设置 ==========
 const GLOBAL_SETTINGS = {
     CONCURRENT_CHECKS: 10,       // 并发数：10（网络好可改为15-20）
     CHECK_TIMEOUT: 6000,         // 超时：6秒
     REMOTE_LOAD_TIMEOUT: 10000,  // 远程加载超时：10秒
-    IP_INFO_TIMEOUT: 6000,       // ip归属地查询超时：6秒
+    IP_INFO_TIMEOUT: 6000,       // IP归属地查询超时：6秒
+    CHECK_RETRY_COUNT: 2,        // IP检测重试次数
+    CHECK_RETRY_DELAY: 3000,     // 重试间隔：3秒
 };
 
-// ========== 工具函数 ==========
 function safeJSONParse(str, defaultValue = null) {
-    try {
-        return str ? JSON.parse(str) : defaultValue;
-    } catch (e) {
-        console.error('JSON解析失败:', e.message);
-        return defaultValue;
-    }
+    try { return str ? JSON.parse(str) : defaultValue; }
+    catch { return defaultValue; }
 }
 
-function formatLogMessage(message, type = 'info') {
-    const time = new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return `[${time}] ${message}`;
-}
+const parsePoolList = raw => (raw || '').split('\n').filter(l => l.trim());
+
+const parseTXTContent = content => content ? content.replace(/^"|"$/g, '').split(',').map(ip => ip.trim()).filter(Boolean) : [];
+
+const extractIPKey = line => {
+    if (!line) return '';
+    const idx = line.indexOf('#');
+    return idx > 0 ? line.substring(0, idx).trim() : line.trim();
+};
+
+const POOL_DISPLAY_NAMES = { pool: '通用池', pool_trash: '垃圾桶', domain_pool_mapping: '系统数据' };
+const getPoolDisplayName = poolKey => POOL_DISPLAY_NAMES[poolKey] || poolKey.replace('pool_', '') + '池';
+
+const formatLogMessage = msg => `[${new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })}] ${msg}`;
 
 const JSON_CONTENT_TYPE = 'application/json; charset=UTF-8';
 
@@ -53,21 +76,9 @@ function jsonResponse(data, status = 200, extraHeaders = undefined) {
     return new Response(JSON.stringify(data), { status, headers });
 }
 
-function badRequest(data) {
-    return jsonResponse(data, 400);
-}
-
-function serverError(data) {
-    return jsonResponse(data, 500);
-}
-
-async function readJsonBody(request) {
-    try {
-        return await request.json();
-    } catch {
-        return null;
-    }
-}
+const badRequest = data => jsonResponse(data, 400);
+const serverError = data => jsonResponse(data, 500);
+const readJsonBody = async req => { try { return await req.json(); } catch { return null; } };
 
 function parseCookieHeader(cookieHeader) {
     const out = {};
@@ -115,7 +126,7 @@ function unauthorizedResponse(url) {
             message: '需要提供 AUTH_KEY'
         }, 401);
     }
-    // 页面：给出最小可理解指引（保持单文件、零依赖）
+    // 页面：给出最小可理解指引
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -140,7 +151,6 @@ function unauthorizedResponse(url) {
     return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
 }
 
-// ========== Worker主入口 ==========
 export default {
     async fetch(request, env, ctx) {
         const requestStart = Date.now();
@@ -172,7 +182,7 @@ export default {
             const response = await handleAPIRequest(url, request, env);
             console.log(`🔧 API请求 ${url.pathname} 处理耗时: ${Date.now() - apiStart}ms`);
             
-            // 添加性能头信息（移除缓存统计）
+            // 添加性能头信息
             const headers = new Headers(response.headers);
             headers.set('X-Processing-Time', `${Date.now() - requestStart}ms`);
             if (url.pathname.startsWith('/api/') && !headers.has('Content-Type')) {
@@ -212,94 +222,30 @@ export default {
     }
 };
 
-// ========== API请求处理器 ==========
+const API_ROUTES = {
+    '/api/get-pool': (url, req, env) => handleGetPool(url, env),
+    '/api/save-pool': (url, req, env) => handleSavePool(req, env),
+    '/api/load-remote-url': (url, req) => handleLoadRemoteUrl(req),
+    '/api/current-status': (url) => handleCurrentStatus(url),
+    '/api/lookup-domain': (url) => handleLookupDomain(url),
+    '/api/check-ip': (url) => handleCheckIP(url),
+    '/api/ip-info': (url) => handleIPInfo(url),
+    '/api/delete-record': (url) => handleDeleteRecord(url),
+    '/api/add-a-record': (url, req) => handleAddARecord(req),
+    '/api/maintain': (url, req, env) => handleMaintain(url, env),
+    '/api/get-domain-pool-mapping': (url, req, env) => handleGetDomainPoolMapping(env),
+    '/api/save-domain-pool-mapping': (url, req, env) => handleSaveDomainPoolMapping(req, env),
+    '/api/create-pool': (url, req, env) => handleCreatePool(req, env),
+    '/api/delete-pool': (url, req, env) => handleDeletePool(url, env),
+    '/api/clear-trash': (url, req, env) => handleClearTrash(env),
+    '/api/restore-from-trash': (url, req, env) => handleRestoreFromTrash(req, env)
+};
+
 async function handleAPIRequest(url, request, env) {
-    const pathname = url.pathname;
-    
-    // 获取IP池
-    if (pathname === '/api/get-pool') {
-        return await handleGetPool(url, env);
-    }
-    
-    // 保存IP池
-    if (pathname === '/api/save-pool') {
-        return await handleSavePool(request, env);
-    }
-    
-    // 从远程URL加载IP
-    if (pathname === '/api/load-remote-url') {
-        return await handleLoadRemoteUrl(request);
-    }
-    
-    // 获取当前解析状态
-    if (pathname === '/api/current-status') {
-        return await handleCurrentStatus(url);
-    }
-    
-    // 查询域名解析
-    if (pathname === '/api/lookup-domain') {
-        return await handleLookupDomain(url);
-    }
-    
-    // 检测单个IP
-    if (pathname === '/api/check-ip') {
-        return await handleCheckIP(url);
-    }
-    
-    // 查询IP归属地信息
-    if (pathname === '/api/ip-info') {
-        return await handleIPInfo(url);
-    }
-    
-    // 删除DNS记录
-    if (pathname === '/api/delete-record') {
-        return await handleDeleteRecord(url);
-    }
-    
-    // 添加A记录
-    if (pathname === '/api/add-a-record') {
-        return await handleAddARecord(request);
-    }
-    
-    // 执行维护任务
-    if (pathname === '/api/maintain') {
-        return await handleMaintain(url, env);
-    }
-    
-    // 获取域名与池的映射关系
-    if (pathname === '/api/get-domain-pool-mapping') {
-        return await handleGetDomainPoolMapping(env);
-    }
-    
-    // 保存域名与池的映射关系
-    if (pathname === '/api/save-domain-pool-mapping') {
-        return await handleSaveDomainPoolMapping(request, env);
-    }
-    
-    // 创建新池
-    if (pathname === '/api/create-pool') {
-        return await handleCreatePool(request, env);
-    }
-    
-    // 删除池
-    if (pathname === '/api/delete-pool') {
-        return await handleDeletePool(url, env);
-    }
-    
-    // 清空垃圾桶
-    if (pathname === '/api/clear-trash') {
-        return await handleClearTrash(env);
-    }
-    
-    // 从垃圾桶恢复IP
-    if (pathname === '/api/restore-from-trash') {
-        return await handleRestoreFromTrash(request, env);
-    }
-    
-    return new Response('Not Found', { status: 404 });
+    const handler = API_ROUTES[url.pathname];
+    return handler ? await handler(url, request, env) : new Response('Not Found', { status: 404 });
 }
 
-// ========== API处理函数 ==========
 async function handleGetPool(url, env) {
     const poolKey = url.searchParams.get('poolKey') || 'pool';
     const onlyCount = url.searchParams.get('onlyCount') === 'true';
@@ -319,41 +265,82 @@ async function handleSavePool(request, env) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
     const poolKey = body.poolKey || 'pool';
+    const mode = body.mode || 'append'; // append: 追加, replace: 覆盖, remove: 删除
     const newIPs = await cleanIPListAsync(body.pool || '');
     
-    if (!newIPs) {
+    if (!newIPs && mode !== 'remove') {
         return badRequest({ success: false, error: '没有有效IP' });
     }
     
     const existingPool = await env.IP_DATA.get(poolKey) || '';
     const existingMap = new Map();
     
-    // 先加载现有的IP（用IP:PORT作为key）
-    existingPool.split('\n').forEach(line => {
-        if (line.trim()) {
-            const key = line.split('#')[0].trim();
-            existingMap.set(key, line.trim());
-        }
+    // 先加载现有IP
+    parsePoolList(existingPool).forEach(line => {
+        const key = extractIPKey(line);
+        if (key) existingMap.set(key, line);
     });
     
     const existingCount = existingMap.size;
     
-    // 添加新IP（后面的覆盖前面的）
-    newIPs.split('\n').forEach(line => {
-        if (line.trim()) {
-            const key = line.split('#')[0].trim();
-            existingMap.set(key, line.trim());
+    if (mode === 'replace') {
+        // 覆盖模式：清空现有，只保留新IP
+        existingMap.clear();
+        parsePoolList(newIPs).forEach(line => {
+            const key = extractIPKey(line);
+            if (key) existingMap.set(key, line);
+        });
+        
+        const finalPool = Array.from(existingMap.values()).join('\n');
+        await env.IP_DATA.put(poolKey, finalPool);
+        
+        return jsonResponse({
+            success: true,
+            count: existingMap.size,
+            replaced: existingCount,
+            message: `已覆盖，原有 ${existingCount} 个IP，现有 ${existingMap.size} 个IP`
+        });
+    } else if (mode === 'remove') {
+        // 删除模式：从池中删除指定IP
+        const toRemove = new Set();
+        parsePoolList(newIPs || body.pool || '').forEach(line => {
+            const key = extractIPKey(line);
+            if (key) toRemove.add(key);
+        });
+        
+        let removed = 0;
+        for (const key of toRemove) {
+            if (existingMap.has(key)) {
+                existingMap.delete(key);
+                removed++;
+            }
         }
-    });
-    
-    const finalPool = Array.from(existingMap.values()).join('\n');
-    await env.IP_DATA.put(poolKey, finalPool);
-    
-    return jsonResponse({
-        success: true,
-        count: existingMap.size,
-        added: existingMap.size - existingCount
-    });
+        
+        const finalPool = Array.from(existingMap.values()).join('\n');
+        await env.IP_DATA.put(poolKey, finalPool);
+        
+        return jsonResponse({
+            success: true,
+            count: existingMap.size,
+            removed,
+            message: `已删除 ${removed} 个IP，剩余 ${existingMap.size} 个IP`
+        });
+    } else {
+        // 追加模式
+        parsePoolList(newIPs).forEach(line => {
+            const key = extractIPKey(line);
+            if (key) existingMap.set(key, line);
+        });
+        
+        const finalPool = Array.from(existingMap.values()).join('\n');
+        await env.IP_DATA.put(poolKey, finalPool);
+        
+        return jsonResponse({
+            success: true,
+            count: existingMap.size,
+            added: existingMap.size - existingCount
+        });
+    }
 }
 
 async function handleLoadRemoteUrl(request) {
@@ -434,8 +421,7 @@ async function handleDeleteRecord(url) {
             return badRequest({ success: false, error: '获取记录失败' });
         }
         
-        let txtContent = record.content.replace(/^"|"$/g, '');
-        let ips = txtContent.split(',').map(i => i.trim()).filter(i => i);
+        let ips = parseTXTContent(record.content);
         
         // 移除指定IP
         ips = ips.filter(i => i !== ip);
@@ -490,8 +476,7 @@ async function handleAddARecord(request) {
         
         if (records && records.length > 0) {
             recordId = records[0].id;
-            let txtContent = records[0].content.replace(/^"|"$/g, '');
-            currentIPs = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
+            currentIPs = parseTXTContent(records[0].content);
         }
         
         // 检查是否已存在
@@ -612,13 +597,7 @@ async function handleDeletePool(url, env) {
     // 保护系统池
     const protectedPools = ['pool', 'domain_pool_mapping', 'pool_trash'];
     if (protectedPools.includes(poolKey)) {
-        const displayName = poolKey === 'pool' ? '通用池' : 
-                           poolKey === 'pool_trash' ? '垃圾桶' : 
-                           '系统数据';
-        return badRequest({ 
-            success: false, 
-            error: `不能删除${displayName}` 
-        });
+        return badRequest({ success: false, error: `不能删除${getPoolDisplayName(poolKey)}` });
     }
     
     await env.IP_DATA.delete(poolKey);
@@ -644,15 +623,7 @@ async function handleRestoreFromTrash(request, env) {
     }
     
     // 获取垃圾桶
-    const trashRaw = await env.IP_DATA.get('pool_trash') || '';
-    let trashList = trashRaw.split('\n').filter(l => l.trim());
-
-    // 源池映射（用于“恢复到源IP库”）
-    let domainToPool = {};
-    if (restoreToSource) {
-        const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
-        domainToPool = safeJSONParse(mappingJson, {}) || {};
-    }
+    let trashList = parsePoolList(await env.IP_DATA.get('pool_trash'));
     
     let restored = 0;
     const restoredByPool = {};
@@ -661,22 +632,25 @@ async function handleRestoreFromTrash(request, env) {
     const poolCache = new Map(); // poolKey -> { list: string[], set: Set<string> }
     async function loadPool(poolKey) {
         if (poolCache.has(poolKey)) return poolCache.get(poolKey);
-        const raw = await env.IP_DATA.get(poolKey) || '';
-        const list = raw.split('\n').filter(l => l.trim());
-        const set = new Set(list.map(p => p.split('#')[0].trim()));
+        const list = parsePoolList(await env.IP_DATA.get(poolKey));
+        const set = new Set(list.map(p => extractIPKey(p)));
         const obj = { list, set };
         poolCache.set(poolKey, obj);
         return obj;
     }
 
+    // 从垃圾桶条目中提取来源池
     function pickTargetPoolFromTrashEntry(trashEntry) {
         if (!restoreToSource) return targetPool;
-        // trashEntry 格式：`${ipAddr} # ${reason} ${timestamp}${domain ? ' 来自 ' + domain : ''}`
+        // trashEntry 格式：`${ipAddr} # ${reason} ${timestamp} 来自 ${poolKey}`
+        // 例如：`1.2.3.4:443 # 洗库失效 2024-01-01T00:00:00.000Z 来自 pool_a`
         const idx = trashEntry.lastIndexOf(' 来自 ');
         if (idx !== -1) {
-            const domain = trashEntry.slice(idx + 4).trim();
-            const mapped = domainToPool[domain];
-            if (mapped && typeof mapped === 'string') return mapped;
+            const sourcePool = trashEntry.slice(idx + 4).trim();
+            // 直接返回来源池名（如 pool_a），不需要通过域名映射
+            if (sourcePool && sourcePool.startsWith('pool')) {
+                return sourcePool;
+            }
         }
         return 'pool';
     }
@@ -684,18 +658,18 @@ async function handleRestoreFromTrash(request, env) {
     // 恢复IP
     for (const ip of ipsToRestore) {
         // 从垃圾桶查找完整条目
-        const trashEntry = trashList.find(t => t.split('#')[0].trim() === ip);
+        const trashEntry = trashList.find(t => extractIPKey(t) === ip);
         
         if (trashEntry) {
             // 从垃圾桶移除
-            trashList = trashList.filter(t => t.split('#')[0].trim() !== ip);
+            trashList = trashList.filter(t => extractIPKey(t) !== ip);
 
             const toPool = pickTargetPoolFromTrashEntry(trashEntry);
             const poolObj = await loadPool(toPool);
 
-            // 添加到目标池（如果不存在）
+            // 添加到目标池（如果不存在）- 只恢复纯净的IP:PORT，不携带垃圾桶注释
             if (!poolObj.set.has(ip)) {
-                poolObj.list.push(trashEntry); // 恢复完整条目（包含注释）
+                poolObj.list.push(ip); // 只恢复IP:PORT，不带垃圾桶的注释信息
                 poolObj.set.add(ip);
                 restored++;
                 restoredByPool[toPool] = (restoredByPool[toPool] || 0) + 1;
@@ -718,8 +692,6 @@ async function handleRestoreFromTrash(request, env) {
             : `已恢复 ${restored} 个IP到 ${targetPool}`
     });
 }
-
-// ========== 核心函数  ==========
 
 function parseDomainPort(input, defaultPort = '443') {
     if (!input) return { domain: '', port: defaultPort };
@@ -782,10 +754,11 @@ function initConfig(env, request = null) {
     
     CONFIG.tgToken = env.TG_TOKEN || '';
     CONFIG.tgId = env.TG_ID || '';
-    CONFIG.checkApi = env.CHECK_API || 'https://check.proxyip.cmliussss.net/check?proxyip=';
-    CONFIG.dohApi = env.DOH_API || 'https://cloudflare-dns.com/dns-query';
+    CONFIG.checkApi = env.CHECK_API || DEFAULT_CONFIG.checkApi;
+    CONFIG.checkApiToken = env.CHECK_API_TOKEN || '';
+    CONFIG.dohApi = env.DOH_API || DEFAULT_CONFIG.dohApi;
     CONFIG.ipInfoEnabled = env.IP_INFO_ENABLED === 'true';
-    CONFIG.ipInfoApi = env.IP_INFO_API || 'http://ip-api.com/json';
+    CONFIG.ipInfoApi = env.IP_INFO_API || DEFAULT_CONFIG.ipInfoApi;
     
     if (request) {
         const url = new URL(request.url);
@@ -793,16 +766,17 @@ function initConfig(env, request = null) {
     }
 }
 
-// ========== 垃圾桶辅助函数 ==========
-async function addToTrash(env, ipAddr, reason, domain) {
+// 添加IP到垃圾桶，记录来源池（poolKey）而非域名
+async function addToTrash(env, ipAddr, reason, poolKey) {
     const trashKey = 'pool_trash';
-    let trashRaw = await env.IP_DATA.get(trashKey) || '';
-    let trashList = trashRaw.split('\n').filter(l => l.trim());
-    const trashIPSet = new Set(trashList.map(t => t.split('#')[0].trim()));
+    let trashList = parsePoolList(await env.IP_DATA.get(trashKey));
+    const trashIPSet = new Set(trashList.map(t => extractIPKey(t)));
     
     if (!trashIPSet.has(ipAddr)) {
-        const timestamp = new Date().toISOString();
-        const trashEntry = `${ipAddr} # ${reason} ${timestamp}${domain ? ' 来自 ' + domain : ''}`;
+        // 使用上海时区格式化时间
+        const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        // 格式：IP:PORT # 原因 时间戳 来自 池名
+        const trashEntry = `${ipAddr} # ${reason} ${timestamp}${poolKey ? ' 来自 ' + poolKey : ''}`;
         trashList.push(trashEntry);
         
         // 限制垃圾桶大小
@@ -816,26 +790,6 @@ async function addToTrash(env, ipAddr, reason, domain) {
     return false;
 }
 
-// ========== IP归属地批量查询 ==========
-async function batchGetIPInfo(ipAddresses) {
-    if (!CONFIG.ipInfoEnabled || !ipAddresses || ipAddresses.length === 0) {
-        return new Map();
-    }
-    
-    const ipInfoMap = new Map();
-    const promises = ipAddresses.map(async (addr) => {
-        const ipOnly = addr.split(':')[0];
-        const info = await getIPInfo(ipOnly);
-        if (info) {
-            ipInfoMap.set(ipOnly, info);
-        }
-    });
-    
-    await Promise.all(promises);
-    return ipInfoMap;
-}
-
-// IP清洗逻辑
 function parseIPLine(line) {
     line = line.trim();
     if (!line || line.startsWith('#')) return null;
@@ -879,24 +833,7 @@ function parseIPLine(line) {
     return null;
 }
 
-function cleanIPList(text) {
-    if (!text) return '';
-    const map = new Map(); // key: ip:port, value: 完整格式（含注释）
-    
-    text.split('\n').forEach(line => {
-        const parsed = parseIPLine(line);
-        if (parsed) {
-            // 提取 IP:PORT 作为key
-            const key = parsed.split('#')[0].trim();
-            // 完整格式作为value，后面的覆盖前面的
-            map.set(key, parsed);
-        }
-    });
-    
-    return Array.from(map.values()).join('\n');
-}
-
-async function cleanIPListAsync(text) {
+async function cleanIPListAsync(text, resolveDomains = true) {
     if (!text) return '';
     const map = new Map();
     const lines = text.split('\n');
@@ -933,7 +870,7 @@ async function cleanIPListAsync(text) {
                 }
                 continue;
             } catch (e) {
-                console.error(`Failed to resolve ${domain}:`, e);
+                console.error(`❌ 域名解析失败 ${domain}:`, e);
                 continue;
             }
         }
@@ -941,7 +878,7 @@ async function cleanIPListAsync(text) {
         // IP格式
         const parsed = parseIPLine(line);
         if (parsed) {
-            const key = parsed.split('#')[0].trim();
+            const key = extractIPKey(parsed);
             map.set(key, parsed);
         }
     }
@@ -956,10 +893,10 @@ async function loadFromRemoteUrl(url) {
         });
         if (r.ok) {
             const text = await r.text();
-            return cleanIPList(text);
+            return await cleanIPListAsync(text, false); // 不解析域名，只清洗IP格式
         }
     } catch (e) {
-        console.error(`Failed to load from ${url}:`, e);
+        console.error(`❌ 远程加载失败 ${url}:`, e);
     }
     return '';
 }
@@ -973,7 +910,7 @@ async function resolveDomain(domain) {
         const d = await r.json();
         return d.Answer ? d.Answer.map(a => a.data) : [];
     } catch (e) {
-        console.error('DNS A resolution failed:', e);
+        console.error('❌ DNS A记录解析失败:', e);
         return [];
     }
 }
@@ -997,7 +934,7 @@ async function resolveTXTRecord(domain) {
         
         return { raw, ips };
     } catch (e) {
-        console.error('DNS TXT resolution failed:', e);
+        console.error('❌ DNS TXT记录解析失败:', e);
         return { raw: '', ips: [] };
     }
 }
@@ -1025,10 +962,34 @@ async function getIPInfo(ip) {
             };
         }
     } catch (e) {
-        console.error(`IP信息查询失败 ${ip}:`, e);
+        console.error(`❌ IP信息查询失败 ${ip}:`, e);
     }
     
     return null;
+}
+
+// 批量检测IP列表，可选查询归属地
+async function batchCheckIPs(ipList, checkFn = checkProxyIP, withIPInfo = false) {
+    if (!ipList || ipList.length === 0) return [];
+
+    const checkResults = await Promise.all(ipList.map(addr => checkFn(addr)));
+
+    let ipInfoMap = new Map();
+    if (withIPInfo && CONFIG.ipInfoEnabled) {
+        await Promise.all(ipList.map(async (addr) => {
+            const ipOnly = addr.split(':')[0];
+            const info = await getIPInfo(ipOnly);
+            if (info) ipInfoMap.set(ipOnly, info);
+        }));
+    }
+
+    return checkResults.map((result, i) => ({
+        address: ipList[i],
+        success: result.success,
+        colo: result.colo || 'N/A',
+        time: result.responseTime || '-',
+        ipInfo: withIPInfo ? (ipInfoMap.get(ipList[i].split(':')[0]) || null) : null
+    }));
 }
 
 async function getDomainStatus(target) {
@@ -1048,21 +1009,18 @@ async function getDomainStatus(target) {
             return result;
         }
         if (records) {
-            const checkPromises = records.map(r => checkProxyIP(`${r.content}:${target.port}`));
-            const checkResults = await Promise.all(checkPromises);
-            
-            // 批量查询IP归属地
-            const ipAddresses = records.map(r => r.content);
-            const ipInfoMap = await batchGetIPInfo(ipAddresses);
+            // 使用批量检测流程
+            const ipList = records.map(r => `${r.content}:${target.port}`);
+            const checkResults = await batchCheckIPs(ipList, checkProxyIP, CONFIG.ipInfoEnabled);
             
             result.aRecords = records.map((r, i) => ({
                 id: r.id,
                 ip: r.content,
                 port: target.port,
                 success: checkResults[i].success,
-                colo: checkResults[i].colo || 'N/A',
-                time: checkResults[i].responseTime || '-',
-                ipInfo: ipInfoMap.get(r.content) || null
+                colo: checkResults[i].colo,
+                time: checkResults[i].time,
+                ipInfo: checkResults[i].ipInfo
             }));
         }
     }
@@ -1074,22 +1032,17 @@ async function getDomainStatus(target) {
             return result;
         }
         if (records && records.length > 0) {
-            let txtContent = records[0].content;
-            txtContent = txtContent.replace(/^"|"$/g, '');
-            const ips = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
+            const ips = parseTXTContent(records[0].content);
             
-            const checkPromises = ips.map(addr => checkProxyIP(addr));
-            const checkResults = await Promise.all(checkPromises);
+            // 使用批量检测流程
+            const checkResults = await batchCheckIPs(ips, checkProxyIP, CONFIG.ipInfoEnabled);
             
-            // 批量查询IP归属地
-            const ipInfoMap = await batchGetIPInfo(ips);
-            
-            const txtChecks = ips.map((addr, i) => ({
-                ip: addr,
-                success: checkResults[i].success,
-                colo: checkResults[i].colo || 'N/A',
-                time: checkResults[i].responseTime || '-',
-                ipInfo: ipInfoMap.get(addr.split(':')[0]) || null
+            const txtChecks = checkResults.map(result => ({
+                ip: result.address,
+                success: result.success,
+                colo: result.colo,
+                time: result.time,
+                ipInfo: result.ipInfo
             }));
             
             result.txtRecords = [{
@@ -1102,27 +1055,62 @@ async function getDomainStatus(target) {
     return result;
 }
 
+// 单次检测IP（不带重试）
+async function checkProxyIPOnce(addr) {
+    try {
+        let apiUrl = `${CONFIG.checkApi}${encodeURIComponent(addr)}`;
+        if (CONFIG.checkApiToken) {
+            apiUrl += `${apiUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(CONFIG.checkApiToken)}`;
+        }
+        
+        const r = await fetch(apiUrl, { signal: AbortSignal.timeout(GLOBAL_SETTINGS.CHECK_TIMEOUT) });
+        if (!r.ok) return { success: false };
+        
+        const data = safeJSONParse(await r.text(), null);
+        return data && typeof data === 'object' ? data : { success: false };
+    } catch {
+        return { success: false };
+    }
+}
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 async function checkProxyIP(input) {
     let addr = input.trim();
     
-    if (!addr.includes(':')) {
-        addr = `${addr}:443`;
+    // 智能添加默认端口443
+    // IPv6 格式: [2001:db8::1] 或 [2001:db8::1]:443
+    // IPv4 格式: 1.2.3.4 或 1.2.3.4:443
+    if (addr.startsWith('[')) {
+        // IPv6 地址
+        if (!addr.includes(']:')) {
+            addr = addr.endsWith(']') ? `${addr}:443` : `${addr}]:443`;
+        }
+    } else if (!addr.includes(':') || (addr.match(/:/g) || []).length > 1) {
+        // IPv4 无端口，或者是裸 IPv6（无方括号）
+        if ((addr.match(/:/g) || []).length > 1) {
+            addr = `[${addr}]:443`;
+        } else {
+            addr = `${addr}:443`;
+        }
     }
     
-    try {
-        const r = await fetch(`${CONFIG.checkApi}${encodeURIComponent(addr)}`, {
-            signal: AbortSignal.timeout(GLOBAL_SETTINGS.CHECK_TIMEOUT)
-        });
-        if (!r.ok) {
-            return { success: false };
+    // 带重试的检测逻辑
+    const maxRetries = GLOBAL_SETTINGS.CHECK_RETRY_COUNT || 2;
+    const retryDelay = GLOBAL_SETTINGS.CHECK_RETRY_DELAY || 1000;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const result = await checkProxyIPOnce(addr);
+        if (result.success) {
+            return result;
         }
-        // 兼容：检测服务偶发返回非JSON时，避免抛错打断批量检测
-        const text = await r.text();
-        const data = safeJSONParse(text, null);
-        return data && typeof data === 'object' ? data : { success: false };
-    } catch (e) {
-        return { success: false };
+        // 如果不是最后一次尝试，等待后重试
+        if (attempt < maxRetries) {
+            await delay(retryDelay);
+        }
     }
+    
+    return { success: false };
 }
 
 async function fetchCF(path, method = 'GET', body = null) {
@@ -1170,25 +1158,6 @@ async function fetchCF(path, method = 'GET', body = null) {
     }
 }
 
-// ========== 维护相关函数 ==========
-async function loadDomainPoolMapping(env) {
-    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
-    return safeJSONParse(mappingJson, {}) || {};
-}
-
-function getPoolKeyForDomain(mapping, domain) {
-    return (mapping && mapping[domain]) ? mapping[domain] : 'pool';
-}
-
-async function updatePoolInKV(env, poolKey, poolList) {
-    await env.IP_DATA.put(poolKey, poolList.join('\n'));
-}
-
-function removeFromPoolListByKey(poolList, ipPortKey) {
-    // ipPortKey: "IP:PORT"
-    return poolList.filter(p => p.split('#')[0].trim() !== ipPortKey);
-}
-
 async function getCandidateIPs(env, target, addLog, poolKey) {
     const pool = await env.IP_DATA.get(poolKey) || '';
     
@@ -1197,13 +1166,13 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
         return [];
     }
     
-    let candidates = pool.split('\n').filter(l => l.trim());
+    let candidates = parsePoolList(pool);
     
     // TXT模式不过滤端口，A模式才过滤
     if (target.mode === 'A') {
         candidates = candidates.filter(l => {
             // 提取IP:PORT部分（去除注释）
-            const ipPort = l.split('#')[0].trim();
+            const ipPort = extractIPKey(l);
             const parts = ipPort.split(':');
             if (parts.length >= 2) {
                 return parts[1] === target.port;
@@ -1216,57 +1185,97 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
     return candidates;
 }
 
-async function refillFromPoolCandidates(options) {
+async function maintainRecordsCommon(options) {
     const {
         env,
         target,
         addLog,
         report,
         poolKey,
-        poolList,
         checkFn,
-        candidates,
-        getCount,
-        minActive,
-        shouldSkipCandidate,
-        onValidCandidate,
-        onInvalidCandidate
+        recordType,
+        getCurrentIPs,
+        deleteRecord,
+        addRecord,
+        shouldSkipCandidate
     } = options;
 
-    let list = poolList;
+    const currentIPs = getCurrentIPs();
+    let poolList = parsePoolList(await env.IP_DATA.get(poolKey));
+    report.poolKeyUsed = poolKey;
+
+    let validIPs = [];
     let poolModified = false;
 
-    for (const item of candidates) {
-        if (getCount() >= minActive) break;
+    // 检测现有IP
+    for (const item of currentIPs) {
+        const checkResult = await checkFn(item.addr);
 
-        const ipPort = item.split('#')[0].trim();
-        if (!ipPort) continue;
+        report.checkDetails.push({
+            ip: item.addr,
+            status: checkResult.success ? '✅ 活跃' : '❌ 失效',
+            colo: checkResult.colo || 'N/A',
+            time: checkResult.responseTime || '-'
+        });
 
-        if (shouldSkipCandidate && shouldSkipCandidate(ipPort, item)) {
-            continue;
-        }
-
-        const checkResult = await checkFn(ipPort);
-        if (checkResult && checkResult.success) {
-            await onValidCandidate(ipPort, checkResult, item);
+        if (checkResult.success) {
+            validIPs.push(item.ip);
+            addLog(`  ✅ ${item.addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
         } else {
-            list = removeFromPoolListByKey(list, ipPort);
+            report.removed.push({ ip: item.addr, reason: '检测失效' });
+            await deleteRecord(item.id);
+
+            poolList = poolList.filter(p => extractIPKey(p) !== item.addr);
             report.poolRemoved++;
             poolModified = true;
-            if (onInvalidCandidate) {
-                await onInvalidCandidate(ipPort, item, checkResult);
-            } else {
-                await addToTrash(env, ipPort, '检测失败于', '');
-            }
+
+            // 传递池名（poolKey）而非域名，以便恢复时能正确回到原池
+            await addToTrash(env, item.addr, '维护失效', poolKey);
+            addLog(`  ❌ ${item.addr} - 失效已删除，已放入垃圾桶`);
         }
     }
 
-    if (getCount() < minActive) {
-        report.poolExhausted = true;
-        addLog(`⚠️ ${poolKey} 库存不足，无法达到最小活跃数 ${minActive}`);
+    report.beforeActive = validIPs.length;
+
+    // 补充IP
+    if (validIPs.length < target.minActive) {
+        addLog(`需补充: ${target.minActive - validIPs.length} 个`);
+        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
+
+        for (const item of candidates) {
+            if (validIPs.length >= target.minActive) break;
+            const ipPort = extractIPKey(item);
+            if (!ipPort || shouldSkipCandidate(ipPort, validIPs)) continue;
+
+            const checkResult = await checkFn(ipPort);
+            if (checkResult && checkResult.success) {
+                const ip = ipPort.split(':')[0];
+                await addRecord(ip);
+                validIPs.push(ip);
+                report.added.push({ ip: ipPort, colo: checkResult.colo || 'N/A', time: checkResult.responseTime || '-' });
+                addLog(`  ✅ ${ipPort} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
+            } else {
+                poolList = poolList.filter(p => extractIPKey(p) !== ipPort);
+                report.poolRemoved++;
+                poolModified = true;
+                // 传递池名（poolKey）以便恢复时能正确回到原池
+                await addToTrash(env, ipPort, '补充检测失败', poolKey);
+                addLog(`  ❌ ${ipPort} - 检测失败，从池中移除并放入垃圾桶`);
+            }
+        }
+
+        if (validIPs.length < target.minActive) {
+            report.poolExhausted = true;
+            addLog(`⚠️ ${poolKey} 库存不足，无法达到最小活跃数 ${target.minActive}`);
+        }
     }
 
-    return { poolList: list, poolModified };
+    if (poolModified) {
+        await env.IP_DATA.put(poolKey, poolList.join('\n'));
+    }
+
+    report.poolAfterCount = poolList.length;
+    report.afterActive = validIPs.length;
 }
 
 async function maintainARecords(env, target, addLog, report, poolKey, checkFn = checkProxyIP) {
@@ -1282,94 +1291,34 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn = 
     
     addLog(`当前A记录: ${records.length} 条`);
     
-    let poolRaw = await env.IP_DATA.get(poolKey) || '';
-    let poolList = poolRaw.split('\n').filter(l => l.trim());
-    report.poolKeyUsed = poolKey;
-    
-    let activeIPs = [];
-    let poolModified = false;
-    
-    for (const r of records) {
-        const addr = `${r.content}:${target.port}`;
-        const checkResult = await checkFn(addr);
-        
-        report.checkDetails.push({
-            ip: addr,
-            status: checkResult.success ? '✅ 活跃' : '❌ 失效',
-            colo: checkResult.colo || 'N/A',
-            time: checkResult.responseTime || '-'
-        });
-        
-        if (checkResult.success) {
-            activeIPs.push(r.content);
-            addLog(`  ✅ ${addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
-        } else {
-            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${r.id}`, 'DELETE');
-            report.removed.push({ ip: r.content, reason: '检测失效' });
-            
-            poolList = removeFromPoolListByKey(poolList, addr);
-            report.poolRemoved++;
-            poolModified = true;
-            
-            await addToTrash(env, addr, '失效于', target.domain);
-            
-            addLog(`  ❌ ${addr} - 失效已删除，已放入垃圾桶`);
+    // 使用通用维护逻辑
+    await maintainRecordsCommon({
+        env,
+        target,
+        addLog,
+        report,
+        poolKey,
+        checkFn,
+        recordType: 'A',
+        getCurrentIPs: () => records.map(r => ({ id: r.id, addr: `${r.content}:${target.port}`, ip: r.content })),
+        deleteRecord: async (id) => {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${id}`, 'DELETE');
+        },
+        addRecord: async (ip) => {
+            await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
+                type: 'A',
+                name: target.domain,
+                content: ip,
+                ttl: 60,
+                proxied: false
+            });
+        },
+        shouldSkipCandidate: (ipPort, activeList) => {
+            const [ip, port] = ipPort.split(':');
+            if (port !== target.port) return true;
+            return activeList.includes(ip);
         }
-    }
-    
-    report.beforeActive = activeIPs.length;
-    
-    if (activeIPs.length < target.minActive) {
-        addLog(`需补充: ${target.minActive - activeIPs.length} 个`);
-        
-        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
-        const refillResult = await refillFromPoolCandidates({
-            env,
-            target,
-            addLog,
-            report,
-            poolKey,
-            poolList,
-            checkFn,
-            candidates,
-            getCount: () => activeIPs.length,
-            minActive: target.minActive,
-            shouldSkipCandidate: (ipPort) => {
-                const [ip, port] = ipPort.split(':');
-                if (port !== target.port) return true;
-                return activeIPs.includes(ip);
-            },
-            onValidCandidate: async (ipPort, checkResult) => {
-                const [ip] = ipPort.split(':');
-                await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
-                    type: 'A',
-                    name: target.domain,
-                    content: ip,
-                    ttl: 60,
-                    proxied: false
-                });
-                activeIPs.push(ip);
-                report.added.push({
-                    ip: ip,
-                    colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-'
-                });
-                addLog(`  ✅ ${ipPort} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
-            },
-            onInvalidCandidate: async (ipPort) => {
-                await addToTrash(env, ipPort, '检测失败于', '');
-            }
-        });
-        poolList = refillResult.poolList;
-        if (refillResult.poolModified) poolModified = true;
-    }
-    
-    if (poolModified) {
-        await updatePoolInKV(env, poolKey, poolList);
-    }
-    
-    report.poolAfterCount = poolList.length;
-    report.afterActive = activeIPs.length;
+    });
 }
 
 async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn = checkProxyIP) {
@@ -1388,88 +1337,40 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn 
     
     if (records && records.length > 0) {
         recordId = records[0].id;
-        let txtContent = records[0].content;
-        txtContent = txtContent.replace(/^"|"$/g, '');
-        currentIPs = txtContent.split(',').map(ip => ip.trim()).filter(ip => ip);
+        currentIPs = parseTXTContent(records[0].content);
         addLog(`当前TXT: ${currentIPs.length} 个IP`);
     }
     
-    let poolRaw = await env.IP_DATA.get(poolKey) || '';
-    let poolList = poolRaw.split('\n').filter(l => l.trim());
-    report.poolKeyUsed = poolKey;
+    // 记录原始内容用于后续比较
+    const originalIPs = [...currentIPs];
     
-    let validIPs = [];
-    let poolModified = false;
+    // 使用通用维护逻辑（TXT模式：deleteRecord/addRecord 为空操作，最后统一更新）
+    await maintainRecordsCommon({
+        env,
+        target,
+        addLog,
+        report,
+        poolKey,
+        checkFn,
+        recordType: 'TXT',
+        getCurrentIPs: () => currentIPs.map(addr => ({ id: recordId, addr, ip: addr })),
+        deleteRecord: async () => { /* TXT模式延迟到最后统一更新 */ },
+        addRecord: async () => { /* TXT模式延迟到最后统一更新 */ },
+        shouldSkipCandidate: (ipPort, activeList) => activeList.includes(ipPort)
+    });
     
-    for (const addr of currentIPs) {
-        const checkResult = await checkFn(addr);
-        
-        report.checkDetails.push({
-            ip: addr,
-            status: checkResult.success ? '✅ 活跃' : '❌ 失效',
-            colo: checkResult.colo || 'N/A',
-            time: checkResult.responseTime || '-'
-        });
-        
-        if (checkResult.success) {
-            validIPs.push(addr);
-            addLog(`  ✅ ${addr} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
-        } else {
-            report.removed.push({ ip: addr, reason: '检测失效' });
-            
-            poolList = removeFromPoolListByKey(poolList, addr);
-            report.poolRemoved++;
-            poolModified = true;
-            
-            await addToTrash(env, addr, '失效于', target.domain);
-            
-            addLog(`  ❌ ${addr} - 失效已删除，已放入垃圾桶`);
-        }
-    }
+    // 从report中提取最终有效IP列表
+    // 现有IP中有效的 = 原始IP - 被移除的IP
+    const removedSet = new Set(report.removed.map(r => r.ip));
+    const survivedIPs = originalIPs.filter(ip => !removedSet.has(ip));
+    // 新增的IP
+    const addedIPs = report.added.map(a => a.ip);
+    // 最终有效IP列表
+    const finalValidIPs = [...survivedIPs, ...addedIPs];
     
-    report.beforeActive = validIPs.length;
-    
-    if (validIPs.length < target.minActive) {
-        addLog(`需补充: ${target.minActive - validIPs.length} 个`);
-        
-        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
-        const refillResult = await refillFromPoolCandidates({
-            env,
-            target,
-            addLog,
-            report,
-            poolKey,
-            poolList,
-            checkFn,
-            candidates,
-            getCount: () => validIPs.length,
-            minActive: target.minActive,
-            shouldSkipCandidate: (ipPort) => validIPs.includes(ipPort),
-            onValidCandidate: async (ipPort, checkResult) => {
-                validIPs.push(ipPort);
-                report.added.push({
-                    ip: ipPort,
-                    colo: checkResult.colo || 'N/A',
-                    time: checkResult.responseTime || '-'
-                });
-                addLog(`  ✅ ${ipPort} - ${checkResult.colo} (${checkResult.responseTime}ms)`);
-            },
-            onInvalidCandidate: async (ipPort) => {
-                await addToTrash(env, ipPort, '检测失败于', '');
-                addLog(`  ❌ ${ipPort} - 检测失败，从池中移除并放入垃圾桶`);
-            }
-        });
-        poolList = refillResult.poolList;
-        if (refillResult.poolModified) poolModified = true;
-    }
-    
-    if (poolModified) {
-        await updatePoolInKV(env, poolKey, poolList);
-    }
-    
-    report.poolAfterCount = poolList.length;
-    const newContent = validIPs.length > 0 ? `"${validIPs.join(',')}"` : '';
-    const currentContent = currentIPs.length > 0 ? `"${currentIPs.join(',')}"` : '';
+    // TXT记录特殊处理：统一更新
+    const newContent = finalValidIPs.length > 0 ? `"${finalValidIPs.join(',')}"` : '';
+    const currentContent = originalIPs.length > 0 ? `"${originalIPs.join(',')}"` : '';
     
     if (newContent !== currentContent) {
         if (newContent === '' && recordId) {
@@ -1478,26 +1379,18 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn 
         } else if (newContent !== '') {
             if (recordId) {
                 await fetchCF(`/zones/${CONFIG.zoneId}/dns_records/${recordId}`, 'PUT', {
-                    type: 'TXT',
-                    name: target.domain,
-                    content: newContent,
-                    ttl: 60
+                    type: 'TXT', name: target.domain, content: newContent, ttl: 60
                 });
                 addLog(`📝 TXT已更新`);
             } else {
                 await fetchCF(`/zones/${CONFIG.zoneId}/dns_records`, 'POST', {
-                    type: 'TXT',
-                    name: target.domain,
-                    content: newContent,
-                    ttl: 60
+                    type: 'TXT', name: target.domain, content: newContent, ttl: 60
                 });
                 addLog(`📝 TXT已创建`);
             }
         }
         report.txtUpdated = true;
     }
-    
-    report.afterActive = validIPs.length;
 }
 
 async function maintainAllDomains(env, isManual = false) {
@@ -1505,7 +1398,9 @@ async function maintainAllDomains(env, isManual = false) {
     const startTime = Date.now();
     
     const poolStats = new Map();
-    const domainPoolMapping = await loadDomainPoolMapping(env);
+    // 内联 loadDomainPoolMapping
+    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
+    const domainPoolMapping = safeJSONParse(mappingJson, {}) || {};
 
     // 单次维护任务内缓存 proxyip 检测结果，减少重复外部请求（不改变结果，仅减少请求次数）
     const checkCache = new Map();
@@ -1527,7 +1422,7 @@ async function maintainAllDomains(env, isManual = false) {
     for (const key of allKeys.keys) {
         if (key.name.startsWith('pool')) {
             const poolRaw = await env.IP_DATA.get(key.name) || '';
-            const count = poolRaw ? poolRaw.split('\n').filter(l => l.trim()).length : 0;
+            const count = parsePoolList(poolRaw).length;
             poolStats.set(key.name, { before: count, after: count });
         }
     }
@@ -1559,7 +1454,8 @@ async function maintainAllDomains(env, isManual = false) {
         };
         
         addLog(`🚀 开始维护: ${target.domain}`);
-        const poolKey = getPoolKeyForDomain(domainPoolMapping, target.domain);
+        // 内联 getPoolKeyForDomain
+        const poolKey = (domainPoolMapping && domainPoolMapping[target.domain]) ? domainPoolMapping[target.domain] : 'pool';
         
         if (target.mode === 'A') {
             await maintainARecords(env, target, addLog, report, poolKey, checkProxyIPCached);
@@ -1631,24 +1527,25 @@ async function maintainAllDomains(env, isManual = false) {
     // 2. 检查是否有配置错误
     const hasConfigError = allReports.some(r => r.configError);
     
-    // 3. 检查是否有池枯竭（维护后变为0）
+    // 3. 统计枯竭的池（仅用于报告展示，不作为通知触发条件）
     const exhaustedPools = [];
     for (const [poolKey, stats] of poolStats) {
-        // 垃圾桶/系统数据池不参与“枯竭”判断
+        // 垃圾桶/系统数据池不参与"枯竭"判断
         if (poolKey === 'pool_trash' || poolKey === 'domain_pool_mapping') continue;
         if (stats.after === 0 && stats.before > 0) {
             exhaustedPools.push(poolKey);
         }
     }
-    const hasPoolExhausted = exhaustedPools.length > 0;
     
-    // 4. 检查是否有域名活跃数不足且池已耗尽
+    // 4. 检查是否有域名活跃数不足且无法补充IP
+    // 注：poolExhausted 表示候选IP不足（包括池枯竭、端口不匹配等情况）
     const hasInsufficientActive = allReports.some(r => 
         r.afterActive < r.minActive && r.poolExhausted
     );
     
-    // 通知条件：手动执行 OR IP变化 OR 池枯竭 OR 活跃数不足 OR 配置错误
-    const shouldNotify = isManual || hasIPChanges || hasPoolExhausted || hasInsufficientActive || hasConfigError;
+    // 通知条件：手动执行 OR IP变化 OR 活跃数不足 OR 配置错误
+    // 注：移除了 hasPoolExhausted，因为 hasInsufficientActive 已涵盖"无法补充IP"的场景
+    const shouldNotify = isManual || hasIPChanges || hasInsufficientActive || hasConfigError;
     
     let tgResult = { sent: false, reason: 'no_need' };
     if (shouldNotify) {
@@ -1668,8 +1565,41 @@ async function maintainAllDomains(env, isManual = false) {
     };
 }
 
+function formatIPInfoStr(ipInfoMap, ip) {
+    const ipOnly = ip.split(':')[0];
+    const info = ipInfoMap.get(ipOnly);
+    if (!info) return '';
+    let s = ` · ${info.country}`;
+    if (info.asn) s += ` · ${info.asn}`;
+    if (info.isp) s += ` · ${info.isp}`;
+    return s;
+}
+
+function formatIPChanges(added, removed, ipInfoMap, port = '', minActive = 0, afterActive = 0) {
+    let msg = '';
+    if (added && added.length > 0) {
+        msg += `📈 新增 ${added.length} 个IP\n`;
+        added.forEach(item => {
+            const displayIP = item.ip.includes(':') ? item.ip : `${item.ip}:${port}`;
+            msg += `   ✅ <code>${displayIP}</code>\n`;
+            msg += `      ${item.colo} · ${item.time}ms${formatIPInfoStr(ipInfoMap, item.ip)}\n`;
+        });
+    }
+    if (removed && removed.length > 0) {
+        msg += `📉 移除 ${removed.length} 个IP\n`;
+        removed.forEach(item => {
+            msg += `   ❌ <code>${item.ip}</code>\n`;
+            msg += `      原因: ${item.reason}\n`;
+        });
+    }
+    if ((!added || added.length === 0) && (!removed || removed.length === 0)) {
+        msg += `✨ 所有IP正常，无变化\n`;
+    }
+    msg += `✅ 完成: ${afterActive}/${minActive}\n`;
+    return msg;
+}
+
 async function sendTG(reports, poolStats, isManual = false) {
-    // 检查配置
     if (!CONFIG.tgToken || !CONFIG.tgId) {
         console.log('📱 TG未配置，跳过通知');
         return { sent: false, reason: 'not_configured', message: 'TG未配置' };
@@ -1678,180 +1608,65 @@ async function sendTG(reports, poolStats, isManual = false) {
     const modeLabel = { 'A': 'A记录', 'TXT': 'TXT记录', 'ALL': '双模式' };
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
     
-    let msg = isManual 
-        ? `🔧 <b>DDNS 手动维护报告</b>\n`
-        : `⚙️ <b>DDNS 自动维护报告</b>\n`;
+    let msg = isManual ? `🔧 <b>DDNS 手动维护报告</b>\n` : `⚙️ <b>DDNS 自动维护报告</b>\n`;
+    msg += `━━━━━━━━━━━━━━━━━━\n⏰ ${timestamp}\n\n`;
     
-    msg += `━━━━━━━━━━━━━━━━━━\n`;
-    msg += `⏰ ${timestamp}\n\n`;
-    
-    // 检查配置错误
     const hasConfigError = reports.some(r => r.configError);
     if (hasConfigError) {
-        msg += `⚠️ <b>警告: 检测到配置错误</b>\n`;
-        msg += `请检查 CF_KEY, CF_ZONEID 是否正确配置\n\n`;
+        msg += `⚠️ <b>警告: 检测到配置错误</b>\n请检查 CF_KEY, CF_ZONEID 是否正确配置\n\n`;
     }
     
-    // 为TG通知批量查询IP归属地
+    // 收集所有IP用于批量查询归属地
     const allIPsForInfo = new Set();
-    reports.forEach(report => {
-        if (report.checkDetails) {
-            report.checkDetails.forEach(detail => {
-                const ipOnly = detail.ip.split(':')[0];
-                allIPsForInfo.add(ipOnly);
-            });
-        }
-        if (report.added) {
-            report.added.forEach(item => {
-                const ipOnly = item.ip.split(':')[0];
-                allIPsForInfo.add(ipOnly);
-            });
-        }
-        if (report.txtAdded) {
-            report.txtAdded.forEach(item => {
-                const ipOnly = item.ip.split(':')[0];
-                allIPsForInfo.add(ipOnly);
-            });
-        }
+    reports.forEach(r => {
+        (r.checkDetails || []).forEach(d => allIPsForInfo.add(d.ip.split(':')[0]));
+        (r.added || []).forEach(d => allIPsForInfo.add(d.ip.split(':')[0]));
+        (r.txtAdded || []).forEach(d => allIPsForInfo.add(d.ip.split(':')[0]));
     });
     
-    // 批量查询归属地
     const ipInfoMap = new Map();
     if (CONFIG.ipInfoEnabled && allIPsForInfo.size > 0) {
-        const ipInfoPromises = Array.from(allIPsForInfo).map(async ip => {
+        await Promise.all(Array.from(allIPsForInfo).map(async ip => {
             const info = await getIPInfo(ip);
             if (info) ipInfoMap.set(ip, info);
-        });
-        await Promise.all(ipInfoPromises);
+        }));
     }
     
     reports.forEach((report, index) => {
         if (index > 0) msg += `\n`;
-        
         msg += `━━ <code>${report.domain}</code> ━━\n`;
         msg += `${modeLabel[report.mode]}`;
-        if (report.mode === 'A' || report.mode === 'ALL') {
-            msg += ` · 端口 ${report.port}`;
-        }
+        if (report.mode === 'A' || report.mode === 'ALL') msg += ` · 端口 ${report.port}`;
         msg += ` · 最小活跃数 ${report.minActive}\n\n`;
         
         if (report.configError) {
             msg += `❌ <b>配置错误，无法获取记录</b>\n`;
-        } else {
-            if (report.checkDetails && report.checkDetails.length > 0) {
-                report.checkDetails.forEach(detail => {
-                    const statusIcon = detail.status.includes('✅') ? '✅' : '❌';
-                    msg += `${statusIcon} <code>${detail.ip}</code>\n`;
-                    
-                    let info = `   ${detail.colo} · ${detail.time}ms`;
-                    const ipOnly = detail.ip.split(':')[0];
-                    const ipInfo = ipInfoMap.get(ipOnly);
-                    if (ipInfo) {
-                        info += ` · ${ipInfo.country}`;
-                        if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
-                        if (ipInfo.isp) info += ` · ${ipInfo.isp}`;
-                    }
-                    msg += `${info}\n`;
-                });
-                msg += `\n`;
-            }
-            
-            if (report.mode === 'A' || report.mode === 'ALL') {
-                if (report.added.length > 0) {
-                    msg += `📈 新增 ${report.added.length} 个IP\n`;
-                    report.added.forEach(item => {
-                        const displayIP = item.ip.includes(':') ? item.ip : `${item.ip}:${report.port}`;
-                        msg += `   ✅ <code>${displayIP}</code>\n`;
-                        let info = `      ${item.colo} · ${item.time}ms`;
-                        const ipOnly = item.ip.split(':')[0];
-                        const ipInfo = ipInfoMap.get(ipOnly);
-                        if (ipInfo) {
-                            info += ` · ${ipInfo.country}`;
-                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
-                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
-                        }
-                        msg += `${info}\n`;
-                    });
-                }
-                
-                if (report.removed.length > 0) {
-                    msg += `📉 移除 ${report.removed.length} 个IP\n`;
-                    report.removed.forEach(item => {
-                        msg += `   ❌ <code>${item.ip}</code>\n`;
-                        msg += `      原因: ${item.reason}\n`;
-                    });
-                }
-                
-                if (report.added.length === 0 && report.removed.length === 0) {
-                    msg += `✨ 所有IP正常，无变化\n`;
-                }
-                msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
-            }
-            
-            if (report.mode === 'ALL' && report.txtActive !== undefined) {
-                msg += `\n<b>📝 TXT记录</b>\n`;
-                
-                if (report.txtAdded && report.txtAdded.length > 0) {
-                    msg += `📈 新增 ${report.txtAdded.length} 个IP\n`;
-                    report.txtAdded.forEach(item => {
-                        msg += `   ✅ <code>${item.ip}</code>\n`;
-                        let info = `      ${item.colo} · ${item.time}ms`;
-                        const ipOnly = item.ip.split(':')[0];
-                        const ipInfo = ipInfoMap.get(ipOnly);
-                        if (ipInfo) {
-                            info += ` · ${ipInfo.country}`;
-                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
-                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
-                        }
-                        msg += `${info}\n`;
-                    });
-                }
-                
-                if (report.txtRemoved && report.txtRemoved.length > 0) {
-                    msg += `📉 移除 ${report.txtRemoved.length} 个IP\n`;
-                    report.txtRemoved.forEach(item => {
-                        msg += `   ❌ <code>${item.ip}</code>\n`;
-                        msg += `      原因: ${item.reason}\n`;
-                    });
-                }
-                
-                if ((!report.txtAdded || report.txtAdded.length === 0) && 
-                    (!report.txtRemoved || report.txtRemoved.length === 0)) {
-                    msg += `✨ 所有IP正常，无变化\n`;
-                }
-                msg += `✅ 完成: ${report.txtActive}/${report.minActive}\n`;
-            }
-            
-            if (report.mode === 'TXT') {
-                if (report.added.length > 0) {
-                    msg += `📈 新增 ${report.added.length} 个IP\n`;
-                    report.added.forEach(item => {
-                        msg += `   ✅ <code>${item.ip}</code>\n`;
-                        let info = `      ${item.colo} · ${item.time}ms`;
-                        const ipOnly = item.ip.split(':')[0];
-                        const ipInfo = ipInfoMap.get(ipOnly);
-                        if (ipInfo) {
-                            info += ` · ${ipInfo.country}`;
-                            if (ipInfo.asn) info += ` · ${ipInfo.asn}`;
-                            if (ipInfo.isp) info += ` ${ipInfo.isp}`;
-                        }
-                        msg += `${info}\n`;
-                    });
-                }
-                
-                if (report.removed.length > 0) {
-                    msg += `📉 移除 ${report.removed.length} 个IP\n`;
-                    report.removed.forEach(item => {
-                        msg += `   ❌ <code>${item.ip}</code>\n`;
-                        msg += `      原因: ${item.reason}\n`;
-                    });
-                }
-                
-                if (report.added.length === 0 && report.removed.length === 0) {
-                    msg += `✨ 所有IP正常，无变化\n`;
-                }
-                msg += `✅ 完成: ${report.afterActive}/${report.minActive}\n`;
-            }
+            return;
+        }
+        
+        // 检测详情
+        if (report.checkDetails && report.checkDetails.length > 0) {
+            report.checkDetails.forEach(d => {
+                const icon = d.status.includes('✅') ? '✅' : '❌';
+                msg += `${icon} <code>${d.ip}</code>\n   ${d.colo} · ${d.time}ms${formatIPInfoStr(ipInfoMap, d.ip)}\n`;
+            });
+            msg += `\n`;
+        }
+        
+        // A记录或ALL模式的A记录部分
+        if (report.mode === 'A' || report.mode === 'ALL') {
+            msg += formatIPChanges(report.added, report.removed, ipInfoMap, report.port, report.minActive, report.afterActive);
+        }
+        
+        // ALL模式的TXT记录部分
+        if (report.mode === 'ALL' && report.txtActive !== undefined) {
+            msg += `\n<b>📝 TXT记录</b>\n`;
+            msg += formatIPChanges(report.txtAdded, report.txtRemoved, ipInfoMap, '', report.minActive, report.txtActive);
+        }
+        
+        // 纯TXT模式
+        if (report.mode === 'TXT') {
+            msg += formatIPChanges(report.added, report.removed, ipInfoMap, '', report.minActive, report.afterActive);
         }
     });
     
@@ -1859,9 +1674,7 @@ async function sendTG(reports, poolStats, isManual = false) {
     msg += `📦 <b>IP池库存统计</b>\n`;
     
     for (const [poolKey, stats] of poolStats) {
-        const displayName = poolKey === 'pool' ? '通用池' :
-                           poolKey === 'pool_trash' ? '垃圾桶' :
-                           poolKey.replace('pool_', '') + '池';
+        const displayName = getPoolDisplayName(poolKey);
         msg += `\n<b>${displayName}</b>\n`;
         msg += `   维护前: ${stats.before} 个\n`;
         msg += `   维护后: ${stats.after} 个\n`;
@@ -1922,7 +1735,6 @@ async function sendTG(reports, poolStats, isManual = false) {
     }
 }
 
-// ========== 前端HTML渲染函数 ==========
 function renderHTML(C) {
     const targetsJson = JSON.stringify(C.targets);
     const settingsJson = JSON.stringify(GLOBAL_SETTINGS);
@@ -1933,7 +1745,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v6.0 - IP管理面板</title>
+    <title>DDNS Pro v6.5 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -2082,7 +1894,7 @@ function renderHTML(C) {
         .console {
             background: #1c1c1e;
             color: #32d74b;
-            height: 350px;
+            height: 380px;
             overflow-y: auto;
             font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
             padding: 20px;
@@ -2159,19 +1971,32 @@ function renderHTML(C) {
             box-shadow: 0 0 0 4px rgba(0,122,255,0.1);
         }
         .result-item {
-            padding: 12px;
+            padding: 10px 12px;
             background: #f5f5f7;
-            border-radius: 12px;
-            margin-bottom: 8px;
+            border-radius: 10px;
+            margin-bottom: 6px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
         .result-item code {
             background: #fff;
-            padding: 4px 8px;
+            padding: 3px 6px;
             border-radius: 6px;
-            font-size: 13px;
+            font-size: 12px;
+        }
+        /* 固定高度滚动区域 */
+        .scroll-box {
+            max-height: 200px;
+            overflow-y: auto;
+            border-radius: 12px;
+        }
+        .scroll-box::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scroll-box::-webkit-scrollbar-thumb {
+            background: #d1d1d6;
+            border-radius: 3px;
         }
         .format-hint {
             font-size: 11px;
@@ -2213,6 +2038,92 @@ function renderHTML(C) {
                 padding: 2px 4px;
                 margin-left: 2px;
             }
+        }
+        
+        /* 自定义模态对话框 */
+        .custom-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            backdrop-filter: blur(4px);
+        }
+        .custom-modal {
+            background: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalIn 0.2s ease-out;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .custom-modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #1d1d1f;
+        }
+        .custom-modal-content {
+            font-size: 14px;
+            color: #4b5563;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+        .custom-modal-stats {
+            background: #f5f5f7;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 16px;
+        }
+        .custom-modal-stats div {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+        }
+        .custom-modal-stats .label {
+            color: #86868b;
+        }
+        .custom-modal-stats .value {
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        .custom-modal-buttons {
+            display: flex;
+            gap: 12px;
+        }
+        .custom-modal-buttons button {
+            flex: 1;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+        .custom-modal-buttons .btn-continue {
+            background: var(--primary);
+            color: #fff;
+        }
+        .custom-modal-buttons .btn-continue:hover {
+            background: #0056b3;
+        }
+        .custom-modal-buttons .btn-abandon {
+            background: #f5f5f7;
+            color: #1d1d1f;
+        }
+        .custom-modal-buttons .btn-abandon:hover {
+            background: #e5e5e7;
         }
         
         /* TXT记录移动端优化 */
@@ -2269,6 +2180,38 @@ function renderHTML(C) {
             }
         }
         
+        /* IP库管理和系统控制台卡片等高 */
+        .col-lg-7 > .card.p-4:first-child,
+        .col-lg-5 > .card.p-4 {
+            display: flex;
+            flex-direction: column;
+        }
+        @media (min-width: 992px) {
+            .col-lg-7 > .card.p-4:first-child,
+            .col-lg-5 > .card.p-4 {
+                min-height: 580px;
+            }
+        }
+        /* IP库管理卡片内部布局 - 让内容区域自动扩展，按钮固定底部 */
+        .col-lg-7 > .card.p-4:first-child .ip-content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .col-lg-7 > .card.p-4:first-child #ip-input {
+            flex: 1;
+            min-height: 120px;
+        }
+        .col-lg-7 > .card.p-4:first-child .ip-actions-area {
+            flex-shrink: 0;
+        }
+        /* 系统控制台卡片内部布局 - 固定高度，不自动扩展 */
+        .col-lg-5 > .card.p-4 .console {
+            height: 380px;
+            max-height: 380px;
+            flex-shrink: 0;
+        }
+        
         /* 响应式优化 */
         @media (max-width: 768px) {
             .card {
@@ -2287,6 +2230,31 @@ function renderHTML(C) {
             .input-group .btn {
                 white-space: nowrap;
             }
+            /* 筛选工具栏移动端适配 */
+            .filter-toolbar {
+                flex-wrap: wrap !important;
+                gap: 6px !important;
+            }
+            .filter-toolbar .form-control-sm {
+                min-width: 70px !important;
+                flex: 1 1 35% !important;
+                font-size: 11px !important;
+                padding: 6px 8px !important;
+            }
+            .filter-toolbar .filter-btns {
+                display: flex;
+                gap: 2px;
+                flex-shrink: 0;
+            }
+            .filter-toolbar .filter-btns .btn {
+                padding: 4px 6px !important;
+                font-size: 12px !important;
+            }
+            .filter-toolbar .pool-stat {
+                font-size: 10px !important;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
         }
     </style>
 </head>
@@ -2303,7 +2271,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v6.0</span>
+        <span class="version-badge">v6.5</span>
     </h1>
     <div class="hero-actions">
         <div class="guide-toggle" onclick="toggleGuide()" title="使用步骤提示">?</div>
@@ -2330,127 +2298,106 @@ function renderHTML(C) {
 </div>
 
 <div class="container">
-    <!-- 解析实况 -->
+    <!-- 解析实况 & Check ProxyIP -->
     <div class="card p-3">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h6 class="m-0 fw-bold">📡 解析实况</h6>
-            <button class="btn btn-primary btn-sm" onclick="refreshStatus()">🔄 刷新</button>
-        </div>
-        
-        <div id="manual-add-section" class="mb-3">
-            <div class="input-group">
-                <input type="text" id="manual-add-ip" class="form-control" placeholder="手动添加IP (如: 1.2.3.4 或 1.2.3.4:443)">
-                <button class="btn btn-success" onclick="manualAddIP()">➕ 添加</button>
+            <div class="d-flex gap-2 align-items-center flex-grow-1" style="max-width:500px">
+                <input type="text" id="lookup-domain" class="form-control form-control-sm" placeholder="探测: 域名 / IP:端口 / txt@域名" style="border-radius:8px">
+                <button class="btn btn-info btn-sm text-white" onclick="lookupDomain()" title="探测任意域名或IP" style="white-space:nowrap">🔎</button>
+                <button class="btn btn-primary btn-sm" onclick="refreshStatus()" title="刷新当前域名解析">🔄</button>
             </div>
         </div>
         
-        <div class="table-responsive">
-            <table class="table text-center">
-                <thead>
-                    <tr>
-                        <th>IP地址</th>
-                        <th>机房</th>
-                        <th>延迟</th>
-                        <th>状态</th>
-                        ${ipInfoEnabled ? '<th>归属地</th>' : ''}
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="status-table"></tbody>
-            </table>
+        <div id="manual-add-section" class="mb-2">
+            <div class="input-group input-group-sm">
+                <input type="text" id="manual-add-ip" class="form-control" placeholder="手动添加IP到当前域名 (如: 1.2.3.4:443)">
+                <button class="btn btn-success" onclick="manualAddIP()" title="添加IP到当前域名">➕</button>
+            </div>
         </div>
         
-        <div id="txt-status"></div>
+        <!-- 统一展示区域 -->
+        <div id="status-display" class="scroll-box" style="max-height:320px">
+            <div class="table-responsive">
+                <table class="table text-center mb-0">
+                    <thead style="position:sticky;top:0;background:#fff;z-index:1">
+                        <tr>
+                            <th>IP地址</th>
+                            <th>机房</th>
+                            <th>延迟</th>
+                            <th>状态</th>
+                            ${ipInfoEnabled ? '<th>归属地</th>' : ''}
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="status-table"></tbody>
+                </table>
+            </div>
+            <div id="txt-status"></div>
+        </div>
     </div>
 
     <div class="row">
         <!-- IP管理 -->
         <div class="col-lg-7">
             <div class="card p-4 mb-3">
-                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                    <div>
-                        <h6 class="m-0 fw-bold d-inline">📦 IP库管理</h6>
-                        <div class="config-info ms-2">
-                            ⚙️ 并发: ${GLOBAL_SETTINGS.CONCURRENT_CHECKS} | 超时: ${GLOBAL_SETTINGS.CHECK_TIMEOUT}ms
-                        </div>
-                    </div>
-                    <div class="btn-group btn-group-sm">
-                        <select id="pool-selector" class="form-select form-select-sm" style="width:150px" onchange="switchPool()">
+                <!-- 池选择器和操作 -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="m-0 fw-bold">📦 IP库管理</h6>
+                    <div class="d-flex gap-1 align-items-center">
+                        <select id="pool-selector" class="form-select form-select-sm" style="width:120px;border-radius:8px" onchange="switchPool()">
                             <option value="pool">通用池</option>
                         </select>
-                        <button class="btn btn-outline-primary" onclick="createNewPool()" title="新建池">➕</button>
-                        <button class="btn btn-outline-danger" onclick="deleteCurrentPool()" title="删除池">🗑️</button>
+                        <button class="btn btn-sm" onclick="createNewPool()" title="新建池" style="padding:6px 8px">➕</button>
+                        <button class="btn btn-sm" onclick="deleteCurrentPool()" title="删除池" style="padding:6px 8px">🗑️</button>
+                        <button class="btn btn-sm" onclick="oneClickClean()" title="一键洗库" style="padding:6px 8px">🧹</button>
                     </div>
                 </div>
                 
-                <!-- IP输入方式选择 -->
-                <div class="mb-3">
-                    <div class="btn-group w-100" role="group">
-                        <input type="radio" class="btn-check" name="inputMode" id="mode-manual" checked autocomplete="off">
-                        <label class="btn btn-outline-primary" for="mode-manual" onclick="switchInputMode('manual')">📝 手动输入</label>
-                        
-                        <input type="radio" class="btn-check" name="inputMode" id="mode-remote" autocomplete="off">
-                        <label class="btn btn-outline-primary" for="mode-remote" onclick="switchInputMode('remote')">🌐 远程TXT</label>
-                        
-                        <input type="radio" class="btn-check" name="inputMode" id="mode-load" autocomplete="off">
-                        <label class="btn btn-outline-primary" for="mode-load" onclick="loadCurrentPool()">📂 加载当前池</label>
+                <!-- 内容区域 - 自动扩展 -->
+                <div class="ip-content-area">
+                    <!-- 加载区 -->
+                    <div class="d-flex gap-2 mb-2 align-items-center">
+                        <input type="text" id="remote-url" class="form-control form-control-sm flex-grow-1" placeholder="远程TXT URL" style="border-radius:8px">
+                        <button class="btn btn-sm btn-outline-primary" onclick="loadRemoteUrl()" style="white-space:nowrap" title="从远程URL加载">🌐 加载</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadCurrentPool()" title="加载当前池到输入框" style="white-space:nowrap">📂 从库</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="clearInput()" title="清空输入框" style="white-space:nowrap">🗑️ 清空</button>
                     </div>
-                </div>
-                
-                <!-- 手动输入区 -->
-                <div id="input-manual" class="input-section">
-                <!-- 端口筛选工具栏 -->
-                <div class="mb-2 d-flex gap-2 align-items-center flex-wrap">
-                <span class="text-secondary small">🔍 智能筛选:</span>
-                <input type="text" id="custom-port" class="form-control form-control-sm" style="width:140px" placeholder="端口(443,8443)">
-                <input type="text" id="custom-tag" class="form-control form-control-sm" style="width:140px" placeholder="标签(日本,韩国)">
-                <button class="btn btn-outline-success btn-sm" onclick="smartFilter('keep')">✓ 保留</button>
-                <button class="btn btn-outline-danger btn-sm" onclick="smartFilter('exclude')">✗ 排除</button>
-            </div>
                     
-                    <textarea id="ip-input" class="form-control mb-2" rows="8" placeholder="每行一个，支持以下格式：
-1.2.3.4:443
-1.2.3.4 443
-1.2.3.4
-"></textarea>
-                    <div class="format-hint">
-                        💡 <strong>支持从Excel/CSV直接复制粘贴</strong><br>
-                        支持注释: 1.2.3.4:443#日本 | 1.2.3.4 443 #美国
-                    </div>
-                </div>
-                
-                <!-- 远程加载区 -->
-                <div id="input-remote" class="input-section" style="display:none">
-                    <div class="input-group mb-2">
-                        <input type="text" id="remote-url" class="form-control" placeholder="远程TXT文件URL">
-                        <button class="btn btn-primary" onclick="loadRemoteUrl()">🔄 加载</button>
-                    </div>
-                    <textarea id="ip-input-remote" class="form-control" rows="8" placeholder="加载的IP将显示在这里..." readonly></textarea>
-                </div>
-                
-                <div class="row g-2 mt-2">
-                <div class="col-3">
-                    <button id="btn-check" class="btn btn-warning btn-sm w-100 text-white" onclick="batchCheck()">⚡ 检测清洗</button>
-                </div>
-                <div class="col-3">
-                    <button class="btn btn-outline-secondary btn-sm w-100" onclick="quickDeduplicate()">🔄 快速去重</button>
-                </div>
-                <div class="col-3">
-                    <button class="btn btn-success btn-sm w-100" onclick="saveToCurrentPool()">💾 保存到当前池</button>
-                </div>
-                <div class="col-3">
-                    <button class="btn btn-outline-info btn-sm w-100" onclick="showPoolInfo()">📊 当前池: <span id="pool-count">0</span></button>
-                </div>
-            </div>
-                
-                <!-- 垃圾桶专用操作 -->
-                <div id="trash-actions" style="display:none" class="mt-2">
-                    <div class="row g-2">
-                        <div class="col-6">
-                            <button class="btn btn-outline-success btn-sm w-100" onclick="restoreSelected()">♻️ 恢复选中</button>
+                    <!-- 输入区 -->
+                    <textarea id="ip-input" class="form-control mb-2" rows="6" placeholder="支持格式：&#10;1.2.3.4:443&#10;1.2.3.4 (默认443端口)&#10;example.com:8443 (自动解析域名)&#10;1.2.3.4:443 #HK 香港节点 (带注释)" style="border-radius:12px;font-family:'SF Mono',monospace;font-size:12px"></textarea>
+                    
+                    <!-- 筛选工具 -->
+                    <div class="d-flex gap-2 align-items-center mb-2 filter-toolbar">
+                        <input type="text" id="custom-port" class="form-control form-control-sm" style="min-width:80px;flex:1;border-radius:8px" placeholder="443,8443 或 443-2053" title="端口筛选：支持逗号分隔或范围格式">
+                        <input type="text" id="custom-tag" class="form-control form-control-sm" style="min-width:80px;flex:1;border-radius:8px" placeholder="HK,US,JP" title="标签筛选：匹配注释中的关键词">
+                        <div class="filter-btns">
+                            <button class="btn btn-sm btn-outline-success" onclick="smartFilter('keep')" title="保留匹配的IP">✓</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="smartFilter('exclude')" title="排除匹配的IP">✗</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="quickDeduplicate()" title="去除重复IP">⊜</button>
                         </div>
-                        <div class="col-6">
-                            <button class="btn btn-outline-danger btn-sm w-100" onclick="clearTrash()">🗑️ 清空垃圾桶</button>
+                        <span class="text-secondary small pool-stat" title="当前池中IP数量">📊<span id="pool-count">0</span></span>
+                    </div>
+                </div>
+                
+                <!-- 底部按钮区域 - 固定在底部 -->
+                <div class="ip-actions-area mt-auto">
+                    <!-- 主操作按钮 -->
+                    <div class="d-flex gap-2" id="main-actions">
+                        <button id="btn-check" class="btn btn-primary flex-grow-1" onclick="batchCheck()" style="border-radius:10px">⚡ 检测</button>
+                        <button class="btn btn-success flex-grow-1" onclick="saveToCurrentPool('append')" style="border-radius:10px">💾 入库</button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="removeFromPool()" title="从库中移除输入框中的IP" style="border-radius:8px">从库中移除</button>
+                    </div>
+                    
+                    <!-- 垃圾桶专用操作 -->
+                    <div id="trash-actions" style="display:none" class="mt-2">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <button class="btn btn-outline-success btn-sm w-100" onclick="restoreSelected()">♻️ 恢复选中</button>
+                            </div>
+                            <div class="col-6">
+                                <button class="btn btn-outline-danger btn-sm w-100" onclick="clearTrash()">🗑️ 清空垃圾桶</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2477,15 +2424,6 @@ function renderHTML(C) {
                 </div>
             </div>
             
-            <!-- Check ProxyIP -->
-            <div class="card p-4">
-                <h6 class="mb-3 fw-bold">🔍 Check ProxyIP</h6>
-                <div class="input-group mb-3">
-                    <input type="text" id="lookup-domain" class="form-control" placeholder="域名, IP:端口, 或 txt@域名">
-                    <button class="btn btn-info text-white" onclick="lookupDomain()">🔎 探测</button>
-                </div>
-                <div id="lookup-results"></div>
-            </div>
         </div>
 
         <!-- 控制台 -->
@@ -2508,11 +2446,51 @@ function renderHTML(C) {
     const IP_INFO_ENABLED = ${ipInfoEnabled};
     const AUTH_ENABLED = ${C.authKey ? 'true' : 'false'};
     let currentTargetIndex = 0;
-    let currentInputMode = 'manual';
     let currentPool = 'pool';
     let abortController = null;
     let domainPoolMapping = {};
     let availablePools = ['pool'];
+    
+    // 检测中断状态
+    let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
+    let checkWasAbandoned = false; // 标记是否放弃了检测
+    
+    // 自定义模态对话框
+    function showCheckInterruptModal(stats) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'custom-modal-overlay';
+            overlay.innerHTML = \`
+                <div class="custom-modal">
+                    <div class="custom-modal-title">⏸️ 检测已中断</div>
+                    <div class="custom-modal-stats">
+                        <div><span class="label">已检测</span><span class="value">\${stats.checked} / \${stats.total}</span></div>
+                        <div><span class="label">有效IP</span><span class="value">\${stats.valid} 个</span></div>
+                        <div><span class="label">有效率</span><span class="value">\${stats.rate}%</span></div>
+                        <div><span class="label">未检测</span><span class="value">\${stats.unchecked} 个</span></div>
+                    </div>
+                    <div class="custom-modal-buttons">
+                        <button class="btn-abandon" id="modal-abandon">放弃检测</button>
+                        <button class="btn-continue" id="modal-continue">继续</button>
+                    </div>
+                </div>
+            \`;
+            document.body.appendChild(overlay);
+            
+            document.getElementById('modal-continue').onclick = () => {
+                document.body.removeChild(overlay);
+                resolve(true);
+            };
+            document.getElementById('modal-abandon').onclick = () => {
+                document.body.removeChild(overlay);
+                resolve(false);
+            };
+        });
+    }
+    
+    // 池名显示（统一格式）
+    const POOL_NAMES = { pool: '通用池', pool_trash: '🗑️ 垃圾桶', domain_pool_mapping: '系统数据' };
+    function getPoolName(key) { return POOL_NAMES[key] || key.replace('pool_', '') + '池'; }
     
     function getAuthTokenFromUrlOrStorage() {
         const urlKey = new URLSearchParams(location.search).get('key');
@@ -2653,27 +2631,6 @@ function renderHTML(C) {
         refreshStatus();
     }
     
-    function switchInputMode(mode) {
-        currentInputMode = mode;
-        document.getElementById('input-manual').style.display = mode === 'manual' ? 'block' : 'none';
-        document.getElementById('input-remote').style.display = mode === 'remote' ? 'block' : 'none';
-        
-        if (mode === 'load') {
-            loadCurrentPool();
-            setTimeout(() => {
-                document.getElementById('mode-manual').checked = true;
-                currentInputMode = 'manual';
-            }, 100);
-        }
-    }
-    
-    function getCurrentInput() {
-        if (currentInputMode === 'remote') {
-            return document.getElementById('ip-input-remote');
-        }
-        return document.getElementById('ip-input');
-    }
-    
     async function loadRemoteUrl() {
         const url = document.getElementById('remote-url').value.trim();
         if (!url) {
@@ -2690,7 +2647,6 @@ function renderHTML(C) {
             }).then(r => r.json());
             
             if (r.success) {
-                document.getElementById('ip-input-remote').value = r.ips || '';
                 document.getElementById('ip-input').value = r.ips || '';
                 log(\`✅ 成功: \${r.count} 个\`, 'success');
             } else {
@@ -2714,36 +2670,66 @@ function renderHTML(C) {
         }
     }
     
-    async function saveToCurrentPool() {
-        const content = getCurrentInput().value;
+    async function saveToCurrentPool(mode = 'append') {
+        const content = document.getElementById('ip-input').value;
         if (!content.trim()) {
             log('❌ 内容为空', 'error');
             return;
         }
         
-        log(\`💾 保存到 \${currentPool}...\`, 'warn');
+        const modeLabel = mode === 'replace' ? '覆盖' : '追加';
+        log(\`💾 \${modeLabel}到 \${getPoolName(currentPool)}...\`, 'warn');
+        
         try {
             const r = await apiFetch('/api/save-pool', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ 
-                    pool: content,
-                    poolKey: currentPool
-                })
+                body: JSON.stringify({ pool: content, poolKey: currentPool, mode })
             }).then(r => r.json());
             
             if (r.success) {
-                const displayName = currentPool === 'pool' ? '通用池' : 
-                                   currentPool === 'pool_trash' ? '🗑️ 垃圾桶' :
-                                   currentPool.replace('pool_', '') + '池';
-                log(\`✅ 已添加 \${r.added} 个IP到 \${displayName}\`, 'success');
+                if (mode === 'replace') {
+                    log(\`✅ \${r.message}\`, 'success');
+                } else {
+                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\`, 'success');
+                }
                 document.getElementById('pool-count').innerText = r.count;
-                getCurrentInput().value = '';
+                document.getElementById('ip-input').value = '';
             } else {
                 log(\`❌ 失败: \${r.error}\`, 'error');
             }
         } catch (e) {
             log(\`❌ 保存失败\`, 'error');
+        }
+    }
+    
+    async function removeFromPool() {
+        const content = document.getElementById('ip-input').value;
+        if (!content.trim()) {
+            log('❌ 内容为空', 'error');
+            return;
+        }
+        
+        if (!confirm(\`确认从 \${getPoolName(currentPool)} 中删除这些IP？\`)) return;
+        
+        log(\`🗑️ 从 \${getPoolName(currentPool)} 删除...\`, 'warn');
+        
+        try {
+            const r = await apiFetch('/api/save-pool', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pool: content, poolKey: currentPool, mode: 'remove' })
+            }).then(r => r.json());
+            
+            if (r.success) {
+                log(\`✅ \${r.message}\`, 'success');
+                document.getElementById('pool-count').innerText = r.count;
+                document.getElementById('ip-input').value = '';
+            } else {
+                log(\`❌ 失败: \${r.error}\`, 'error');
+            }
+        } catch (e) {
+            log(\`❌ 删除失败\`, 'error');
         }
     }
     
@@ -2758,7 +2744,7 @@ function renderHTML(C) {
     
     async function batchCheck() {
         const btn = document.getElementById('btn-check');
-        const input = getCurrentInput();
+        const input = document.getElementById('ip-input');
         const lines = input.value.split('\\n').filter(i => i.trim());
         
         if (!lines.length) {
@@ -2851,17 +2837,68 @@ function renderHTML(C) {
                 if (wasAborted) {
                     const rate = ((valid.length / checked) * 100).toFixed(1);
                     log(\`⏸️ 检测已中断，已保留 \${valid.length} 个有效IP (共检测 \${checked}/\${total}, 有效率 \${rate}%)\`, 'warn');
-                    log(\`💡 提示: 您可以继续处理这些有效IP，或重新开始检测\`, 'info');
+                    
+                    // 保存中断状态
+                    const uncheckedLines = lines.filter((line, idx) => idx >= checked);
+                    pausedCheckState = {
+                        uncheckedLines,
+                        validIPs: valid,
+                        total: total
+                    };
+                    
+                    // 使用自定义模态对话框
+                    const continueAction = await showCheckInterruptModal({
+                        checked,
+                        total,
+                        valid: valid.length,
+                        rate,
+                        unchecked: uncheckedLines.length
+                    });
+                    
+                    if (continueAction && pausedCheckState) {
+                        // 继续检测
+                        await continueCheck();
+                    } else {
+                        // 放弃检测，保留有效IP
+                        abandonCheck();
+                    }
                 } else {
                     const rate = ((valid.length / total) * 100).toFixed(1);
                     log(\`✅ 检测完成: \${valid.length}/\${total} 有效 (\${rate}%)\`, 'success');
+                    pausedCheckState = null;
                 }
             } else {
                 if (wasAborted) {
                     log(\`⏸️ 检测已中断，尚未发现有效IP (已检测 \${checked}/\${total})\`, 'warn');
+                    
+                    // 保存中断状态
+                    const uncheckedLines = lines.filter((line, idx) => idx >= checked);
+                    pausedCheckState = {
+                        uncheckedLines,
+                        validIPs: [],
+                        total: total
+                    };
+                    
+                    // 使用自定义模态对话框
+                    const continueAction = await showCheckInterruptModal({
+                        checked,
+                        total,
+                        valid: 0,
+                        rate: '0.0',
+                        unchecked: uncheckedLines.length
+                    });
+                    
+                    if (continueAction && pausedCheckState) {
+                        // 继续检测
+                        await continueCheck();
+                    } else {
+                        // 放弃检测
+                        abandonCheck();
+                    }
                 } else {
                     log(\`❌ 检测完成: 0/\${total} 有效\`, 'error');
                     input.value = '';
+                    pausedCheckState = null;
                 }
             }
             
@@ -2883,8 +2920,50 @@ function renderHTML(C) {
         }
     }
 
+    function clearInput() {
+        const input = document.getElementById('ip-input');
+        if (input.value.trim() && !confirm('确认清空输入框？')) return;
+        input.value = '';
+        pausedCheckState = null;
+        log('🗑️ 输入框已清空', 'info');
+    }
+    
+    // 继续检测
+    async function continueCheck() {
+        if (!pausedCheckState || pausedCheckState.uncheckedLines.length === 0) {
+            log('❌ 没有待检测的IP', 'error');
+            return;
+        }
+        
+        const input = document.getElementById('ip-input');
+        // 将有效IP和未检测IP合并
+        const newContent = [...pausedCheckState.validIPs, ...pausedCheckState.uncheckedLines].join('\\n');
+        input.value = newContent;
+        
+        log(\`🔄 继续检测剩余 \${pausedCheckState.uncheckedLines.length} 个IP\`, 'info');
+        
+        pausedCheckState = null;
+        
+        // 继续检测
+        await batchCheck();
+    }
+    
+    // 放弃检测
+    function abandonCheck() {
+        checkWasAbandoned = true; // 标记放弃了检测
+        if (pausedCheckState && pausedCheckState.validIPs.length > 0) {
+            const input = document.getElementById('ip-input');
+            input.value = pausedCheckState.validIPs.join('\\n');
+            log(\`🚫 已放弃检测，保留 \${pausedCheckState.validIPs.length} 个有效IP在输入框\`, 'warn');
+        } else {
+            log(\`🚫 已放弃检测\`, 'warn');
+        }
+        
+        pausedCheckState = null;
+    }
+    
     function quickDeduplicate() {
-        const input = getCurrentInput();
+        const input = document.getElementById('ip-input');
         const lines = input.value.split('\\n').filter(l => l.trim());
         
         if (lines.length === 0) {
@@ -2931,42 +3010,47 @@ function renderHTML(C) {
                 return;
             }
             
-            if ((data.mode === 'TXT' || data.mode === 'ALL') && data.txtRecords && data.txtRecords.length > 0) {
-                const record = data.txtRecords[0];
-                let html = '<h6 class="fw-bold mb-2 mt-3">📝 TXT记录内容</h6><div class="p-3 bg-light rounded-3">';
-                record.ips.forEach(ip => {
-                    html += \`<div class="txt-record-item">
-                        <div class="txt-ip-line">
-                            <code class="txt-ip-code">\${ip.ip}</code>
-                            <div class="txt-info-group">
-                                <span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'} \${ip.colo} · \${ip.time}ms</span>
-                                \${IP_INFO_ENABLED && ip.ipInfo ? formatIPInfo(ip.ipInfo) : ''}
-                                <a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>
-                            </div>
-                        </div>
-                    </div>\`;
-                });
-                html += '</div>';
-                txtDiv.innerHTML = html;
-            }
+            // 统一收集所有记录到表格中显示
+            let allRows = [];
             
-            if (data.mode === 'A' || data.mode === 'ALL') {
-                if (!data.aRecords || data.aRecords.length === 0) {
-                    t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">暂无A记录</td></tr>\`;
-                } else {
-                    t.innerHTML = data.aRecords.map(r => \`
+            // A记录
+            if ((data.mode === 'A' || data.mode === 'ALL') && data.aRecords && data.aRecords.length > 0) {
+                data.aRecords.forEach(r => {
+                    allRows.push(\`
                         <tr>
-                            <td class="fw-bold">\${r.ip}</td>
+                            <td class="fw-bold">\${r.ip}:\${r.port}</td>
                             <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
                             <td>\${r.time}ms</td>
                             <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
                             \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
                             <td><a href="javascript:deleteRecord('\${r.id}')" class="text-danger text-decoration-none small fw-bold">🗑️</a></td>
                         </tr>
-                    \`).join('');
-                }
-            } else if (data.mode === 'TXT') {
-                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">TXT模式，查看下方TXT记录</td></tr>\`;
+                    \`);
+                });
+            }
+            
+            // TXT记录（统一显示在表格中）
+            if ((data.mode === 'TXT' || data.mode === 'ALL') && data.txtRecords && data.txtRecords.length > 0) {
+                const record = data.txtRecords[0];
+                record.ips.forEach(ip => {
+                    allRows.push(\`
+                        <tr>
+                            <td class="fw-bold">\${ip.ip}</td>
+                            <td><span class="badge bg-light text-dark">\${ip.colo}</span></td>
+                            <td>\${ip.time}ms</td>
+                            <td><span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'}</span></td>
+                            \${IP_INFO_ENABLED ? \`<td>\${ip.ipInfo ? formatIPInfo(ip.ipInfo) : '-'}</td>\` : ''}
+                            <td><a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a></td>
+                        </tr>
+                    \`);
+                });
+            }
+            
+            // 显示结果
+            if (allRows.length === 0) {
+                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">暂无记录</td></tr>\`;
+            } else {
+                t.innerHTML = allRows.join('');
             }
         } catch (e) {
             t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 查询失败<br><small>请检查网络连接和CF配置</small></td></tr>\`;
@@ -3016,55 +3100,98 @@ function renderHTML(C) {
             return;
         }
         
-        log(\`🔍 查询: \${val}\`, 'info');
+        log(\`🔍 探测: \${val}\`, 'info');
+        
+        const t = document.getElementById('status-table');
+        const txtDiv = document.getElementById('txt-status');
+        const colspan = IP_INFO_ENABLED ? '6' : '5';
+        t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 探测中...</td></tr>\`;
+        txtDiv.innerHTML = '';
         
         try {
             if (val.startsWith('txt@')) {
                 const data = await apiFetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
-                const res = document.getElementById('lookup-results');
-                res.innerHTML = '<div class="alert alert-info mb-2 py-2"><small>📝 TXT记录内容</small></div>';
                 
-                const checkPromises = data.ips.map(ip => checkAndDisplayIP(ip, res));
-                const results = await Promise.all(checkPromises);
+                // 显示在TXT区域
+                let html = \`<h6 class="fw-bold mb-2 mt-3">📝 探测: \${data.domain}</h6><div class="p-3 bg-light rounded-3">\`;
                 
-                const activeCount = results.filter(r => r === true).length;
-                const totalCount = data.ips.length;
-                log(\`📊 检测完成: \${activeCount}/\${totalCount} 活跃\`, activeCount === totalCount ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
+                // 并发检测
+                const checkResults = await Promise.all(data.ips.map(async ip => {
+                    const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(ip)}\`).then(r => r.json());
+                    return { ip, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-' };
+                }));
+                
+                checkResults.forEach(r => {
+                    html += \`<div class="txt-record-item">
+                        <div class="txt-ip-line">
+                            <code class="txt-ip-code">\${r.ip}</code>
+                            <div class="txt-info-group">
+                                <span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'} \${r.colo} · \${r.time}ms</span>
+                                <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${r.ip}')" title="添加到输入框">➕</button>
+                            </div>
+                        </div>
+                    </div>\`;
+                });
+                html += '</div>';
+                txtDiv.innerHTML = html;
+                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">TXT探测结果见下方</td></tr>\`;
+                
+                const activeCount = checkResults.filter(r => r.success).length;
+                log(\`📊 探测完成: \${activeCount}/\${data.ips.length} 活跃\`, activeCount === data.ips.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
                 return;
             }
             
             const isIP = /^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$/.test(val);
+            let targets = [];
+            let displayDomain = val;
             
             if (isIP) {
-                log(\`🔌 直接检测: \${val}\`, 'info');
-                const res = document.getElementById('lookup-results');
-                res.innerHTML = '';
-                const result = await checkAndDisplayIP(val, res);
-                log(\`📊 检测完成: \${result ? '1/1' : '0/1'} 活跃\`, result ? 'success' : 'error');
+                const normalized = normalizeIPFormat(val);
+                targets = [normalized ? normalized.split('#')[0].trim() : val];
             } else {
                 const data = await apiFetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 
                 if (!data.ips || data.ips.length === 0) {
-                    log(\`⚠️  域名无A记录\`, 'warn');
+                    log(\`⚠️ 域名无A记录\`, 'warn');
+                    t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">域名无A记录</td></tr>\`;
                     return;
                 }
                 
+                displayDomain = data.domain;
+                targets = data.ips.map(ip => \`\${ip}:\${data.port}\`);
                 log(\`📡 \${data.ips.length} 个IP (端口: \${data.port})\`, 'success');
-                
-                const res = document.getElementById('lookup-results');
-                res.innerHTML = '';
-                
-                const targets = data.ips.map(ip => \`\${ip}:\${data.port}\`);
-                const checkPromises = targets.map(target => checkAndDisplayIP(target, res));
-                const results = await Promise.all(checkPromises);
-                
-                const activeCount = results.filter(r => r === true).length;
-                const totalCount = targets.length;
-                log(\`📊 检测完成: \${activeCount}/\${totalCount} 活跃\`, activeCount === totalCount ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
             }
+            
+            // 并发检测
+            const checkResults = await Promise.all(targets.map(async addr => {
+                const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(addr)}\`).then(r => r.json());
+                let ipInfo = null;
+                if (IP_INFO_ENABLED) {
+                    const ipOnly = addr.split(':')[0];
+                    ipInfo = await apiFetch(\`/api/ip-info?ip=\${encodeURIComponent(ipOnly)}\`).then(r => r.json());
+                    if (ipInfo && ipInfo.error) ipInfo = null;
+                }
+                return { ip: addr, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-', ipInfo };
+            }));
+            
+            // 显示在表格中
+            t.innerHTML = checkResults.map(r => \`
+                <tr>
+                    <td class="fw-bold">\${r.ip}</td>
+                    <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
+                    <td>\${r.time}ms</td>
+                    <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
+                    \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
+                    <td><button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${r.ip}')" title="添加到输入框">➕</button></td>
+                </tr>
+            \`).join('');
+            
+            const activeCount = checkResults.filter(r => r.success).length;
+            log(\`📊 探测完成: \${activeCount}/\${targets.length} 活跃\`, activeCount === targets.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
         } catch (e) {
             log(\`❌ 失败: \${e.message}\`, 'error');
+            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 探测失败</td></tr>\`;
         }
     }
     
@@ -3118,7 +3245,7 @@ function renderHTML(C) {
     }
     
     function addToInput(ip) {
-        const input = getCurrentInput();
+        const input = document.getElementById('ip-input');
         const lines = input.value.split('\\n').filter(l => l.trim());
         
         if (!lines.includes(ip)) {
@@ -3230,17 +3357,7 @@ function renderHTML(C) {
             pools.splice(1, 0, 'pool_trash');
         }
         
-        selector.innerHTML = pools.map(pool => {
-            let displayName;
-            if (pool === 'pool') {
-                displayName = '通用池';
-            } else if (pool === 'pool_trash') {
-                displayName = '🗑️ 垃圾桶';
-            } else {
-                displayName = pool.replace('pool_', '') + '池';
-            }
-            return \`<option value="\${pool}">\${displayName}</option>\`;
-        }).join('');
+        selector.innerHTML = pools.map(pool => \`<option value="\${pool}">\${getPoolName(pool)}</option>\`).join('');
         selector.value = currentPool;
     }
     
@@ -3256,9 +3373,8 @@ function renderHTML(C) {
             );
             
             const options = selectablePools.map(pool => {
-                const displayName = pool === 'pool' ? '通用池' : pool.replace('pool_', '') + '池';
                 const selected = pool === boundPool ? 'selected' : '';
-                return \`<option value="\${pool}" \${selected}>\${displayName}</option>\`;
+                return \`<option value="\${pool}" \${selected}>\${getPoolName(pool)}</option>\`;
             }).join('');
             
             return \`
@@ -3351,10 +3467,7 @@ function renderHTML(C) {
     
     function switchPool() {
         currentPool = document.getElementById('pool-selector').value;
-        const displayName = currentPool === 'pool' ? '通用池' : 
-                           currentPool === 'pool_trash' ? '🗑️ 垃圾桶' :
-                           currentPool.replace('pool_', '') + '池';
-        log(\`📦 切换到: \${displayName}\`, 'info');
+        log(\`📦 切换到: \${getPoolName(currentPool)}\`, 'info');
         
         const trashActions = document.getElementById('trash-actions');
         if (trashActions) {
@@ -3378,8 +3491,7 @@ function renderHTML(C) {
                 body: JSON.stringify({ mapping: domainPoolMapping })
             });
             
-            const displayName = poolKey === 'pool' ? '通用池' : poolKey.replace('pool_', '') + '池';
-            log(\`✅ \${domain} → \${displayName}\`, 'success');
+            log(\`✅ \${domain} → \${getPoolName(poolKey)}\`, 'success');
         } catch (e) {
             log('❌ 绑定失败', 'error');
         }
@@ -3396,6 +3508,184 @@ function renderHTML(C) {
             }
         } catch (e) {
             log('❌ 清空失败', 'error');
+        }
+    }
+    
+    // 一键洗库状态
+    let cleaningPool = null;
+    let cleaningOriginalCount = 0;
+    let cleaningUncheckedIPs = []; // 未检测的IP
+    
+    // 一键洗库：加载池 → 检测 → 自动保存
+    // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
+    // 垃圾桶：有效IP恢复到原来的库
+    async function oneClickClean() {
+        const isTrash = currentPool === 'pool_trash';
+        
+        log(\`🧹 开始一键洗库: \${getPoolName(currentPool)}\`, 'warn');
+        cleaningPool = currentPool;
+        
+        // 1. 加载池
+        let allIPs = [];
+        let originalLines = []; // 保存原始行（包含注释）
+        try {
+            const r = await apiFetch(\`/api/get-pool?poolKey=\${currentPool}\`).then(r => r.json());
+            if (!r.pool || !r.pool.trim()) {
+                log('❌ 池为空，无需清洗', 'error');
+                cleaningPool = null;
+                return;
+            }
+            originalLines = r.pool.split('\\n').filter(l => l.trim());
+            allIPs = [...originalLines];
+            document.getElementById('ip-input').value = r.pool;
+            cleaningOriginalCount = r.count;
+            cleaningUncheckedIPs = [...allIPs];
+            log(\`📂 已加载 \${r.count} 个IP\`, 'info');
+        } catch (e) {
+            log('❌ 加载失败', 'error');
+            cleaningPool = null;
+            return;
+        }
+        
+        // 重置放弃标志
+        checkWasAbandoned = false;
+        
+        // 2. 检测（等待检测完成或中断）
+        await batchCheck();
+        
+        // 3. 只有完全检测完成才自动保存，中断或放弃则不保存
+        const content = document.getElementById('ip-input').value;
+        const validLines = content.trim() ? content.trim().split('\\n') : [];
+        const validCount = validLines.length;
+        
+        // 检查是否被中断或放弃
+        if (checkWasAbandoned || pausedCheckState !== null) {
+            // 检测被中断或放弃，不自动保存
+            log(\`⚠️ 洗库被中断，有效IP保留在输入框，未自动保存\`, 'warn');
+            checkWasAbandoned = false; // 重置标志
+        } else if (cleaningPool) {
+            if (isTrash) {
+                // 垃圾桶洗库：有效IP恢复到原来的库
+                await saveTrashCleanResult(validLines, originalLines);
+            } else {
+                // 普通池洗库：有效IP覆盖保存，失效IP移入垃圾桶
+                await savePoolCleanResult(validLines, originalLines);
+            }
+        }
+        
+        cleaningPool = null;
+        cleaningOriginalCount = 0;
+        cleaningUncheckedIPs = [];
+    }
+    
+    // 普通池洗库结果保存：有效IP覆盖保存，失效IP移入垃圾桶
+    async function savePoolCleanResult(validLines, originalLines) {
+        const validCount = validLines.length;
+        
+        // 找出失效的IP（原始IP - 有效IP）
+        const validKeys = new Set(validLines.map(line => {
+            const normalized = normalizeIPFormat(line);
+            return normalized ? normalized.split('#')[0].trim() : '';
+        }).filter(k => k));
+        
+        const invalidLines = originalLines.filter(line => {
+            const normalized = normalizeIPFormat(line);
+            const key = normalized ? normalized.split('#')[0].trim() : '';
+            return key && !validKeys.has(key);
+        });
+        
+        try {
+            // 1. 保存有效IP到池（覆盖）
+            if (validCount > 0) {
+                const r = await apiFetch('/api/save-pool', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ pool: validLines.join('\\n'), poolKey: cleaningPool, mode: 'replace' })
+                }).then(r => r.json());
+                
+                if (r.success) {
+                    log(\`✅ 洗库完成: \${r.message}\`, 'success');
+                    document.getElementById('pool-count').innerText = r.count;
+                } else {
+                    log(\`❌ 保存失败: \${r.error}\`, 'error');
+                    return;
+                }
+            } else {
+                // 清空池
+                await apiFetch('/api/save-pool', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ pool: '', poolKey: cleaningPool, mode: 'replace' })
+                });
+                log(\`⚠️ 洗库完成，无有效IP，池已清空\`, 'warn');
+                document.getElementById('pool-count').innerText = '0';
+            }
+            
+            // 2. 失效IP移入垃圾桶
+            if (invalidLines.length > 0) {
+                const trashContent = invalidLines.map(line => {
+                    const normalized = normalizeIPFormat(line);
+                    const key = normalized ? normalized.split('#')[0].trim() : line.split('#')[0].trim();
+                    return \`\${key} # 洗库失效 \${new Date().toISOString()} 来自 \${cleaningPool}\`;
+                }).join('\\n');
+                
+                await apiFetch('/api/save-pool', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ pool: trashContent, poolKey: 'pool_trash', mode: 'append' })
+                });
+                
+                log(\`🗑️ 已将 \${invalidLines.length} 个失效IP移入垃圾桶\`, 'info');
+            }
+            
+            document.getElementById('ip-input').value = '';
+        } catch (e) {
+            log(\`❌ 保存失败\`, 'error');
+        }
+    }
+    
+    // 垃圾桶洗库结果保存：有效IP恢复到原来的库
+    async function saveTrashCleanResult(validLines, originalLines) {
+        if (validLines.length === 0) {
+            log(\`⚠️ 洗库完成，无有效IP可恢复\`, 'warn');
+            document.getElementById('ip-input').value = '';
+            return;
+        }
+        
+        // 提取有效IP的key
+        const validKeys = new Set(validLines.map(line => {
+            const normalized = normalizeIPFormat(line);
+            return normalized ? normalized.split('#')[0].trim() : '';
+        }).filter(k => k));
+        
+        // 从原始行中找到对应的完整条目（包含来源信息）
+        const ipsToRestore = [];
+        originalLines.forEach(line => {
+            const normalized = normalizeIPFormat(line);
+            const key = normalized ? normalized.split('#')[0].trim() : '';
+            if (key && validKeys.has(key)) {
+                ipsToRestore.push(key);
+            }
+        });
+        
+        try {
+            // 调用恢复API
+            const r = await apiFetch('/api/restore-from-trash', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ips: ipsToRestore, restoreToSource: true })
+            }).then(r => r.json());
+            
+            if (r.success) {
+                log(\`✅ 垃圾桶洗库完成: \${r.message}\`, 'success');
+                document.getElementById('ip-input').value = '';
+                // 刷新垃圾桶数量
+                showPoolInfo();
+            } else {
+                log(\`❌ 恢复失败: \${r.error}\`, 'error');
+            }
+        } catch (e) {
+            log(\`❌ 恢复失败\`, 'error');
         }
     }
     
@@ -3432,7 +3722,7 @@ function renderHTML(C) {
     }
  
     function smartFilter(mode) {
-        const input = getCurrentInput();
+        const input = document.getElementById('ip-input');
         const portFilter = document.getElementById('custom-port').value.trim();
         const tagFilter = document.getElementById('custom-tag').value.trim();
         
