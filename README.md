@@ -159,6 +159,11 @@ txt@example.com      # 探测TXT记录
 | `IP_INFO_ENABLED` | 开启IP归属地查询 | `false` |
 | `IP_INFO_API` | IP归属地查询接口 | `http://ip-api.com/json` |
 
+> 💡TG通知策略：
+a.当出现失效ip，新增ip时，也就是域名内ip变动时会通知 
+b.当域名没有补充的ip来维持最小活跃数时 
+c.手动执行维护时
+
 ### CF_DOMAIN 配置格式
 
 ```
