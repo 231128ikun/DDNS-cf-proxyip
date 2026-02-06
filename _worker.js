@@ -1,5 +1,5 @@
 /**
- * DDNS Pro & Proxy IP Manager v6.5
+ * DDNS Pro & Proxy IP Manager v6.6
  */
 
 // ==================== 默认配置（环境变量未设置时使用） ====================
@@ -37,12 +37,12 @@ const DEFAULT_CONFIG = {
 let CONFIG = { ...DEFAULT_CONFIG };
 
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 10,       // 并发数：10（网络好可改为15-20）
-    CHECK_TIMEOUT: 6000,         // 超时：6秒
-    REMOTE_LOAD_TIMEOUT: 10000,  // 远程加载超时：10秒
-    IP_INFO_TIMEOUT: 6000,       // IP归属地查询超时：6秒
-    CHECK_RETRY_COUNT: 2,        // IP检测重试次数
-    CHECK_RETRY_DELAY: 3000,     // 重试间隔：3秒
+    CONCURRENT_CHECKS: 15,       // 并发数：15（网络好可改为15-20）
+    CHECK_TIMEOUT: 3000,         // 超时：3秒
+    REMOTE_LOAD_TIMEOUT: 5000,  // 远程加载超时：5秒
+    IP_INFO_TIMEOUT: 3000,       // IP归属地查询超时：3秒
+    CHECK_RETRY_COUNT: 1,        // IP检测重试次数
+    CHECK_RETRY_DELAY: 1000,     // 重试间隔：1秒
 };
 
 function safeJSONParse(str, defaultValue = null) {
@@ -57,8 +57,15 @@ const parseTXTContent = content => content ? content.replace(/^"|"$/g, '').split
 const extractIPKey = line => {
     if (!line) return '';
     const idx = line.indexOf('#');
-    return idx > 0 ? line.substring(0, idx).trim() : line.trim();
+    return idx >= 0 ? line.substring(0, idx).trim() : line.trim();
 };
+
+function splitComment(line) {
+    if (!line) return { main: '', comment: '' };
+    const idx = line.indexOf('#');
+    if (idx >= 0) return { main: line.substring(0, idx).trim(), comment: line.substring(idx) };
+    return { main: line.trim(), comment: '' };
+}
 
 const POOL_DISPLAY_NAMES = { pool: '通用池', pool_trash: '垃圾桶', domain_pool_mapping: '系统数据' };
 const getPoolDisplayName = poolKey => POOL_DISPLAY_NAMES[poolKey] || poolKey.replace('pool_', '') + '池';
@@ -88,7 +95,7 @@ function parseCookieHeader(cookieHeader) {
         if (idx === -1) return;
         const k = part.slice(0, idx).trim();
         const v = part.slice(idx + 1).trim();
-        if (k) out[k] = decodeURIComponent(v);
+        if (k) { try { out[k] = decodeURIComponent(v); } catch { out[k] = v; } }
     });
     return out;
 }
@@ -242,6 +249,14 @@ const API_ROUTES = {
 };
 
 async function handleAPIRequest(url, request, env) {
+    const POST_ONLY_ROUTES = new Set([
+        '/api/save-pool', '/api/load-remote-url', '/api/add-a-record',
+        '/api/save-domain-pool-mapping', '/api/create-pool', '/api/clear-trash',
+        '/api/restore-from-trash'
+    ]);
+    if (POST_ONLY_ROUTES.has(url.pathname) && request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+    }
     const handler = API_ROUTES[url.pathname];
     return handler ? await handler(url, request, env) : new Response('Not Found', { status: 404 });
 }
@@ -372,7 +387,8 @@ async function handleCurrentStatus(url) {
 
 async function handleLookupDomain(url) {
     const input = url.searchParams.get('domain');
-    
+    if (!input) return badRequest({ error: '缺少domain参数' });
+
     if (input.startsWith('txt@')) {
         const domain = input.substring(4);
         const txtData = await resolveTXTRecord(domain);
@@ -396,6 +412,7 @@ async function handleLookupDomain(url) {
 
 async function handleCheckIP(url) {
     const target = url.searchParams.get('ip');
+    if (!target) return badRequest({ error: '缺少ip参数' });
     const res = await checkProxyIP(target);
     return jsonResponse(res);
 }
@@ -411,6 +428,7 @@ async function handleIPInfo(url) {
 
 async function handleDeleteRecord(url) {
     const id = url.searchParams.get('id');
+    if (!id) return badRequest({ error: '缺少id参数' });
     const ip = url.searchParams.get('ip');
     const isTxt = url.searchParams.get('isTxt') === 'true';
     
@@ -741,7 +759,7 @@ function initConfig(env, request = null) {
     CONFIG.apiKey = env.CF_KEY || '';
     CONFIG.zoneId = env.CF_ZONEID || '';
     CONFIG.authKey = env.AUTH_KEY || '';
-    
+
     const domainsInput = env.CF_DOMAIN || '';
     if (domainsInput) {
         const parts = domainsInput.split(',').map(s => s.trim()).filter(s => s);
@@ -766,42 +784,34 @@ function initConfig(env, request = null) {
     }
 }
 
-// 添加IP到垃圾桶，记录来源池（poolKey）而非域名
-async function addToTrash(env, ipAddr, reason, poolKey) {
+async function batchAddToTrash(env, entries) {
+    if (!entries || entries.length === 0) return;
     const trashKey = 'pool_trash';
     let trashList = parsePoolList(await env.IP_DATA.get(trashKey));
     const trashIPSet = new Set(trashList.map(t => extractIPKey(t)));
-    
-    if (!trashIPSet.has(ipAddr)) {
-        // 使用上海时区格式化时间
-        const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-        // 格式：IP:PORT # 原因 时间戳 来自 池名
-        const trashEntry = `${ipAddr} # ${reason} ${timestamp}${poolKey ? ' 来自 ' + poolKey : ''}`;
-        trashList.push(trashEntry);
-        
-        // 限制垃圾桶大小
-        if (trashList.length > 1000) {
-            trashList = trashList.slice(-1000);
+    const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+    for (const { ipAddr, reason, poolKey } of entries) {
+        if (!trashIPSet.has(ipAddr)) {
+            const trashEntry = `${ipAddr} # ${reason} ${timestamp}${poolKey ? ' 来自 ' + poolKey : ''}`;
+            trashList.push(trashEntry);
+            trashIPSet.add(ipAddr);
         }
-        
-        await env.IP_DATA.put(trashKey, trashList.join('\n'));
-        return true;
     }
-    return false;
+
+    if (trashList.length > 1000) {
+        trashList = trashList.slice(-1000);
+    }
+
+    await env.IP_DATA.put(trashKey, trashList.join('\n'));
 }
 
 function parseIPLine(line) {
     line = line.trim();
     if (!line || line.startsWith('#')) return null;
-    
+
     // 分离注释部分
-    let comment = '';
-    let mainPart = line;
-    const commentIndex = line.indexOf('#');
-    if (commentIndex > 0) {
-        mainPart = line.substring(0, commentIndex).trim();
-        comment = line.substring(commentIndex); // 保留 # 号
-    }
+    const { main: mainPart, comment } = splitComment(line);
     
     // IP:PORT 格式
     let match = mainPart.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$/);
@@ -821,7 +831,7 @@ function parseIPLine(line) {
         }
     }
     
-    // 纯IP（默认443）
+    // 纯IP（默认443端口）
     if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(mainPart)) {
         return `${mainPart}:443${comment}`;
     }
@@ -843,13 +853,7 @@ async function cleanIPListAsync(text, resolveDomains = true) {
         if (!line || line.startsWith('#')) continue;
         
         // 分离注释
-        let comment = '';
-        let mainPart = line;
-        const commentIndex = line.indexOf('#');
-        if (commentIndex > 0) {
-            mainPart = line.substring(0, commentIndex).trim();
-            comment = line.substring(commentIndex);
-        }
+        const { main: mainPart, comment } = splitComment(line);
         
         // 检测域名格式
         const domainMatch = mainPart.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}):?(\d+)?$/);
@@ -859,9 +863,9 @@ async function cleanIPListAsync(text, resolveDomains = true) {
             
             const domain = domainMatch[1];
             const port = domainMatch[2] || '443';
-            
+
             if (domain.length > 253) continue;
-            
+
             try {
                 const ips = await resolveDomain(domain);
                 if (ips && ips.length > 0) {
@@ -891,8 +895,16 @@ async function cleanIPListAsync(text, resolveDomains = true) {
 
 async function loadFromRemoteUrl(url) {
     try {
-        const r = await fetch(url, { 
-            signal: AbortSignal.timeout(GLOBAL_SETTINGS.REMOTE_LOAD_TIMEOUT) 
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+        const hostname = parsed.hostname;
+        if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('10.') ||
+            hostname.startsWith('192.168.') || hostname.startsWith('172.') || hostname === '0.0.0.0') return '';
+    } catch { return ''; }
+
+    try {
+        const r = await fetch(url, {
+            signal: AbortSignal.timeout(GLOBAL_SETTINGS.REMOTE_LOAD_TIMEOUT)
         });
         if (r.ok) {
             const text = await r.text();
@@ -911,7 +923,7 @@ async function resolveDomain(domain) {
             signal: AbortSignal.timeout(5000)
         });
         const d = await r.json();
-        return d.Answer ? d.Answer.map(a => a.data) : [];
+        return d.Answer ? d.Answer.filter(a => a.type === 1).map(a => a.data) : [];
     } catch (e) {
         console.error('❌ DNS A记录解析失败:', e);
         return [];
@@ -1208,11 +1220,14 @@ async function maintainRecordsCommon(options) {
 
     let validIPs = [];
     let poolModified = false;
+    const trashBatch = [];
 
-    // 检测现有IP
-    for (const item of currentIPs) {
-        const checkResult = await checkFn(item.addr);
-
+    // 并行检测所有现有IP
+    const checkResults = await Promise.all(
+        currentIPs.map(item => checkFn(item.addr).then(r => ({ item, result: r })))
+    );
+    // 串行处理结果（删除操作需要顺序执行）
+    for (const { item, result: checkResult } of checkResults) {
         report.checkDetails.push({
             ip: item.addr,
             status: checkResult.success ? '✅ 活跃' : '❌ 失效',
@@ -1231,8 +1246,7 @@ async function maintainRecordsCommon(options) {
             report.poolRemoved++;
             poolModified = true;
 
-            // 传递池名（poolKey）而非域名，以便恢复时能正确回到原池
-            await addToTrash(env, item.addr, '维护失效', poolKey);
+            trashBatch.push({ ipAddr: item.addr, reason: '维护失效', poolKey });
             addLog(`  ❌ ${item.addr} - 失效已删除，已放入垃圾桶`);
         }
     }
@@ -1260,8 +1274,7 @@ async function maintainRecordsCommon(options) {
                 poolList = poolList.filter(p => extractIPKey(p) !== ipPort);
                 report.poolRemoved++;
                 poolModified = true;
-                // 传递池名（poolKey）以便恢复时能正确回到原池
-                await addToTrash(env, ipPort, '补充检测失败', poolKey);
+                trashBatch.push({ ipAddr: ipPort, reason: '补充检测失败', poolKey });
                 addLog(`  ❌ ${ipPort} - 检测失败，从池中移除并放入垃圾桶`);
             }
         }
@@ -1270,6 +1283,11 @@ async function maintainRecordsCommon(options) {
             report.poolExhausted = true;
             addLog(`⚠️ ${poolKey} 库存不足，无法达到最小活跃数 ${target.minActive}`);
         }
+    }
+
+    // 批量写入垃圾桶
+    if (trashBatch.length > 0) {
+        await batchAddToTrash(env, trashBatch);
     }
 
     if (poolModified) {
@@ -1419,13 +1437,13 @@ async function maintainAllDomains(env, isManual = false) {
     };
     
     const allKeys = await env.IP_DATA.list();
-    for (const key of allKeys.keys) {
-        if (key.name.startsWith('pool')) {
-            const poolRaw = await env.IP_DATA.get(key.name) || '';
-            const count = parsePoolList(poolRaw).length;
-            poolStats.set(key.name, { before: count, after: count });
-        }
-    }
+    const poolEntries = await Promise.all(
+        allKeys.keys.filter(k => k.name.startsWith('pool')).map(async k => {
+            const raw = await env.IP_DATA.get(k.name) || '';
+            return [k.name, parsePoolList(raw).length];
+        })
+    );
+    poolEntries.forEach(([name, count]) => poolStats.set(name, { before: count, after: count }));
     
     for (let i = 0; i < CONFIG.targets.length; i++) {
         const target = CONFIG.targets[i];
@@ -1745,7 +1763,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v6.5 - IP管理面板</title>
+    <title>DDNS Pro v6.6 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -2264,14 +2282,14 @@ function renderHTML(C) {
     <svg viewBox="0 0 250 250" aria-hidden="true">
         <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path>
         <path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path>
-        <path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path>
+        <path d="M115.0,115.0 C114.9,115.1 118.7,116.6 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.6 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path>
     </svg>
 </a>
 
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v6.5</span>
+        <span class="version-badge">v6.6</span>
     </h1>
     <div class="hero-actions">
         <div class="guide-toggle" onclick="toggleGuide()" title="使用步骤提示">?</div>
@@ -2541,19 +2559,24 @@ function renderHTML(C) {
         }
         return resp;
     }
-    
+
+    function escapeHTML(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
     const log = (m, t='info', skipTimestamp=false) => {
         const w = document.getElementById('log-window');
         const colors = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
-        
+
         let output;
         if (skipTimestamp) {
-            output = \`<div style="color:\${colors[t]}">\${m}</div>\`;
+            output = \`<div style="color:\${colors[t]}">\${escapeHTML(m)}</div>\`;
         } else {
             const time = new Date().toLocaleTimeString('zh-CN');
-            output = \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${m}</div>\`;
+            output = \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${escapeHTML(m)}</div>\`;
         }
-        
+
         w.innerHTML += output;
         w.scrollTop = w.scrollHeight;
     };
@@ -2588,7 +2611,7 @@ function renderHTML(C) {
             }
         }
         
-        // 纯IP
+        // 纯IP（默认443端口）
         if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(mainPart)) {
             return \`\${mainPart}:443\${comment}\`;
         }
@@ -2610,17 +2633,39 @@ function renderHTML(C) {
 
     function formatIPInfo(ipInfo) {
         if (!ipInfo) return '';
-        
+
         let html = '';
         if (ipInfo.country) {
-            html += \`<span class="ip-info-tag">\${ipInfo.country}</span>\`;
+            html += \`<span class="ip-info-tag">\${escapeHTML(ipInfo.country)}</span>\`;
         }
         if (ipInfo.asn) {
-            html += \`<span class="ip-info-tag">\${ipInfo.asn}</span>\`;
+            html += \`<span class="ip-info-tag">\${escapeHTML(ipInfo.asn)}</span>\`;
         }
         return html;
     }
-    
+
+    async function checkIPWithInfo(addr) {
+        const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(addr)}\`).then(r => r.json());
+        let ipInfo = null;
+        if (IP_INFO_ENABLED) {
+            const ipOnly = addr.split(':')[0];
+            ipInfo = await apiFetch(\`/api/ip-info?ip=\${encodeURIComponent(ipOnly)}\`).then(r => r.json());
+            if (ipInfo && ipInfo.error) ipInfo = null;
+        }
+        return { ip: addr, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-', ipInfo };
+    }
+
+    function renderIPRow(r, actionHTML) {
+        return \`<tr>
+            <td class="fw-bold">\${escapeHTML(r.ip)}</td>
+            <td><span class="badge bg-light text-dark">\${escapeHTML(r.colo)}</span></td>
+            <td>\${escapeHTML(String(r.time))}ms</td>
+            <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
+            \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
+            <td>\${actionHTML}</td>
+        </tr>\`;
+    }
+
     function switchDomain() {
         currentTargetIndex = parseInt(document.getElementById('domain-select').value);
         const target = TARGETS[currentTargetIndex];
@@ -3035,43 +3080,31 @@ function renderHTML(C) {
             const data = await apiFetch(\`/api/current-status?target=\${currentTargetIndex}\`).then(r => r.json());
             
             if (data.error) {
-                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ \${data.error}<br><small>请检查 CF_KEY, CF_ZONEID 配置</small></td></tr>\`;
+                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ \${escapeHTML(data.error)}<br><small>请检查 CF_KEY, CF_ZONEID 配置</small></td></tr>\`;
                 return;
             }
-            
+
             // 统一收集所有记录到表格中显示
             let allRows = [];
-            
+
             // A记录
             if ((data.mode === 'A' || data.mode === 'ALL') && data.aRecords && data.aRecords.length > 0) {
                 data.aRecords.forEach(r => {
-                    allRows.push(\`
-                        <tr>
-                            <td class="fw-bold">\${r.ip}:\${r.port}</td>
-                            <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
-                            <td>\${r.time}ms</td>
-                            <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
-                            \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
-                            <td><a href="javascript:deleteRecord('\${r.id}')" class="text-danger text-decoration-none small fw-bold">🗑️</a></td>
-                        </tr>
-                    \`);
+                    allRows.push(renderIPRow(
+                        { ip: r.ip + ':' + r.port, colo: r.colo, time: r.time, success: r.success, ipInfo: r.ipInfo },
+                        \`<a href="javascript:deleteRecord('\${escapeHTML(r.id)}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>\`
+                    ));
                 });
             }
-            
+
             // TXT记录（统一显示在表格中）
             if ((data.mode === 'TXT' || data.mode === 'ALL') && data.txtRecords && data.txtRecords.length > 0) {
                 const record = data.txtRecords[0];
                 record.ips.forEach(ip => {
-                    allRows.push(\`
-                        <tr>
-                            <td class="fw-bold">\${ip.ip}</td>
-                            <td><span class="badge bg-light text-dark">\${ip.colo}</span></td>
-                            <td>\${ip.time}ms</td>
-                            <td><span class="badge \${ip.success?'bg-success':'bg-danger'}">\${ip.success?'✅':'❌'}</span></td>
-                            \${IP_INFO_ENABLED ? \`<td>\${ip.ipInfo ? formatIPInfo(ip.ipInfo) : '-'}</td>\` : ''}
-                            <td><a href="javascript:deleteTxtIP('\${record.id}', '\${ip.ip}')" class="text-danger text-decoration-none small fw-bold">🗑️</a></td>
-                        </tr>
-                    \`);
+                    allRows.push(renderIPRow(
+                        ip,
+                        \`<a href="javascript:deleteTxtIP('\${escapeHTML(record.id)}', '\${escapeHTML(ip.ip)}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>\`
+                    ));
                 });
             }
             
@@ -3142,29 +3175,13 @@ function renderHTML(C) {
                 const data = await apiFetch(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`).then(r => r.json());
                 log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
                 
-                // 显示在TXT区域
-                let html = \`<h6 class="fw-bold mb-2 mt-3">📝 探测: \${data.domain}</h6><div class="p-3 bg-light rounded-3">\`;
-                
-                // 并发检测
-                const checkResults = await Promise.all(data.ips.map(async ip => {
-                    const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(ip)}\`).then(r => r.json());
-                    return { ip, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-' };
-                }));
-                
-                checkResults.forEach(r => {
-                    html += \`<div class="txt-record-item">
-                        <div class="txt-ip-line">
-                            <code class="txt-ip-code">\${r.ip}</code>
-                            <div class="txt-info-group">
-                                <span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'} \${r.colo} · \${r.time}ms</span>
-                                <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${r.ip}')" title="添加到输入框">➕</button>
-                            </div>
-                        </div>
-                    </div>\`;
-                });
-                html += '</div>';
-                txtDiv.innerHTML = html;
-                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">TXT探测结果见下方</td></tr>\`;
+                // 并发检测（与A记录探测统一模板）
+                const checkResults = await Promise.all(data.ips.map(ip => checkIPWithInfo(ip)));
+
+                // 显示在表格中（与A记录探测统一模板）
+                t.innerHTML = checkResults.map(r => renderIPRow(r,
+                    \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(r.ip)}')" title="添加到输入框">➕</button>\`
+                )).join('');
                 
                 const activeCount = checkResults.filter(r => r.success).length;
                 log(\`📊 探测完成: \${activeCount}/\${data.ips.length} 活跃\`, activeCount === data.ips.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
@@ -3191,28 +3208,12 @@ function renderHTML(C) {
             }
             
             // 并发检测
-            const checkResults = await Promise.all(targets.map(async addr => {
-                const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(addr)}\`).then(r => r.json());
-                let ipInfo = null;
-                if (IP_INFO_ENABLED) {
-                    const ipOnly = addr.split(':')[0];
-                    ipInfo = await apiFetch(\`/api/ip-info?ip=\${encodeURIComponent(ipOnly)}\`).then(r => r.json());
-                    if (ipInfo && ipInfo.error) ipInfo = null;
-                }
-                return { ip: addr, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-', ipInfo };
-            }));
-            
+            const checkResults = await Promise.all(targets.map(addr => checkIPWithInfo(addr)));
+
             // 显示在表格中
-            t.innerHTML = checkResults.map(r => \`
-                <tr>
-                    <td class="fw-bold">\${r.ip}</td>
-                    <td><span class="badge bg-light text-dark">\${r.colo}</span></td>
-                    <td>\${r.time}ms</td>
-                    <td><span class="badge \${r.success?'bg-success':'bg-danger'}">\${r.success?'✅':'❌'}</span></td>
-                    \${IP_INFO_ENABLED ? \`<td>\${r.ipInfo ? formatIPInfo(r.ipInfo) : '-'}</td>\` : ''}
-                    <td><button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${r.ip}')" title="添加到输入框">➕</button></td>
-                </tr>
-            \`).join('');
+            t.innerHTML = checkResults.map(r => renderIPRow(r,
+                \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(r.ip)}')" title="添加到输入框">➕</button>\`
+            )).join('');
             
             const activeCount = checkResults.filter(r => r.success).length;
             log(\`📊 探测完成: \${activeCount}/\${targets.length} 活跃\`, activeCount === targets.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
@@ -3226,36 +3227,31 @@ function renderHTML(C) {
         // 先标准化
         const normalized = normalizeIPFormat(ip);
         const checkTarget = normalized ? normalized.split('#')[0].trim() : ip;
-        
+
         const id = 'check-' + Math.random().toString(36).substr(2, 9);
         const div = document.createElement('div');
         div.className = 'result-item';
         div.innerHTML = \`
-            <code>\${checkTarget}</code>
+            <code>\${escapeHTML(checkTarget)}</code>
             <span class="info" id="\${id}">检测中...</span>
-            <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${checkTarget}')" style="display:none" id="btn-\${id}">➕</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(checkTarget)}')" style="display:none" id="btn-\${id}">➕</button>
         \`;
         container.appendChild(div);
-        
+
         try {
-            const result = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\`).then(r => r.json());
+            const result = await checkIPWithInfo(checkTarget);
             const info = document.getElementById(id);
             const btn = document.getElementById('btn-' + id);
-            
+
             if (result.success) {
-                let infoHTML = \`<span class="text-success">✅ \${result.colo} · \${result.responseTime}ms</span>\`;
-                
-                if (IP_INFO_ENABLED) {
-                    const ipOnly = checkTarget.split(':')[0];
-                    const ipInfo = await apiFetch(\`/api/ip-info?ip=\${encodeURIComponent(ipOnly)}\`).then(r => r.json());
-                    if (ipInfo && !ipInfo.error) {
-                        infoHTML += formatIPInfo(ipInfo);
-                    }
+                let infoHTML = \`<span class="text-success">✅ \${escapeHTML(result.colo)} · \${escapeHTML(String(result.time))}ms</span>\`;
+                if (result.ipInfo) {
+                    infoHTML += formatIPInfo(result.ipInfo);
                 }
-                
+
                 info.innerHTML = infoHTML;
                 btn.style.display = 'block';
-                log(\`  ✅ \${checkTarget} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
+                log(\`  ✅ \${checkTarget} - \${result.colo} (\${result.time}ms)\`, 'success');
                 return true;
             } else {
                 info.innerHTML = '<span class="text-danger">❌ 失效</span>';
@@ -3384,7 +3380,7 @@ function renderHTML(C) {
             pools.splice(1, 0, 'pool_trash');
         }
         
-        selector.innerHTML = pools.map(pool => \`<option value="\${pool}">\${getPoolName(pool)}</option>\`).join('');
+        selector.innerHTML = pools.map(pool => \`<option value="\${escapeHTML(pool)}">\${escapeHTML(getPoolName(pool))}</option>\`).join('');
         selector.value = currentPool;
     }
     
@@ -3401,15 +3397,15 @@ function renderHTML(C) {
             
             const options = selectablePools.map(pool => {
                 const selected = pool === boundPool ? 'selected' : '';
-                return \`<option value="\${pool}" \${selected}>\${getPoolName(pool)}</option>\`;
+                return \`<option value="\${escapeHTML(pool)}" \${selected}>\${escapeHTML(getPoolName(pool))}</option>\`;
             }).join('');
-            
+
             return \`
                 <tr>
-                    <td><code>\${domain}</code></td>
+                    <td><code>\${escapeHTML(domain)}</code></td>
                     <td>
-                        <select class="form-select form-select-sm" 
-                                onchange="bindDomainToPool('\${domain}', this.value)">
+                        <select class="form-select form-select-sm"
+                                onchange="bindDomainToPool('\${escapeHTML(domain)}', this.value)">
                             \${options}
                         </select>
                     </td>
