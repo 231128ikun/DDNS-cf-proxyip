@@ -3268,7 +3268,9 @@ function renderHTML(C) {
         if (!confirm('确认删除？')) return;
         
         try {
-            await apiFetch(\`/api/delete-record?id=\${id}\`);
+            await apiFetch(\`/api/delete-record?id=\${id}\`,{
+            method: 'POST'
+        });
             log('🗑️  已删除', 'success');
             refreshStatus();
         } catch (e) {
@@ -3280,7 +3282,9 @@ function renderHTML(C) {
         if (!confirm(\`确认删除 \${ip}？\`)) return;
         
         try {
-            await apiFetch(\`/api/delete-record?id=\${recordId}&ip=\${encodeURIComponent(ip)}&isTxt=true\`);
+            await apiFetch(\`/api/delete-record?id=\${recordId}&ip=\${encodeURIComponent(ip)}&isTxt=true\`,{
+            method: 'POST'
+        });
             log('🗑️ 已从TXT记录删除', 'success');
             refreshStatus();
         } catch (e) {
@@ -3455,7 +3459,9 @@ function renderHTML(C) {
         if (!confirm(\`确认删除 \${currentPool}?\`)) return;
         
         try {
-            await apiFetch(\`/api/delete-pool?poolKey=\${currentPool}\`);
+            await apiFetch(\`/api/delete-pool?poolKey=\${currentPool}\`,{
+            method: 'POST'
+        });
             
             availablePools = availablePools.filter(p => p !== currentPool);
             currentPool = 'pool';
