@@ -1175,29 +1175,58 @@ async function fetchCF(config, path, method = 'GET', body = null) {
     };
     if (body) init.body = JSON.stringify(body);
 
-    try {
-        const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
-        const d = await r.json();
+    const maxRetries = 3;
+    const retryDelay = 1000;
 
-        if (!d.success) {
-            console.error('❌ Cloudflare API错误:', {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
+            const d = await r.json();
+
+            if (!d.success) {
+                // API 返回错误
+                if (attempt < maxRetries - 1) {
+                    console.warn(`⚠️ Cloudflare API错误，重试 ${attempt + 1}/${maxRetries - 1}:`, {
+                        path,
+                        method,
+                        errors: d.errors
+                    });
+                    await delay(retryDelay);
+                    continue;
+                }
+                
+                console.error('❌ Cloudflare API错误（已重试）:', {
+                    path,
+                    method,
+                    errors: d.errors,
+                    messages: d.messages
+                });
+                return null;
+            }
+
+            return d.result;
+        } catch (e) {
+            // 网络错误
+            if (attempt < maxRetries - 1) {
+                console.warn(`⚠️ Cloudflare API请求失败，重试 ${attempt + 1}/${maxRetries - 1}:`, {
+                    path,
+                    method,
+                    error: e.message
+                });
+                await delay(retryDelay);
+                continue;
+            }
+            
+            console.error('❌ Cloudflare API请求失败（已重试）:', {
                 path,
                 method,
-                errors: d.errors,
-                messages: d.messages
+                error: e.message
             });
             return null;
         }
-
-        return d.result;
-    } catch (e) {
-        console.error('❌ Cloudflare API请求失败:', {
-            path,
-            method,
-            error: e.message
-        });
-        return null;
     }
+
+    return null;
 }
 
 async function getCandidateIPs(env, target, addLog, poolKey) {
@@ -3263,7 +3292,9 @@ function renderHTML(C) {
         log('🔧 启动维护...', 'warn');
         
         try {
-            const r = await apiFetch('/api/maintain?manual=true').then(r => r.json());
+            const r = await apiFetch('/api/maintain?manual=true',{
+                method: 'POST'
+            }).then(r => r.json());
             
             if (r.allLogs && r.allLogs.length > 0) {
                 r.allLogs.forEach(msg => log(msg, 'info', true));
