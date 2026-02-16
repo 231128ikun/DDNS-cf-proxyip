@@ -1,5 +1,5 @@
 /**
- * DDNS Pro & Proxy IP Manager v6.8
+ * DDNS Pro & Proxy IP Manager v6.9
  */
 
 // ==================== 默认配置（环境变量未设置时使用） ====================
@@ -18,6 +18,8 @@ const DEFAULT_CONFIG = {
     // 检测 API 配置
     checkApi: 'https://check.proxyip.cmliussss.net/check?proxyip=',  // CHECK_API: ProxyIP 检测接口
     checkApiToken: '',       // CHECK_API_TOKEN: 检测接口认证Token
+    checkApiBackup: 'https://check.proxyip.cmliussss.net/check?proxyip=',      // CHECK_API_BACKUP: 备用检测接口
+    checkApiBackupToken: '', // CHECK_API_BACKUP_TOKEN: 备用检测接口认证Token
     
     // DNS 配置
     dohApi: 'https://cloudflare-dns.com/dns-query',  // DOH_API: DNS over HTTPS 接口
@@ -35,12 +37,20 @@ const DEFAULT_CONFIG = {
 // ==================== 默认配置结束 ====================
 
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 15,       // 并发数：15（网络好可改为15-20）
-    CHECK_TIMEOUT: 3000,         // 超时：3秒
-    REMOTE_LOAD_TIMEOUT: 5000,  // 远程加载超时：5秒
-    IP_INFO_TIMEOUT: 3000,       // IP归属地查询超时：3秒
-    CHECK_RETRY_COUNT: 1,        // IP检测重试次数
-    CHECK_RETRY_DELAY: 1000,     // 重试间隔：1秒
+    // ── IP 检测 ──
+    CONCURRENT_CHECKS: 15,       // 前端批量检测并发数
+    CHECK_TIMEOUT: 3000,         // 单次 ProxyIP 检测超时(ms)
+
+    // ── 网络超时 ──
+    REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
+    IP_INFO_TIMEOUT: 3000,       // IP 归属地查询超时(ms)
+    DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
+
+    // ── 数据限制 ──
+    DEFAULT_MIN_ACTIVE: 3,       // 默认最小活跃 IP 数
+    MAX_TRASH_SIZE: 1000,        // 垃圾桶最大条目数
+    MAX_POOL_NAME_LENGTH: 50,    // IP池名称最大长度
+    MAX_IPS_PER_DOMAIN: 50,      // 域名解析最多取多少个 IP
 };
 
 function safeJSONParse(str, defaultValue = null) {
@@ -71,6 +81,7 @@ const getPoolDisplayName = poolKey => POOL_DISPLAY_NAMES[poolKey] || poolKey.rep
 const formatLogMessage = msg => `[${new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })}] ${msg}`;
 
 const JSON_CONTENT_TYPE = 'application/json; charset=UTF-8';
+const CF_ERROR_MSG = 'CF配置错误或API调用失败';
 
 function jsonResponse(data, status = 200, extraHeaders = undefined) {
     const headers = new Headers({ 'Content-Type': JSON_CONTENT_TYPE });
@@ -99,14 +110,14 @@ function parseCookieHeader(cookieHeader) {
 }
 
 function getAuthCandidateFromRequest(request, url) {
-    const authHeader = request.headers.get('Authorization') || '';
+    const authHeader = request.headers.get('Authorization') ?? '';
     const bearer = authHeader.toLowerCase().startsWith('bearer ')
         ? authHeader.slice(7).trim()
         : '';
-    const xAuth = (request.headers.get('X-Auth-Key') || '').trim();
-    const qKey = (url.searchParams.get('key') || '').trim();
-    const cookies = parseCookieHeader(request.headers.get('Cookie') || '');
-    const cKey = (cookies.ddns_auth || '').trim();
+    const xAuth = (request.headers.get('X-Auth-Key') ?? '').trim();
+    const qKey = (url.searchParams.get('key') ?? '').trim();
+    const cookies = parseCookieHeader(request.headers.get('Cookie') ?? '');
+    const cKey = (cookies.ddns_auth ?? '').trim();
     return { bearer, xAuth, qKey, cKey };
 }
 
@@ -414,6 +425,12 @@ async function handleLookupDomain(url, config) {
 async function handleCheckIP(url, config) {
     const target = url.searchParams.get('ip');
     if (!target) return badRequest({ error: '缺少ip参数' });
+    const useBackup = url.searchParams.get('useBackup') === 'true';
+    if (useBackup && config.checkApiBackup) {
+        const addr = normalizeCheckAddr(target);
+        const result = await checkProxyIPOnce(addr, config.checkApiBackup, config.checkApiBackupToken);
+        return jsonResponse(result ?? { success: false });
+    }
     const res = await checkProxyIP(target, config);
     return jsonResponse(res);
 }
@@ -424,7 +441,7 @@ async function handleIPInfo(url, config) {
         return badRequest({ error: '缺少IP参数' });
     }
     const info = await getIPInfo(ip, config);
-    return jsonResponse(info || { error: '查询失败' });
+    return jsonResponse(info ?? { error: '查询失败' });
 }
 
 async function handleDeleteRecord(url, config) {
@@ -501,10 +518,14 @@ async function handleAddARecord(request, config) {
     if (target.mode === 'TXT') {
         const records = await fetchCF(config, `/zones/${config.zoneId}/dns_records?name=${target.domain}&type=TXT`);
 
+        if (records === null) {
+            return jsonResponse({ success: false, error: CF_ERROR_MSG });
+        }
+
         let currentIPs = [];
         let recordId = null;
 
-        if (records && records.length > 0) {
+        if (records?.length > 0) {
             recordId = records[0].id;
             currentIPs = parseTXTContent(records[0].content);
         }
@@ -519,19 +540,25 @@ async function handleAddARecord(request, config) {
         const newContent = `"${currentIPs.join(',')}"`;
 
         if (recordId) {
-            await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'PUT', {
+            const putResult = await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'PUT', {
                 type: 'TXT',
                 name: target.domain,
                 content: newContent,
                 ttl: 60
             });
+            if (putResult === null) {
+                return jsonResponse({ success: false, error: 'CF API 更新TXT记录失败' });
+            }
         } else {
-            await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
+            const postResult = await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
                 type: 'TXT',
                 name: target.domain,
                 content: newContent,
                 ttl: 60
             });
+            if (postResult === null) {
+                return jsonResponse({ success: false, error: 'CF API 创建TXT记录失败' });
+            }
         }
 
         return jsonResponse({
@@ -608,8 +635,8 @@ async function handleCreatePool(request, env) {
     }
     
     // 支持中文、字母、数字、下划线、横杠
-    if (poolKey.length > 50 || !/^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(poolKey)) {
-        return badRequest({ success: false, error: '池名称只能包含中文、字母、数字、下划线、横杠，最长50字符' });
+    if (poolKey.length > GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH || !/^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(poolKey)) {
+        return badRequest({ success: false, error: `池名称只能包含中文、字母、数字、下划线、横杠，最长${GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH}字符` });
     }
     
     const existing = await env.IP_DATA.get(poolKey);
@@ -749,7 +776,7 @@ function parseTarget(input) {
     input = input.trim();
     
     // 解析最小活跃数（&后面的数字）
-    let minActive = 3; // 默认值
+    let minActive = GLOBAL_SETTINGS.DEFAULT_MIN_ACTIVE;
     const minActiveMatch = input.match(/&(\d+)$/);
     if (minActiveMatch) {
         minActive = parseInt(minActiveMatch[1]);
@@ -789,13 +816,15 @@ function createConfig(env, request = null) {
     }
 
     if (config.targets.length === 0) {
-        config.targets = [{ mode: 'A', domain: '', port: '443', minActive: 3 }];
+        config.targets = [{ mode: 'A', domain: '', port: '443', minActive: GLOBAL_SETTINGS.DEFAULT_MIN_ACTIVE }];
     }
 
     config.tgToken = env.TG_TOKEN || '';
     config.tgId = env.TG_ID || '';
     config.checkApi = env.CHECK_API || DEFAULT_CONFIG.checkApi;
     config.checkApiToken = env.CHECK_API_TOKEN || '';
+    config.checkApiBackup = env.CHECK_API_BACKUP || '';
+    config.checkApiBackupToken = env.CHECK_API_BACKUP_TOKEN || '';
     config.dohApi = env.DOH_API || DEFAULT_CONFIG.dohApi;
     config.ipInfoEnabled = env.IP_INFO_ENABLED === 'true';
     config.ipInfoApi = env.IP_INFO_API || DEFAULT_CONFIG.ipInfoApi;
@@ -823,8 +852,8 @@ async function batchAddToTrash(env, entries) {
         }
     }
 
-    if (trashList.length > 1000) {
-        trashList = trashList.slice(-1000);
+    if (trashList.length > GLOBAL_SETTINGS.MAX_TRASH_SIZE) {
+        trashList = trashList.slice(-GLOBAL_SETTINGS.MAX_TRASH_SIZE);
     }
 
     await env.IP_DATA.put(trashKey, trashList.join('\n'));
@@ -896,7 +925,7 @@ async function cleanIPListAsync(text, resolveDomains = true, config = null) {
             try {
                 const ips = await resolveDomain(domain, config);
                 if (ips && ips.length > 0) {
-                    ips.slice(0, 50).forEach(ip => {
+                    ips.slice(0, GLOBAL_SETTINGS.MAX_IPS_PER_DOMAIN).forEach(ip => {
                         const fullFormat = `${ip}:${port}${comment}`;
                         const key = `${ip}:${port}`;
                         map.set(key, fullFormat);
@@ -924,9 +953,19 @@ async function loadFromRemoteUrl(url) {
     try {
         const parsed = new URL(url);
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
-        const hostname = parsed.hostname;
-        if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('10.') ||
-            hostname.startsWith('192.168.') || hostname.startsWith('172.') || hostname === '0.0.0.0') return '';
+        const hostname = parsed.hostname.toLowerCase();
+        if (hostname === 'localhost' ||
+            hostname.startsWith('127.') ||
+            hostname.startsWith('10.') ||
+            hostname.startsWith('192.168.') ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+            hostname === '0.0.0.0' ||
+            hostname === '::1' ||
+            hostname === '[::1]' ||
+            hostname.startsWith('fc00:') ||
+            hostname.startsWith('fe80:') ||
+            hostname.startsWith('[fc00:') ||
+            hostname.startsWith('[fe80:')) return '';
     } catch { return ''; }
 
     try {
@@ -947,10 +986,10 @@ async function resolveDomain(domain, config) {
     try {
         const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=A`, {
             headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(5000)
+            signal: AbortSignal.timeout(GLOBAL_SETTINGS.DOH_TIMEOUT)
         });
         const d = await r.json();
-        return d.Answer ? d.Answer.filter(a => a.type === 1).map(a => a.data) : [];
+        return d.Answer?.filter(a => a.type === 1).map(a => a.data) ?? [];
     } catch (e) {
         console.error('❌ DNS A记录解析失败:', e);
         return [];
@@ -961,18 +1000,18 @@ async function resolveTXTRecord(domain, config) {
     try {
         const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=TXT`, {
             headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(5000)
+            signal: AbortSignal.timeout(GLOBAL_SETTINGS.DOH_TIMEOUT)
         });
         const d = await r.json();
 
-        if (!d.Answer || d.Answer.length === 0) {
+        if (!d.Answer?.length) {
             return { raw: '', ips: [] };
         }
 
         // 去掉DNS返回的引号
-        let raw = d.Answer[0].data;
-        const ips = parseTXTContent(raw);
-        raw = raw.replace(/^"|"$/g, ''); // 去掉首尾引号（保留 raw 用于返回）
+        const rawData = d.Answer[0].data;
+        const ips = parseTXTContent(rawData);
+        const raw = rawData.replace(/^"|"$/g, '');
 
         return { raw, ips };
     } catch (e) {
@@ -1011,14 +1050,24 @@ async function getIPInfo(ip, config) {
 }
 
 // 批量检测IP列表，可选查询归属地
-async function batchCheckIPs(ipList, checkFn, config) {
+async function batchCheckIPs(ipList, checkFn, config, useBackupApi = false) {
     if (!ipList || ipList.length === 0) return [];
 
-    const checkResults = await Promise.all(ipList.map(addr => checkFn(addr)));
+    // 垃圾桶复检时使用备用接口（如有）独立验证
+    const effectiveCheckFn = (useBackupApi && config.checkApiBackup)
+        ? (addr) => {
+            const normalized = normalizeCheckAddr(addr);
+            return checkProxyIPOnce(normalized, config.checkApiBackup, config.checkApiBackupToken)
+                .then(r => r ?? { success: false });
+        }
+        : checkFn;
 
-    let ipInfoMap = new Map();
+    const checkSettled = await Promise.allSettled(ipList.map(addr => effectiveCheckFn(addr)));
+    const checkResults = checkSettled.map(r => r.status === 'fulfilled' ? r.value : { success: false });
+
+    const ipInfoMap = new Map();
     if (config.ipInfoEnabled) {
-        await Promise.all(ipList.map(async (addr) => {
+        await Promise.allSettled(ipList.map(async (addr) => {
             const ipOnly = addr.split(':')[0];
             const info = await getIPInfo(ipOnly, config);
             if (info) ipInfoMap.set(ipOnly, info);
@@ -1046,34 +1095,32 @@ async function getDomainStatus(target, config) {
 
     if (target.mode === 'A' || target.mode === 'ALL') {
         const records = await fetchCF(config, `/zones/${config.zoneId}/dns_records?name=${target.domain}&type=A`);
-        if (records === null) {
-            result.error = 'CF配置错误或API调用失败';
+        if (!records) {
+            result.error = CF_ERROR_MSG;
             return result;
         }
-        if (records) {
-            // 使用批量检测流程
-            const ipList = records.map(r => `${r.content}:${target.port}`);
-            const checkResults = await batchCheckIPs(ipList, (addr) => checkProxyIP(addr, config), config);
+        // 使用批量检测流程
+        const ipList = records.map(r => `${r.content}:${target.port}`);
+        const checkResults = await batchCheckIPs(ipList, (addr) => checkProxyIP(addr, config), config);
 
-            result.aRecords = records.map((r, i) => ({
-                id: r.id,
-                ip: r.content,
-                port: target.port,
-                success: checkResults[i].success,
-                colo: checkResults[i].colo,
-                time: checkResults[i].time,
-                ipInfo: checkResults[i].ipInfo
-            }));
-        }
+        result.aRecords = records.map((r, i) => ({
+            id: r.id,
+            ip: r.content,
+            port: target.port,
+            success: checkResults[i].success,
+            colo: checkResults[i].colo,
+            time: checkResults[i].time,
+            ipInfo: checkResults[i].ipInfo
+        }));
     }
 
     if (target.mode === 'TXT' || target.mode === 'ALL') {
         const records = await fetchCF(config, `/zones/${config.zoneId}/dns_records?name=${target.domain}&type=TXT`);
-        if (records === null) {
-            result.error = 'CF配置错误或API调用失败';
+        if (!records) {
+            result.error = CF_ERROR_MSG;
             return result;
         }
-        if (records && records.length > 0) {
+        if (records.length > 0) {
             const ips = parseTXTContent(records[0].content);
 
             // 使用批量检测流程
@@ -1098,65 +1145,57 @@ async function getDomainStatus(target, config) {
 }
 
 // 单次检测IP（不带重试）
-async function checkProxyIPOnce(addr, config) {
+async function checkProxyIPOnce(addr, apiUrl, token) {
     try {
-        let apiUrl = `${config.checkApi}${encodeURIComponent(addr)}`;
-        if (config.checkApiToken) {
-            apiUrl += `${apiUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(config.checkApiToken)}`;
+        let url = `${apiUrl}${encodeURIComponent(addr)}`;
+        if (token) {
+            url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
         }
 
-        const r = await fetch(apiUrl, { signal: AbortSignal.timeout(GLOBAL_SETTINGS.CHECK_TIMEOUT) });
-        if (!r.ok) return { success: false };
+        const r = await fetch(url, { signal: AbortSignal.timeout(GLOBAL_SETTINGS.CHECK_TIMEOUT) });
+        if (!r.ok) return null;
 
         const data = safeJSONParse(await r.text(), null);
-        return data && typeof data === 'object' ? data : { success: false };
+        return data && typeof data === 'object' ? data : null;
     } catch {
-        return { success: false };
+        return null;
     }
 }
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-async function checkProxyIP(input, config) {
+// 地址格式化：智能添加默认端口443，处理IPv6方括号
+function normalizeCheckAddr(input) {
     let addr = input.trim();
-
-    // 智能添加默认端口443
-    // IPv6 格式: [2001:db8::1] 或 [2001:db8::1]:443
-    // IPv4 格式: 1.2.3.4 或 1.2.3.4:443
     if (addr.startsWith('[')) {
-        // IPv6 地址
         if (!addr.includes(']:')) {
             addr = addr.endsWith(']') ? `${addr}:443` : `${addr}]:443`;
         }
     } else if (!addr.includes(':') || (addr.match(/:/g) || []).length > 1) {
-        // IPv4 无端口，或者是裸 IPv6（无方括号）
         if ((addr.match(/:/g) || []).length > 1) {
             addr = `[${addr}]:443`;
         } else {
             addr = `${addr}:443`;
         }
     }
+    return addr;
+}
 
-    // 带重试的检测逻辑
-    const maxRetries = GLOBAL_SETTINGS.CHECK_RETRY_COUNT || 2;
-    const retryDelay = GLOBAL_SETTINGS.CHECK_RETRY_DELAY || 1000;
+async function checkProxyIP(input, config) {
+    const addr = normalizeCheckAddr(input);
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const result = await checkProxyIPOnce(addr, config);
-        if (result.success) {
-            return result;
-        }
-        // 如果不是最后一次尝试，等待后重试
-        if (attempt < maxRetries) {
-            await delay(retryDelay);
-        }
+    // 主接口检测
+    const result = await checkProxyIPOnce(addr, config.checkApi, config.checkApiToken);
+    if (result !== null) return result;
+
+    // 备用接口检测
+    if (config.checkApiBackup) {
+        const backup = await checkProxyIPOnce(addr, config.checkApiBackup, config.checkApiBackupToken);
+        if (backup !== null) return backup;
     }
 
     return { success: false };
 }
 
 async function fetchCF(config, path, method = 'GET', body = null) {
-    // Cloudflare API Token(Bearer) 模式下仅需 Authorization: Bearer <token>
     if (!config.apiKey || !config.zoneId) {
         console.error('❌ Cloudflare配置不完整:', {
             apiKey: !!config.apiKey,
@@ -1169,64 +1208,32 @@ async function fetchCF(config, path, method = 'GET', body = null) {
         'Authorization': `Bearer ${config.apiKey}`,
         'Content-Type': 'application/json'
     };
-    const init = {
-        method: method,
-        headers
-    };
+    const init = { method, headers };
     if (body) init.body = JSON.stringify(body);
 
-    const maxRetries = 3;
-    const retryDelay = 1000;
+    try {
+        const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
+        const d = await r.json();
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-            const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
-            const d = await r.json();
-
-            if (!d.success) {
-                // API 返回错误
-                if (attempt < maxRetries - 1) {
-                    console.warn(`⚠️ Cloudflare API错误，重试 ${attempt + 1}/${maxRetries - 1}:`, {
-                        path,
-                        method,
-                        errors: d.errors
-                    });
-                    await delay(retryDelay);
-                    continue;
-                }
-                
-                console.error('❌ Cloudflare API错误（已重试）:', {
-                    path,
-                    method,
-                    errors: d.errors,
-                    messages: d.messages
-                });
-                return null;
-            }
-
-            return d.result;
-        } catch (e) {
-            // 网络错误
-            if (attempt < maxRetries - 1) {
-                console.warn(`⚠️ Cloudflare API请求失败，重试 ${attempt + 1}/${maxRetries - 1}:`, {
-                    path,
-                    method,
-                    error: e.message
-                });
-                await delay(retryDelay);
-                continue;
-            }
-            
-            console.error('❌ Cloudflare API请求失败（已重试）:', {
+        if (!d.success) {
+            console.error('❌ Cloudflare API错误:', {
                 path,
                 method,
-                error: e.message
+                errors: d.errors,
+                messages: d.messages
             });
             return null;
         }
-    }
 
-    return null;
+        return d.result;
+    } catch (e) {
+        console.error('❌ Cloudflare API请求失败:', {
+            path,
+            method,
+            error: e.message
+        });
+        return null;
+    }
 }
 
 async function getCandidateIPs(env, target, addLog, poolKey) {
@@ -1279,8 +1286,14 @@ async function maintainRecordsCommon(options) {
     const trashBatch = [];
 
     // 并行检测所有现有IP
-    const checkResults = await Promise.all(
-        currentIPs.map(item => checkFn(item.addr).then(r => ({ item, result: r })))
+    const checkSettled = await Promise.allSettled(
+        currentIPs.map(item => checkFn(item.addr).then(
+            r => ({ item, result: r }),
+            () => ({ item, result: { success: false } })
+        ))
+    );
+    const checkResults = checkSettled.map(r =>
+        r.status === 'fulfilled' ? r.value : { item: currentIPs[0], result: { success: false } }
     );
     // 串行处理结果（删除操作需要顺序执行）
     for (const { item, result: checkResult } of checkResults) {
@@ -1375,23 +1388,24 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn, c
         report,
         poolKey,
         checkFn,
-        getCurrentIPs: () => records.map(r => ({ id: r.id, addr: `${r.content}:${target.port}`, ip: r.content })),
+        getCurrentIPs: () => records.map(({ id, content }) => ({ id, addr: `${content}:${target.port}`, ip: content })),
         deleteRecord: async (id) => {
-            await fetchCF(config, `/zones/${config.zoneId}/dns_records/${id}`, 'DELETE');
+            const r = await fetchCF(config, `/zones/${config.zoneId}/dns_records/${id}`, 'DELETE');
+            if (r === null) addLog(`  ⚠️ 删除A记录失败: ${id}`);
         },
         addRecord: async (ip) => {
-            await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
+            const r = await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
                 type: 'A',
                 name: target.domain,
                 content: ip,
                 ttl: 60,
                 proxied: false
             });
+            if (r === null) addLog(`  ⚠️ 添加A记录失败: ${ip}`);
         },
         shouldSkipCandidate: (ipPort, activeList) => {
             const [ip, port] = ipPort.split(':');
-            if (port !== target.port) return true;
-            return activeList.includes(ip);
+            return port !== target.port || activeList.includes(ip);
         }
     });
 }
@@ -1410,7 +1424,7 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
     let currentIPs = [];
     let recordId = null;
 
-    if (records && records.length > 0) {
+    if (records?.length > 0) {
         recordId = records[0].id;
         currentIPs = parseTXTContent(records[0].content);
         addLog(`当前TXT: ${currentIPs.length} 个IP`);
@@ -1448,19 +1462,19 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
 
     if (newContent !== currentContent) {
         if (newContent === '' && recordId) {
-            await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'DELETE');
-            addLog(`📝 TXT记录已删除（所有IP失效）`);
+            const r = await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'DELETE');
+            addLog(r !== null ? `📝 TXT记录已删除（所有IP失效）` : `⚠️ TXT记录删除失败`);
         } else if (newContent !== '') {
             if (recordId) {
-                await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'PUT', {
+                const r = await fetchCF(config, `/zones/${config.zoneId}/dns_records/${recordId}`, 'PUT', {
                     type: 'TXT', name: target.domain, content: newContent, ttl: 60
                 });
-                addLog(`📝 TXT已更新`);
+                addLog(r !== null ? `📝 TXT已更新` : `⚠️ TXT更新失败`);
             } else {
-                await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
+                const r = await fetchCF(config, `/zones/${config.zoneId}/dns_records`, 'POST', {
                     type: 'TXT', name: target.domain, content: newContent, ttl: 60
                 });
-                addLog(`📝 TXT已创建`);
+                addLog(r !== null ? `📝 TXT已创建` : `⚠️ TXT创建失败`);
             }
         }
         report.txtUpdated = true;
@@ -1493,23 +1507,27 @@ async function maintainAllDomains(env, isManual = false, config) {
     };
 
     const allKeys = await env.IP_DATA.list();
-    const poolEntries = await Promise.all(
+    const poolSettled = await Promise.allSettled(
         allKeys.keys.filter(k => k.name.startsWith('pool')).map(async k => {
             const raw = await env.IP_DATA.get(k.name) || '';
             return [k.name, parsePoolList(raw).length];
         })
     );
+    const poolEntries = poolSettled
+        .map(r => r.status === 'fulfilled' ? r.value : null)
+        .filter(e => e !== null);
     poolEntries.forEach(([name, count]) => poolStats.set(name, { before: count, after: count }));
 
     for (let i = 0; i < config.targets.length; i++) {
         const target = config.targets[i];
-        
+        const { domain, mode, port, minActive } = target;
+
         const report = {
-            target: target,
-            domain: target.domain,
-            mode: target.mode,
-            port: target.port,
-            minActive: target.minActive,
+            target,
+            domain,
+            mode,
+            port,
+            minActive,
             beforeActive: 0,
             afterActive: 0,
             added: [],
@@ -1529,7 +1547,7 @@ async function maintainAllDomains(env, isManual = false, config) {
         
         addLog(`🚀 开始维护: ${target.domain}`);
         // 内联 getPoolKeyForDomain
-        const poolKey = (domainPoolMapping && domainPoolMapping[target.domain]) ? domainPoolMapping[target.domain] : 'pool';
+        const poolKey = domainPoolMapping?.[target.domain] ?? 'pool';
 
         if (target.mode === 'A') {
             await maintainARecords(env, target, addLog, report, poolKey, checkProxyIPCached, config);
@@ -1810,7 +1828,7 @@ function renderHTML(C) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro v6.8 - IP管理面板</title>
+    <title>DDNS Pro v6.9 - IP管理面板</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -2336,7 +2354,7 @@ function renderHTML(C) {
 <div class="container hero">
     <h1>
         🌐 DDNS Pro 多域名管理
-        <span class="version-badge">v6.8</span>
+        <span class="version-badge">v6.9</span>
     </h1>
     <div class="hero-actions">
         <div class="guide-toggle" onclick="toggleGuide()" title="使用步骤提示">?</div>
@@ -2518,7 +2536,6 @@ function renderHTML(C) {
     
     // 检测中断状态
     let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
-    let checkWasAbandoned = false; // 标记是否放弃了检测
     
     
     // 自定义模态对话框
@@ -2835,16 +2852,16 @@ function renderHTML(C) {
         }
     }
     
-    async function batchCheck() {
+    async function batchCheck(useBackupApi = false) {
         const btn = document.getElementById('btn-check');
         const input = document.getElementById('ip-input');
         const lines = input.value.split('\\n').filter(i => i.trim());
         
         if (!lines.length) {
             log('❌ 请先输入IP', 'error');
-            return;
+            return 'abandoned';
         }
-        
+
         if (abortController) {
             abortController.abort();
             abortController = null;
@@ -2853,7 +2870,7 @@ function renderHTML(C) {
             btn.classList.add('btn-warning');
             log('🛑 已停止检测', 'warn');
             document.getElementById('pg-bar').style.width = '0%';
-            return;
+            return 'abandoned';
         }
         
         abortController = new AbortController();
@@ -2865,6 +2882,7 @@ function renderHTML(C) {
         
         let valid = [], total = lines.length, checked = 0;
         const pg = document.getElementById('pg-bar');
+        let checkStatus = 'completed';
         
         log(\`🚀 开始检测 \${total} 个IP (并发: \${SETTINGS.CONCURRENT_CHECKS})\`, 'warn');
         log(\`💡 可随时中断，已验证的有效IP将自动保留\`, 'info');
@@ -2927,7 +2945,8 @@ function renderHTML(C) {
                     // 检测所有目标IP
                     for (const checkTarget of checkTargets) {
                         try {
-                            const r = await apiFetch(\`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\`, {
+                            const checkUrl = \`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\${useBackupApi ? '&useBackup=true' : ''}\`;
+                            const r = await apiFetch(checkUrl, {
                                 signal: signal
                             }).then(r => r.json());
                             
@@ -2982,9 +3001,10 @@ function renderHTML(C) {
                 });
 
                 if (continueAction && pausedCheckState) {
-                    await continueCheck();
+                    checkStatus = await continueCheck();
                 } else {
                     abandonCheck();
+                    checkStatus = 'abandoned';
                 }
             } else {
                 if (valid.length > 0) {
@@ -3013,6 +3033,7 @@ function renderHTML(C) {
             btn.classList.add('btn-warning');
             setTimeout(() => { pg.style.width = '0%'; }, 1000);
         }
+        return checkStatus;
     }
 
     function clearInput() {
@@ -3027,25 +3048,24 @@ function renderHTML(C) {
     async function continueCheck() {
         if (!pausedCheckState || pausedCheckState.uncheckedLines.length === 0) {
             log('❌ 没有待检测的IP', 'error');
-            return;
+            return 'abandoned';
         }
-        
+
         const input = document.getElementById('ip-input');
         // 将有效IP和未检测IP合并
         const newContent = [...pausedCheckState.validIPs, ...pausedCheckState.uncheckedLines].join('\\n');
         input.value = newContent;
-        
+
         log(\`🔄 继续检测剩余 \${pausedCheckState.uncheckedLines.length} 个IP\`, 'info');
-        
+
         pausedCheckState = null;
-        
+
         // 继续检测
-        await batchCheck();
+        return await batchCheck(cleaningPool === 'pool_trash');
     }
     
     // 放弃检测
     function abandonCheck() {
-        checkWasAbandoned = true; // 标记放弃了检测
         if (pausedCheckState && pausedCheckState.validIPs.length > 0) {
             const input = document.getElementById('ip-input');
             input.value = pausedCheckState.validIPs.join('\\n');
@@ -3053,7 +3073,7 @@ function renderHTML(C) {
         } else {
             log(\`🚫 已放弃检测\`, 'warn');
         }
-        
+
         pausedCheckState = null;
     }
     
@@ -3552,23 +3572,20 @@ function renderHTML(C) {
             cleaningPool = null;
             return;
         }
-        
-        // 重置放弃标志
-        checkWasAbandoned = false;
-        
+
         // 2. 检测（等待检测完成或中断）
-        await batchCheck();
-        
+        // 垃圾桶复检时使用备用接口（如有）独立验证
+        const checkResult = await batchCheck(isTrash);
+
         // 3. 只有完全检测完成才自动保存，中断或放弃则不保存
         const content = document.getElementById('ip-input').value;
         const validLines = content.trim() ? content.trim().split('\\n') : [];
         const validCount = validLines.length;
-        
+
         // 检查是否被中断或放弃
-        if (checkWasAbandoned || pausedCheckState !== null) {
+        if (checkResult !== 'completed') {
             // 检测被中断或放弃，不自动保存
             log(\`⚠️ 洗库被中断，有效IP保留在输入框，未自动保存\`, 'warn');
-            checkWasAbandoned = false; // 重置标志
         } else if (cleaningPool) {
             if (isTrash) {
                 // 垃圾桶洗库：有效IP恢复到原来的库

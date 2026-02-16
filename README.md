@@ -152,6 +152,8 @@ txt@example.com      # 探测TXT记录
 |--------|------|--------|
 | `CHECK_API` | IP检测API地址 | `https://check.proxyip.cmliussss.net/check?proxyip=（建议自建）` |
 | `CHECK_API_TOKEN` | 检测接口认证Token | 无 |
+| `CHECK_API_BACKUP` | 备用检测API地址（主接口失败时切换） | 无 |
+| `CHECK_API_BACKUP_TOKEN` | 备用检测接口认证Token | 无 |
 | `DOH_API` | DNS over HTTPS 接口 | `https://cloudflare-dns.com/dns-query` |
 | `AUTH_KEY` | 管理面板访问密钥 | 无 |
 | `TG_TOKEN` | Telegram Bot Token | 无 |
@@ -204,10 +206,20 @@ ddns1.example.com:443,txt@txt.example.com,all@multi.example.com:8080&3
 
 ```javascript
 const GLOBAL_SETTINGS = {
-    CONCURRENT_CHECKS: 10,       // 并发数（网络好可改为15-20）
-    CHECK_TIMEOUT: 6000,         // 超时：6秒
-    CHECK_RETRY_COUNT: 2,        // 重试次数
-    CHECK_RETRY_DELAY: 3000      // 重试间隔：3秒
+    // ── IP 检测 ──
+    CONCURRENT_CHECKS: 15,       // 前端批量检测并发数
+    CHECK_TIMEOUT: 3000,         // 单次 ProxyIP 检测超时(ms)
+
+    // ── 网络超时 ──
+    REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
+    IP_INFO_TIMEOUT: 3000,       // IP 归属地查询超时(ms)
+    DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
+
+    // ── 数据限制 ──
+    DEFAULT_MIN_ACTIVE: 3,       // 默认最小活跃 IP 数
+    MAX_TRASH_SIZE: 1000,        // 垃圾桶最大条目数
+    MAX_POOL_NAME_LENGTH: 50,    // IP池名称最大长度
+    MAX_IPS_PER_DOMAIN: 50,      // 域名解析最多取多少个 IP
 };
 ```
 
