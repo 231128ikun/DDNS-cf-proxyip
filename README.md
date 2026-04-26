@@ -17,7 +17,7 @@
 
 ### 简单理解
 
-这是一个**自动管理维护cf-proxyip的工具**，让你的域名始终指向可用的反代cf的IP地址。例如：`kr.dwb.cc.cd:50001`
+这是一个**自动管理维护cf-proxyip的工具**，让你的域名始终指向可用的反代cf的IP地址。例如：`us.dwb.cc.cd:443`
 
 具体应用场景可参考[什么是PROCYIP?](https://github.com/231128ikun/CF-Workers-CheckProxyIP/blob/main/README.md#-%E4%BB%80%E4%B9%88%E6%98%AF-proxyip-)
 
@@ -277,7 +277,6 @@ const GLOBAL_SETTINGS = {
 参考项目：[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 
 部署后修改 `CHECK_API` 环境变量为你的 API 地址。
-检测后端不再附加 `token` 参数；如果后端需要鉴权，建议在检测服务侧自行处理固定入口或网关规则。
 
 当前 Worker 会把新旧检测接口字段统一成内部格式，优先兼容：
 
