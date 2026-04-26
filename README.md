@@ -1,15 +1,17 @@
 # DDNS Pro - Cloudflare Workers 动态DNS & IP管理
 
-基于 cmliu 的 CheckProxyIP 项目提供的 API 做的多域名动态DNS管理系统，支持A记录、TXT记录和双模式，自动检测并替换失效IP。借助 CF 平台，无需服务器。
+基于外部 ProxyIP 检测 API 做的多域名动态DNS管理系统，支持地址记录（A/AAAA）和 TXT 记录维护，自动检测并替换失效IP。借助 CF 平台，无需服务器。
 
 ## 📋 主要功能
 
 - ✅ **多域名管理** - 支持同时管理多个域名的DNS记录
-- ✅ **三种模式** - A记录、TXT记录、双模式（ALL）
+- ✅ **两种模式** - 地址记录（A/AAAA）和 TXT记录
 - ✅ **自动维护** - 定时检测失效IP并自动补充
 - ✅ **Telegram通知** - 维护完成后推送详细报告
 - ✅ **Web管理界面** - 直观的可视化操作面板
 - ✅ **域名池绑定** - 支持不同域名绑定到不同的IP池
+- ✅ **KV配置** - 支持多套维护域名权限配置，前端保存到 KV 覆盖环境变量
+- ✅ **出口筛选** - 支持按 IPv4、IPv6、双栈出口以及国家、ASN 维护
 
 
 
@@ -56,22 +58,24 @@
 3. 复制 `_worker.js` 的全部内容，粘贴到编辑器
 4. **Save and Deploy**
 
-### 4️⃣ 配置环境变量
+### 4️⃣ 绑定 KV（必须）
 
-进入 Worker → **Settings** → **Variables**，添加：
+1. 在 [KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间，名称建议：`IP_DATA`
+2. 回到 Worker → **Settings** → **Bindings** → **Add binding**
+3. Type: **KV Namespace**，Variable name 必须填写：`IP_DATA`
+4. 选择刚创建的 KV 命名空间并保存
+
+> 未绑定 `IP_DATA` 时，面板会显示明确提示；配置保存、IP 池和维护任务都不可用。
+
+### 5️⃣ 配置面板密钥（可选但建议）
+
+进入 Worker → **Settings** → **Variables**，只建议添加面板访问密钥：
 
 | 变量名 | 值 |
 |--------|-----|
-| `CF_KEY` | 你的 API Token |
-| `CF_ZONEID` | 你的 Zone ID |
-| `CF_DOMAIN` | `你的域名:端口&最小活跃数`（如 `ddns.example.com:443&3`） |
-> 💡建议后续部署自己的`CHECK_API`ip检测api，公益的稳定性差。
+| `AUTH_KEY` | 面板访问密钥 |
 
-### 5️⃣ 创建 KV 绑定
-
-1. 在 [KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间，名称：`IP_DATA`
-2. 回到 Worker → **Settings** → **Bindings** → **Add binding**
-3. Type: **KV Namespace**，Variable name: `IP_DATA`，选择刚创建的命名空间
+首次访问可用 `https://你的worker/?key=你的AUTH_KEY` 登录。其他维护配置（CF Key、Zone ID、维护域名、检测 API、TG 等）都可以在前端 **配置中心** 保存到 KV。
 
 ### 6️⃣ 配置定时任务（可选）
 
@@ -125,7 +129,7 @@ Worker → **Triggers** → **Cron Triggers** → 添加 `0 */3 * * *`（每3小
 
 在 **Check ProxyIP** （实况解析右边输入框）输入域名，自动检测IP可用性：
 ```
-example.com          # 探测A记录
+example.com          # 探测A/AAAA记录
 example.com:8080     # 指定端口
 txt@example.com      # 探测TXT记录
 ```
@@ -137,29 +141,29 @@ txt@example.com      # 探测TXT记录
 <details>
 <summary><strong>⚙️ 环境变量详解</strong></summary>
 
-### 必填变量
+### 必须绑定
 
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `CF_KEY` | Cloudflare API Token | `abcd1234...` |
-| `CF_ZONEID` | 域名的 Zone ID | `1a2b3c4d...` |
-| `CF_DOMAIN` | 要维护的域名配置 | `ddns.example.com:443&3` |
+| 类型 | 名称 | 说明 |
+|------|------|------|
+| KV Namespace Binding | `IP_DATA` | 保存配置、IP 池、垃圾桶和域名池绑定 |
 
 
-### 可选变量
+### 建议环境变量
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `CHECK_API` | IP检测API地址 | `https://check.proxyip.cmliussss.net/check?proxyip=（建议自建）` |
-| `CHECK_API_TOKEN` | 检测接口认证Token | 无 |
-| `CHECK_API_BACKUP` | 备用检测API地址（主接口失败时切换） | 无 |
-| `CHECK_API_BACKUP_TOKEN` | 备用检测接口认证Token | 无 |
-| `DOH_API` | DNS over HTTPS 接口 | `https://cloudflare-dns.com/dns-query` |
 | `AUTH_KEY` | 管理面板访问密钥 | 无 |
-| `TG_TOKEN` | Telegram Bot Token | 无 |
-| `TG_ID` | Telegram Chat ID | 无 |
-| `IP_INFO_ENABLED` | 开启IP归属地查询 | `false` |
-| `IP_INFO_API` | IP归属地查询接口 | `http://ip-api.com/json` |
+
+除 `AUTH_KEY` 外，其他配置建议在前端 **配置中心** 添加并点击“保存改动”写入 KV。旧环境变量 `CF_KEY`、`CF_ZONEID`、`CF_DOMAIN`、`CHECK_API`、`TG_TOKEN` 等仍兼容读取，但不再推荐作为主要配置方式。
+
+### 配置中心
+
+配置中心分两层：
+
+- **维护的域名配置**：一张卡片对应一套维护权限，包含别名、维护根域、`Zone ID` 和 `CF Key`。可以添加多套 Cloudflare 账号或多个托管域名。
+- **管理域名**：选择一套维护配置，只填写前缀，例如维护根域 `b.com` + 前缀 `kr` 会生成 `kr.b.com`。卡片上可单独打开/关闭维护，编辑后点击“保存改动”写入 KV。
+
+自动维护是项目总开关，TG 通知是通知开关，二者都在配置中心用 ON/OFF 开关控制。每个管理域名也有独立维护开关，关闭后会在维护任务中跳过。
 
 > 💡TG通知策略：
 a.当出现失效ip，新增ip时，也就是域名内ip变动时会通知 
@@ -170,22 +174,68 @@ c.手动执行维护时
 
 ```
 [模式]@域名:[端口]&[最小活跃数]
+[模式]@域名:[端口]&[最小活跃数]|[出口类型]
 ```
 
 **示例：**
 ```bash
-# A记录模式
+# 地址记录模式（自动维护 A/AAAA）
 ddns.example.com:443&3
+
+# 只维护出口为 IPv4 的候选
+ddns.example.com:443&3|v4
+
+# 只维护出口为 IPv6 的候选
+ddns.example.com:443&3|v6
+
+# 只维护双栈出口候选
+ddns.example.com:443&3|dual_stack
 
 # TXT记录模式
 txt@txt.example.com&5
 
-# 双模式
-all@multi.example.com:8080&3
+# 同一域名同时维护地址记录和 TXT：配置两条
+multi.example.com:8080&3,txt@multi.example.com&3
 
 # 多域名（逗号分隔）
-ddns1.example.com:443,txt@txt.example.com,all@multi.example.com:8080&3
+ddns1.example.com:443,txt@txt.example.com,multi.example.com:8080&3
 ```
+
+`|出口类型` 可选，支持 `v4`、`v6`、`dual_stack`。不写时默认任意出口。旧的 `all@...` 环境变量会被兼容拆成地址记录和 TXT 两条目标，但新配置建议直接写两条。
+
+出口类型由检测 API 的实时返回结果判断，不依赖 IP 入库时的旧标记。这样可以避免节点出口能力变化后被过期标记误筛。
+
+### IP池存储格式
+
+检测清洗入库后统一保存为：
+
+```text
+ip:port,asn,country
+```
+
+示例：
+
+```text
+121.178.202.91:10095,AS4766,KR
+[2606:4700::1]:443,AS13335,US
+1.2.3.4:443,AS4766/AS13335,KR/US
+```
+
+字段缺失时写 `null`。旧的 `ip:port # 注释` 和旧四字段 `ip:port,asn,country,stack` 格式仍可读取；新检测结果会按三字段 CSV 格式写回。
+
+### 通用筛选
+
+IP 输入框下方的筛选框支持简单表达式：
+
+```text
+port:443 country:KR asn:AS4766
+country:KR | country:US
+port:443-2053 HK
+```
+
+- 空格表示“且”，多个条件必须同时匹配。
+- `|` 表示“或”，任一分组匹配即可。
+- 支持字段：`port:`、`country:`、`asn:`，不带字段的内容按普通关键词匹配。
 
 ### 访问保护
 
@@ -207,12 +257,11 @@ ddns1.example.com:443,txt@txt.example.com,all@multi.example.com:8080&3
 ```javascript
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
-    CONCURRENT_CHECKS: 15,       // 前端批量检测并发数
+    CONCURRENT_CHECKS: 32,       // 前端批量检测并发数
     CHECK_TIMEOUT: 3000,         // 单次 ProxyIP 检测超时(ms)
 
     // ── 网络超时 ──
     REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
-    IP_INFO_TIMEOUT: 3000,       // IP 归属地查询超时(ms)
     DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
 
     // ── 数据限制 ──
@@ -228,12 +277,28 @@ const GLOBAL_SETTINGS = {
 参考项目：[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 
 部署后修改 `CHECK_API` 环境变量为你的 API 地址。
+检测后端不再附加 `token` 参数；如果后端需要鉴权，建议在检测服务侧自行处理固定入口或网关规则。
+
+当前 Worker 会把新旧检测接口字段统一成内部格式，优先兼容：
+
+- `success` / `ok` / `status`
+- `responseTime` / `latency` / `duration` / `elapsed` / `time`
+- `colo`
+- `proxyIP` / `proxyIp` / `ip`
+- `portRemote` / `port` / `remotePort`
+- `probe_results.ipv4.exit`、`probe_results.ipv6.exit`
+
+其中出口信息里的 `country`、`city`、`asn`、`asOrganization` 会用于前端展示、维护筛选、TG 通知，并在检测清洗入库时写入 CSV 元数据。
+
+地址记录模式会同时读取并维护 Cloudflare 的 `A` 和 `AAAA` 记录：IPv4 候选写入 `A`，IPv6 候选写入 `AAAA`。前端探测域名时也会同时解析 `A` / `AAAA`。
 
 ### Telegram 通知配置
 
 1. 与 [@BotFather](https://t.me/botfather) 对话，发送 `/newbot` 创建机器人
 2. 与 [@userinfobot](https://t.me/userinfobot) 对话获取 Chat ID
 3. 配置环境变量 `TG_TOKEN` 和 `TG_ID`
+
+TG 通知会复用维护时的检测结果，展示域名、模式、端口、活跃数、新增/移除 IP、原因、机房、检测耗时、国家和 ASN。
 
 </details>
 
@@ -249,13 +314,13 @@ const GLOBAL_SETTINGS = {
         ↓
 检测现有DNS记录中的IP
         ↓
-删除失效IP → 移入垃圾桶
+按出口类型 / 国家 / ASN 过滤，删除失效或不匹配 IP → 移入垃圾桶
         ↓
 活跃IP < 最小活跃数？
-    ├─ 是 → 从库存加载IP → 检测有效性 → 添加到DNS
+    ├─ 是 → 从库存加载IP → 实时检测出口与元数据 → 添加到DNS
     └─ 否 → 跳过
         ↓
-发送Telegram通知
+按开关和通知条件发送Telegram通知
 ```
 
 </details>
