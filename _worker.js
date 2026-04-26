@@ -135,13 +135,6 @@ function normalizeStackFilter(value) {
     return text.replace('-', '_');
 }
 
-function stackFilterMatches(candidateStack, targetStack) {
-    const candidate = normalizeStackFilter(candidateStack);
-    const target = normalizeStackFilter(targetStack);
-    if (target === 'v4/v6') return true;
-    return candidate === target || candidate === 'v4/v6';
-}
-
 const POOL_DISPLAY_NAMES = { pool: '通用池', pool_trash: '🗑️ 垃圾桶', domain_pool_mapping: '系统数据' };
 const getPoolDisplayName = poolKey => POOL_DISPLAY_NAMES[poolKey] || poolKey.replace('pool_', '') + '池';
 
@@ -1546,13 +1539,6 @@ function exitFilterMatchesResult(result, exitFilter = 'any') {
     return true;
 }
 
-function exitFilterMatchesStoredEntry(entry, exitFilter = 'any') {
-    const filter = normalizeExitFilter(exitFilter);
-    if (filter === 'any') return true;
-    const meta = parsePoolEntry(entry);
-    return exitFilterMatchesResult({ stack: meta?.stack }, filter);
-}
-
 function targetMetaMatchesResult(result, target) {
     if (target.country) {
         const countries = String(result.country || '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
@@ -2195,16 +2181,6 @@ async function maintainAllDomains(env, isManual = false, config) {
     };
 }
 
-function formatIPInfoStr(ipInfoMap, ip) {
-    const ipOnly = extractHostFromAddr(ip);
-    const info = ipInfoMap.get(ipOnly);
-    if (!info) return '';
-    let s = ` · ${info.country}`;
-    if (info.asn) s += ` · ${info.asn}`;
-    if (info.isp) s += ` · ${info.isp}`;
-    return s;
-}
-
 function formatReportMeta(item = {}) {
     const parts = [];
     if (item.colo && item.colo !== 'N/A') parts.push(item.colo);
@@ -2216,14 +2192,14 @@ function formatReportMeta(item = {}) {
     return parts.length ? parts.join(' · ') : '无详情';
 }
 
-function formatIPChanges(added, removed, ipInfoMap, port = '', minActive = 0, afterActive = 0) {
+function formatIPChanges(added, removed, port = '', minActive = 0, afterActive = 0) {
     let msg = '';
     if (added && added.length > 0) {
         msg += `📈 新增 ${added.length} 个IP\n`;
         added.forEach(item => {
             const displayIP = extractPortFromAddr(item.ip, '') ? item.ip : formatAddr(item.ip, port);
             msg += `   ✅ <code>${displayIP}</code>\n`;
-            msg += `      ${formatReportMeta(item)}${formatIPInfoStr(ipInfoMap, item.ip)}\n`;
+            msg += `      ${formatReportMeta(item)}\n`;
         });
     }
     if (removed && removed.length > 0) {
@@ -2258,8 +2234,6 @@ async function sendTG(reports, poolStats, isManual, config) {
         msg += `⚠️ <b>警告: 检测到配置错误</b>\n请检查 CF_KEY, CF_ZONEID 是否正确配置\n\n`;
     }
 
-    const ipInfoMap = new Map();
-
     reports.forEach((report, index) => {
         if (index > 0) msg += `\n`;
         msg += `━━ <code>${report.domain}</code> ━━\n`;
@@ -2276,17 +2250,17 @@ async function sendTG(reports, poolStats, isManual, config) {
         if (report.checkDetails && report.checkDetails.length > 0) {
             report.checkDetails.forEach(d => {
                 const icon = d.status.includes('✅') ? '✅' : '❌';
-                msg += `${icon} <code>${d.ip}</code>\n   ${formatReportMeta(d)}${formatIPInfoStr(ipInfoMap, d.ip)}\n`;
+                msg += `${icon} <code>${d.ip}</code>\n   ${formatReportMeta(d)}\n`;
             });
             msg += `\n`;
         }
 
         if (report.mode === 'A') {
-            msg += formatIPChanges(report.added, report.removed, ipInfoMap, report.port, report.minActive, report.afterActive);
+            msg += formatIPChanges(report.added, report.removed, report.port, report.minActive, report.afterActive);
         }
 
         if (report.mode === 'TXT') {
-            msg += formatIPChanges(report.added, report.removed, ipInfoMap, '', report.minActive, report.afterActive);
+            msg += formatIPChanges(report.added, report.removed, '', report.minActive, report.afterActive);
         }
     });
 
@@ -2860,6 +2834,17 @@ function renderHTML(C, runtimeState = {}) {
             color: #1d4ed8;
             background: #dbeafe;
         }
+        .colo-badge {
+            display: inline-flex;
+            min-width: 48px;
+            justify-content: center;
+            border-radius: 999px;
+            padding: 5px 9px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #374151;
+            background: #f3f4f6;
+        }
         .switch-row {
             display: flex;
             flex-wrap: wrap;
@@ -3291,6 +3276,7 @@ function renderHTML(C, runtimeState = {}) {
                             <th>延迟</th>
                             <th>状态</th>
                             <th>出口IP / 线路</th>
+                            <th>Colo</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -4153,6 +4139,7 @@ function renderHTML(C, runtimeState = {}) {
             <td><span class="latency-badge" title="来自后端检测 API 返回的 responseTime，不是浏览器到节点的延迟">\${escapeHTML(formatLatencyValue(r.time))}</span></td>
             <td><span class="status-badge \${r.success?'ok':'bad'}">\${r.success?'可用':'失败'}</span></td>
             <td class="exit-list-cell">\${infoHtml}</td>
+            <td><span class="colo-badge" title="Cloudflare 机房 / colo">\${escapeHTML(r.colo || 'N/A')}</span></td>
             <td>\${actionHTML}</td>
         </tr>\`;
     }
@@ -4546,7 +4533,7 @@ function renderHTML(C, runtimeState = {}) {
     async function refreshStatus() {
         const t = document.getElementById('status-table');
         const txtDiv = document.getElementById('txt-status');
-            const colspan = '5';
+            const colspan = '6';
         t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 查询中...</td></tr>\`;
         txtDiv.innerHTML = '';
         
@@ -4639,7 +4626,7 @@ function renderHTML(C, runtimeState = {}) {
         
         const t = document.getElementById('status-table');
         const txtDiv = document.getElementById('txt-status');
-        const colspan = '5';
+        const colspan = '6';
         t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 探测中...</td></tr>\`;
         txtDiv.innerHTML = '';
         
