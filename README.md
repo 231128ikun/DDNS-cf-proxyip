@@ -215,11 +215,13 @@ Worker 会使用以下 KV key：
 | Key | 说明 |
 | --- | --- |
 | `app_config` | 面板保存的运行配置 |
-| `pool` | 默认通用 IP 池 |
-| `pool_<name>` | 自定义 IP 池 |
-| `pool_trash` | 垃圾桶 |
+| `ip_pool_default` | 默认 IP 池 |
+| `ip_pool_001`、`ip_pool_002` ... | 自定义 IP 池，按三位数字递增创建 |
+| `ip_pool_trash` | 垃圾桶 |
 | `domain_pool_mapping` | 管理域名到 IP 池的绑定 |
-| `pool_display_names` | IP 池显示名称 |
+| `ip_pool_names` | IP 池显示名称，JSON 对象，key 为池 ID，value 为显示名 |
+
+IP 池的 KV key 不再使用用户输入的名称。新建池时 Worker 自动分配 `ip_pool_###`，用户看到的池名称只保存在 `ip_pool_names` 中。
 
 ## 安全建议
 

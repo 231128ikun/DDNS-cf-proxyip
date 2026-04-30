@@ -2,6 +2,29 @@
  * DDNS Pro & Proxy IP Manager
  */
 
+const GLOBAL_SETTINGS = {
+    // ── IP 检测 ──
+    CONCURRENT_CHECKS: 32,       // 前端批量检测并发数（参考检测页实现）
+    CHECK_TIMEOUT: 3000,         // 单次 ProxyIP 检测超时(ms)
+
+    // ── 网络超时 ──
+    REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
+    DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
+
+    // ── 数据限制 ──
+    DEFAULT_MIN_ACTIVE: 3,       // 默认最小活跃 IP 数
+    MAX_TRASH_SIZE: 1000,        // 垃圾桶最大条目数
+};
+
+const SETTING_LIMITS = {
+    CONCURRENT_CHECKS: { min: 1, max: 128 },
+    CHECK_TIMEOUT: { min: 500, max: 30000 },
+    REMOTE_LOAD_TIMEOUT: { min: 1000, max: 60000 },
+    DOH_TIMEOUT: { min: 1000, max: 30000 },
+    DEFAULT_MIN_ACTIVE: { min: 0, max: 100 },
+    MAX_TRASH_SIZE: { min: 0, max: 100000 }
+};
+
 // ==================== 默认配置（环境变量未设置时使用） ====================
 const DEFAULT_CONFIG = {
     // 目标维护域名的Cloudflare 配置
@@ -26,29 +49,30 @@ const DEFAULT_CONFIG = {
     authKey: '',             // AUTH_KEY: 面板访问密钥
     scheduledEnabled: true,   // SCHEDULED_ENABLED: 定时维护开关
     tgEnabled: true,          // TG_ENABLED: Telegram 通知开关
+    settings: GLOBAL_SETTINGS,
     
     // 运行时配置（非环境变量）
     projectUrl: ''           // 项目URL（自动获取）
 };
 // ==================== 默认配置结束 ====================
 
-const GLOBAL_SETTINGS = {
-    // ── IP 检测 ──
-    CONCURRENT_CHECKS: 32,       // 前端批量检测并发数（参考检测页实现）
-    CHECK_TIMEOUT: 3000,         // 单次 ProxyIP 检测超时(ms)
+function normalizeRuntimeSettings(raw = {}) {
+    const settings = { ...GLOBAL_SETTINGS };
+    for (const [key, defaults] of Object.entries(SETTING_LIMITS)) {
+        const fallback = GLOBAL_SETTINGS[key];
+        const parsed = parseInt(raw?.[key] ?? fallback, 10);
+        const value = Number.isFinite(parsed) ? parsed : fallback;
+        settings[key] = Math.min(defaults.max, Math.max(defaults.min, value));
+    }
+    return settings;
+}
 
-    // ── 网络超时 ──
-    REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
-    DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
-
-    // ── 数据限制 ──
-    DEFAULT_MIN_ACTIVE: 3,       // 默认最小活跃 IP 数
-    MAX_TRASH_SIZE: 1000,        // 垃圾桶最大条目数
-    MAX_POOL_NAME_LENGTH: 50,    // IP池名称最大长度
-};
+function getRuntimeSettings(config = {}) {
+    return normalizeRuntimeSettings(config.settings || GLOBAL_SETTINGS);
+}
 
 const APP_CONFIG_KEY = 'app_config';
-const APP_VERSION = '2026.04.27-13.41';
+const APP_VERSION = '2026.04.30-15.25';
 
 function safeJSONParse(str, defaultValue = null) {
     try { return str ? JSON.parse(str) : defaultValue; }
@@ -134,8 +158,7 @@ function parsePoolEntry(line) {
     return {
         address,
         asn: fields[1] || null,
-        country: fields[2] || null,
-        stack: normalizeStackFilter(fields[3] || null)
+        country: fields[2] || null
     };
 }
 
@@ -148,27 +171,76 @@ function normalizeStackFilter(value) {
     return text.replace('-', '_');
 }
 
-const POOL_DISPLAY_NAMES = { pool: '通用池', pool_trash: '🗑️ 垃圾桶', domain_pool_mapping: '系统数据' };
-const getPoolDisplayName = poolKey => POOL_DISPLAY_NAMES[poolKey] || poolKey.replace('pool_', '') + '池';
-const DELETABLE_PROTECTED_POOL_KEYS = new Set(['pool', 'pool_trash', 'domain_pool_mapping', 'pool_display_names']);
-const SYSTEM_POOL_KEYS = new Set(['pool_trash', 'domain_pool_mapping', 'pool_display_names']);
-const isPoolDataKey = key => key === 'pool' || key === 'pool_trash' || /^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(key || '');
-const isUserPoolKey = key => key === 'pool' || /^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(key || '');
-const isWritablePoolKey = key => isUserPoolKey(key) || key === 'pool_trash';
+const POOL_DEFAULT_KEY = 'ip_pool_default';
+const POOL_TRASH_KEY = 'ip_pool_trash';
+const POOL_NAMES_KEY = 'ip_pool_names';
+const DOMAIN_POOL_MAPPING_KEY = 'domain_pool_mapping';
+const NUMBERED_POOL_KEY_RE = /^ip_pool_(\d{3})$/;
+function getPoolFixedName(poolKey) {
+    if (poolKey === POOL_DEFAULT_KEY) return '默认池';
+    if (poolKey === POOL_TRASH_KEY) return '🗑️ 垃圾桶';
+    const numbered = NUMBERED_POOL_KEY_RE.exec(poolKey || '');
+    if (numbered) return `池 ${numbered[1]}`;
+    return String(poolKey || '');
+}
+function getPoolDisplayName(poolKey, poolNames = {}) {
+    return poolNames?.[poolKey] || getPoolFixedName(poolKey);
+}
+const formatPoolNumber = value => String(value).padStart(3, '0');
+const getNumberedPoolKey = value => `ip_pool_${formatPoolNumber(value)}`;
+const isUserPoolKey = key => key === POOL_DEFAULT_KEY || NUMBERED_POOL_KEY_RE.test(key || '');
+const isPoolDataKey = key => isUserPoolKey(key) || key === POOL_TRASH_KEY;
+const isWritablePoolKey = key => isUserPoolKey(key) || key === POOL_TRASH_KEY;
+
+function comparePoolKeys(a, b) {
+    const order = key => key === POOL_DEFAULT_KEY ? 0 : (key === POOL_TRASH_KEY ? 1 : 2);
+    const oa = order(a);
+    const ob = order(b);
+    if (oa !== ob) return oa - ob;
+    const na = NUMBERED_POOL_KEY_RE.exec(a || '');
+    const nb = NUMBERED_POOL_KEY_RE.exec(b || '');
+    if (na && nb) return Number(na[1]) - Number(nb[1]);
+    if (na) return -1;
+    if (nb) return 1;
+    return String(a || '').localeCompare(String(b || ''), 'zh-CN', { numeric: true });
+}
 
 async function readPoolDisplayNames(env) {
-    return safeJSONParse(await env.IP_DATA.get('pool_display_names'), {});
+    const names = safeJSONParse(await env.IP_DATA.get(POOL_NAMES_KEY), {});
+    return names && typeof names === 'object' && !Array.isArray(names) ? names : {};
 }
 
 async function writePoolDisplayNames(env, names) {
-    await env.IP_DATA.put('pool_display_names', JSON.stringify(names || {}));
+    await env.IP_DATA.put(POOL_NAMES_KEY, JSON.stringify(names || {}));
+}
+
+async function readDomainPoolMapping(env) {
+    const mapping = safeJSONParse(await env.IP_DATA.get(DOMAIN_POOL_MAPPING_KEY), {});
+    return mapping && typeof mapping === 'object' && !Array.isArray(mapping) ? mapping : {};
 }
 
 async function listPoolKeys(env) {
+    await ensurePoolDefaults(env);
     const allKeys = await env.IP_DATA.list();
     const pools = allKeys.keys.map(k => k.name).filter(isPoolDataKey);
-    if (!pools.includes('pool')) pools.unshift('pool');
-    return pools;
+    if (!pools.includes(POOL_DEFAULT_KEY)) pools.unshift(POOL_DEFAULT_KEY);
+    if (!pools.includes(POOL_TRASH_KEY)) pools.push(POOL_TRASH_KEY);
+    return [...new Set(pools)].sort(comparePoolKeys);
+}
+
+async function ensurePoolDefaults(env) {
+    if (await env.IP_DATA.get(POOL_DEFAULT_KEY) === null) await env.IP_DATA.put(POOL_DEFAULT_KEY, '');
+    if (await env.IP_DATA.get(POOL_TRASH_KEY) === null) await env.IP_DATA.put(POOL_TRASH_KEY, '');
+}
+
+async function getPoolState(env) {
+    await ensurePoolDefaults(env);
+    const [mapping, pools, poolNames] = await Promise.all([
+        readDomainPoolMapping(env),
+        listPoolKeys(env),
+        readPoolDisplayNames(env)
+    ]);
+    return { mapping, pools, poolNames };
 }
 
 const formatLogMessage = msg => `[${new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })}] ${msg}`;
@@ -278,8 +350,8 @@ export default {
     async fetch(request, env, ctx) {
         const requestStart = Date.now();
         const url = new URL(request.url);
-        const config = await createConfig(env, request);
         const kvReady = hasKVBinding(env);
+        const config = kvReady ? await createConfig(env, request) : createEnvConfig(env, request);
 
         const buildAuthCookie = () => `ddns_auth=${encodeURIComponent((config.authKey || '').trim())}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 
@@ -372,7 +444,7 @@ export default {
 const API_ROUTES = {
     '/api/get-pool': (url, req, env, config) => handleGetPool(url, env),
     '/api/save-pool': (url, req, env, config) => handleSavePool(req, env),
-    '/api/load-remote-url': (url, req, env, config) => handleLoadRemoteUrl(req),
+    '/api/load-remote-url': (url, req, env, config) => handleLoadRemoteUrl(req, config),
     '/api/current-status': (url, req, env, config) => handleCurrentStatus(url, config),
     '/api/lookup-domain': (url, req, env, config) => handleLookupDomain(url, config),
     '/api/check-ip': (url, req, env, config) => handleCheckIP(url, config),
@@ -412,12 +484,13 @@ async function handleAPIRequest(url, request, env, config) {
 }
 
 async function handleGetPool(url, env) {
-    const poolKey = url.searchParams.get('poolKey') || 'pool';
+    await ensurePoolDefaults(env);
+    const poolKey = url.searchParams.get('poolKey') || POOL_DEFAULT_KEY;
     const onlyCount = url.searchParams.get('onlyCount') === 'true';
     if (!isWritablePoolKey(poolKey)) {
         return badRequest({ success: false, error: '无效的池名称' });
     }
-    
+
     const pool = await env.IP_DATA.get(poolKey) || '';
     const count = pool.trim() ? pool.trim().split('\n').length : 0;
     
@@ -428,11 +501,12 @@ async function handleGetPool(url, env) {
 }
 
 async function handleSavePool(request, env) {
+    await ensurePoolDefaults(env);
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
-    const poolKey = body.poolKey || 'pool';
+    const poolKey = body.poolKey || POOL_DEFAULT_KEY;
     const mode = body.mode || 'append'; // append: 追加, replace: 覆盖, remove: 删除
     if (!isWritablePoolKey(poolKey)) {
         return badRequest({ success: false, error: '无效的池名称' });
@@ -511,7 +585,7 @@ async function handleSavePool(request, env) {
     return jsonResponse(responseData);
 }
 
-async function handleLoadRemoteUrl(request) {
+async function handleLoadRemoteUrl(request, config) {
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
@@ -520,7 +594,7 @@ async function handleLoadRemoteUrl(request) {
     if (!url) {
         return badRequest({ success: false, error: '缺少URL' });
     }
-    const ips = await loadFromRemoteUrl(url);
+    const ips = await loadFromRemoteUrl(url, config);
     return jsonResponse({ 
         success: true, 
         ips,
@@ -571,7 +645,7 @@ async function handleCheckIP(url, config) {
     const useBackup = url.searchParams.get('useBackup') === 'true';
     if (useBackup && config.checkApiBackup) {
         const addr = normalizeCheckAddr(target);
-        const result = await checkProxyIPOnce(addr, config.checkApiBackup);
+        const result = await checkProxyIPOnce(addr, config.checkApiBackup, config);
         return jsonResponse(result ?? { success: false });
     }
     const res = await checkProxyIP(target, config);
@@ -618,7 +692,7 @@ async function handleAddARecord(request, config) {
         return badRequest({ success: false, error: '参数错误' });
     }
 
-    const addr = parseAddr(ip, target.port).address;
+    const addr = target.mode === 'TXT' ? normalizeCheckAddr(ip) : parseAddr(ip, target.port).address;
 
     const check = await checkProxyIP(addr, config);
     if (!check.success) {
@@ -678,108 +752,97 @@ async function handleMaintain(url, env, config) {
 }
 
 async function handleGetDomainPoolMapping(env) {
-    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
-    const mapping = safeJSONParse(mappingJson, {});
-    const poolNames = await readPoolDisplayNames(env);
-    const pools = await listPoolKeys(env);
-    return jsonResponse({ mapping, pools, poolNames });
+    return jsonResponse(await getPoolState(env));
 }
 
 async function handleSaveDomainPoolMapping(request, env) {
+    await ensurePoolDefaults(env);
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
     const mapping = body.mapping && typeof body.mapping === 'object' && !Array.isArray(body.mapping)
-        ? Object.fromEntries(Object.entries(body.mapping).filter(([, poolKey]) => isUserPoolKey(poolKey)))
+        ? Object.fromEntries(Object.entries(body.mapping)
+            .filter(([, poolKey]) => isUserPoolKey(poolKey)))
         : {};
-    await env.IP_DATA.put('domain_pool_mapping', JSON.stringify(mapping));
-    return jsonResponse({ success: true });
+    await env.IP_DATA.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(mapping));
+    return jsonResponse({ success: true, ...(await getPoolState(env)) });
 }
 
 async function handleCreatePool(request, env) {
+    await ensurePoolDefaults(env);
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
-    const rawName = String(body.poolKey || body.name || body.displayName || '').trim();
-    const poolKey = rawName.startsWith('pool_') ? rawName : (rawName ? `pool_${rawName}` : '');
+    const displayName = String(body.displayName || '').trim();
     
-    if (!poolKey) {
-        return badRequest({ success: false, error: '请输入池名称' });
+    if (!displayName) {
+        return badRequest({ success: false, error: '请输入池显示名称' });
     }
-    
-    // 支持中文、字母、数字、下划线、横杠
-    if (poolKey.length > GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH || !/^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(poolKey)) {
-        return badRequest({ success: false, error: `池名称只能包含中文、字母、数字、下划线、横杠，最长${GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH}字符` });
-    }
-    
-    const existing = await env.IP_DATA.get(poolKey);
-    if (existing !== null) {
-        return badRequest({ success: false, error: '池已存在' });
-    }
-    
-    await env.IP_DATA.put(poolKey, '');
-    return jsonResponse({ success: true, poolKey, displayName: rawName.replace(/^pool_/, '') });
-}
 
-function validateEditablePoolKey(poolKey) {
-    if (!poolKey || !poolKey.startsWith('pool_')) {
-        return '池名称无效';
+    const pools = await listPoolKeys(env);
+    let nextIndex = 1;
+    for (const key of pools) {
+        const match = NUMBERED_POOL_KEY_RE.exec(key);
+        if (match) nextIndex = Math.max(nextIndex, Number(match[1]) + 1);
     }
-    if (poolKey.length > GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH || !/^pool_[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(poolKey)) {
-        return `池名称只能包含中文、字母、数字、下划线、横杠，最长${GLOBAL_SETTINGS.MAX_POOL_NAME_LENGTH}字符`;
+
+    let poolKey = getNumberedPoolKey(nextIndex);
+    while (await env.IP_DATA.get(poolKey) !== null) {
+        nextIndex++;
+        poolKey = getNumberedPoolKey(nextIndex);
     }
-    return '';
+
+    await env.IP_DATA.put(poolKey, '');
+    const poolNames = await readPoolDisplayNames(env);
+    poolNames[poolKey] = displayName;
+    await writePoolDisplayNames(env, poolNames);
+    return jsonResponse({ success: true, poolKey, displayName, ...(await getPoolState(env)) });
 }
 
 async function handleRenamePool(request, env) {
+    await ensurePoolDefaults(env);
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
 
-    const poolKey = body.poolKey || 'pool';
+    const poolKey = body.poolKey || POOL_DEFAULT_KEY;
     const displayName = String(body.displayName || '').trim();
-    if (SYSTEM_POOL_KEYS.has(poolKey)) {
-        return badRequest({ success: false, error: `不能重命名${getPoolDisplayName(poolKey)}` });
-    }
-    if (poolKey !== 'pool' && validateEditablePoolKey(poolKey)) {
+    if (!isUserPoolKey(poolKey)) {
         return badRequest({ success: false, error: '池名称无效' });
     }
     if (!displayName) {
         return badRequest({ success: false, error: '显示名称不能为空' });
     }
-    if (displayName.length > 40 || !/^[\u4e00-\u9fa5a-zA-Z0-9_\-\s]+$/.test(displayName)) {
-        return badRequest({ success: false, error: '显示名称只能包含中文、字母、数字、空格、下划线、横杠，最长40字符' });
-    }
 
     const pool = await env.IP_DATA.get(poolKey);
-    if (pool === null && poolKey !== 'pool') {
+    if (pool === null && poolKey !== POOL_DEFAULT_KEY) {
         return badRequest({ success: false, error: '池不存在' });
     }
 
     const poolNames = await readPoolDisplayNames(env);
-    const defaultName = getPoolDisplayName(poolKey);
+    const defaultName = getPoolFixedName(poolKey);
     if (displayName === defaultName) {
         delete poolNames[poolKey];
     } else {
         poolNames[poolKey] = displayName;
     }
     await writePoolDisplayNames(env, poolNames);
-    return jsonResponse({ success: true, poolKey, displayName, poolNames });
+    return jsonResponse({ success: true, poolKey, displayName, ...(await getPoolState(env)) });
 }
 
 async function handleDeletePool(url, env) {
-    const poolKey = url.searchParams.get('poolKey');
+    await ensurePoolDefaults(env);
+    const poolKey = url.searchParams.get('poolKey') || '';
     
     if (!poolKey) {
         return badRequest({ success: false, error: '缺少poolKey参数' });
     }
     
-    // 保护系统池
-    if (DELETABLE_PROTECTED_POOL_KEYS.has(poolKey) || validateEditablePoolKey(poolKey)) {
-        return badRequest({ success: false, error: `不能删除${getPoolDisplayName(poolKey)}` });
+    if (poolKey === POOL_DEFAULT_KEY || poolKey === POOL_TRASH_KEY || !isUserPoolKey(poolKey)) {
+        return badRequest({ success: false, error: `不能删除${getPoolFixedName(poolKey)}` });
     }
 
     const existing = await env.IP_DATA.get(poolKey);
@@ -789,7 +852,19 @@ async function handleDeletePool(url, env) {
     
     try {
         await env.IP_DATA.delete(poolKey);
-        return jsonResponse({ success: true });
+        const poolNames = await readPoolDisplayNames(env);
+        delete poolNames[poolKey];
+        await writePoolDisplayNames(env, poolNames);
+        const mapping = await readDomainPoolMapping(env);
+        let mappingChanged = false;
+        for (const [domain, boundPool] of Object.entries(mapping)) {
+            if (boundPool === poolKey) {
+                mapping[domain] = POOL_DEFAULT_KEY;
+                mappingChanged = true;
+            }
+        }
+        if (mappingChanged) await env.IP_DATA.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(mapping));
+        return jsonResponse({ success: true, ...(await getPoolState(env)) });
     } catch (e) {
         console.error('删除池失败:', e);
         return jsonResponse({ success: false, error: '删除池失败' });
@@ -797,18 +872,20 @@ async function handleDeletePool(url, env) {
 }
 
 async function handleClearTrash(env) {
-    await env.IP_DATA.put('pool_trash', '');
+    await ensurePoolDefaults(env);
+    await env.IP_DATA.put(POOL_TRASH_KEY, '');
     return jsonResponse({ success: true, message: '垃圾桶已清空' });
 }
 
 async function handleRestoreFromTrash(request, env) {
+    await ensurePoolDefaults(env);
     const body = await readJsonBody(request);
     if (!body) {
         return badRequest({ success: false, error: '请求体不是有效JSON' });
     }
     const ipsToRestore = body.ips || [];
     const restoreToSource = body.restoreToSource === true;
-    const targetPool = body.targetPool || 'pool';
+    const targetPool = body.targetPool || POOL_DEFAULT_KEY;
     if (!Array.isArray(ipsToRestore)) {
         return badRequest({ success: false, error: 'ips 必须是数组' });
     }
@@ -821,10 +898,11 @@ async function handleRestoreFromTrash(request, env) {
     }
     
     // 获取垃圾桶
-    let trashList = parsePoolList(await env.IP_DATA.get('pool_trash'));
+    let trashList = parsePoolList(await env.IP_DATA.get(POOL_TRASH_KEY));
     
     let restored = 0;
     const restoredByPool = {};
+    const poolNames = await readPoolDisplayNames(env);
 
     // 读取/写入多个池：按需懒加载
     const poolCache = new Map(); // poolKey -> { list: string[], set: Set<string> }
@@ -841,16 +919,16 @@ async function handleRestoreFromTrash(request, env) {
     function pickTargetPoolFromTrashEntry(trashEntry) {
         if (!restoreToSource) return targetPool;
         // trashEntry 格式：`${ipAddr} # ${reason} ${timestamp} 来自 ${poolKey}`
-        // 例如：`1.2.3.4:443 # 洗库失效 2024-01-01T00:00:00.000Z 来自 pool_a`
+        // 例如：`1.2.3.4:443 # 洗库失效 2024-01-01T00:00:00.000Z 来自 ip_pool_001`
         const idx = trashEntry.lastIndexOf(' 来自 ');
         if (idx !== -1) {
             const sourcePool = trashEntry.slice(idx + 4).trim();
-            // 直接返回来源池名（如 pool_a），不需要通过域名映射
+            // 直接返回来源池名（如 ip_pool_001），不需要通过域名映射
             if (isPoolDataKey(sourcePool)) {
                 return sourcePool;
             }
         }
-        return 'pool';
+        return POOL_DEFAULT_KEY;
     }
     
     // 建立垃圾桶索引，避免循环内反复遍历
@@ -878,18 +956,37 @@ async function handleRestoreFromTrash(request, env) {
     }
 
     // 保存
-    await env.IP_DATA.put('pool_trash', Array.from(trashMap.values()).join('\n'));
+    await env.IP_DATA.put(POOL_TRASH_KEY, Array.from(trashMap.values()).join('\n'));
     for (const [poolKey, poolObj] of poolCache.entries()) {
         await env.IP_DATA.put(poolKey, poolObj.list.join('\n'));
     }
+
+    const rawRestoreDisplay = Object.entries(restoredByPool).map(([poolKey, count]) => ({
+        poolKey,
+        name: getPoolDisplayName(poolKey, poolNames),
+        count
+    }));
+    const restoreNameCounts = rawRestoreDisplay.reduce((acc, item) => {
+        acc[item.name] = (acc[item.name] || 0) + 1;
+        return acc;
+    }, {});
+    const restoredByPoolDisplay = rawRestoreDisplay.map(item => ({
+        ...item,
+        label: restoreNameCounts[item.name] > 1 ? `${item.name}（${getPoolFixedName(item.poolKey)}）` : item.name
+    }));
+    const restoreTargetName = getPoolDisplayName(targetPool, poolNames);
+    const restoreSummary = restoredByPoolDisplay
+        .map(item => `${item.label} ${item.count} 个`)
+        .join('，');
     
     return jsonResponse({ 
         success: true, 
         restored,
         restoredByPool,
+        restoredByPoolDisplay,
         message: restoreToSource
-            ? `已恢复 ${restored} 个IP到源IP库`
-            : `已恢复 ${restored} 个IP到 ${targetPool}`
+            ? `已恢复 ${restored} 个IP到源IP库${restoreSummary ? `（${restoreSummary}）` : ''}`
+            : `已恢复 ${restored} 个IP到 ${restoreTargetName}`
     });
 }
 
@@ -907,7 +1004,7 @@ function getEditableConfig(config) {
         dohApi: config.dohApi || '',
         authKey: config.authKey || '',
         scheduledEnabled: config.scheduledEnabled !== false,
-        settings: { ...GLOBAL_SETTINGS }
+        settings: getRuntimeSettings(config)
     };
 }
 
@@ -971,15 +1068,17 @@ function normalizeExitFilter(value) {
 }
 
 
-function normalizeTargetConfig(target) {
+function normalizeTargetConfig(target, settings = GLOBAL_SETTINGS) {
     if (!target || typeof target !== 'object') return null;
     const baseDomain = String(target.baseDomain || '').trim();
     const prefix = String(target.prefix || '').trim().replace(/^\.+|\.+$/g, '');
     const domain = String(target.domain || buildManagedDomain(prefix, baseDomain)).trim();
     if (!domain) return null;
     const mode = normalizeTargetMode(target.mode);
-    const port = String(target.port || '443').trim() || '443';
-    const minActive = Math.max(0, parseInt(target.minActive ?? GLOBAL_SETTINGS.DEFAULT_MIN_ACTIVE, 10) || GLOBAL_SETTINGS.DEFAULT_MIN_ACTIVE);
+    const port = mode === 'TXT' ? 'any' : (String(target.port || '443').trim() || '443');
+    const normalizedSettings = normalizeRuntimeSettings(settings);
+    const parsedMinActive = parseInt(target.minActive ?? normalizedSettings.DEFAULT_MIN_ACTIVE, 10);
+    const minActive = Math.max(0, Number.isFinite(parsedMinActive) ? parsedMinActive : normalizedSettings.DEFAULT_MIN_ACTIVE);
     const exitFilter = normalizeExitFilter(target.exitFilter);
     const country = String(target.country || '').trim().toUpperCase();
     const asn = normalizeAsnValue(target.asn);
@@ -1023,11 +1122,12 @@ function normalizeZoneConfig(zone) {
 
 
 function normalizeSavedConfig(rawConfig = {}) {
+    const settings = normalizeRuntimeSettings(rawConfig.settings || rawConfig);
     const zones = Array.isArray(rawConfig.zones)
         ? rawConfig.zones.map(normalizeZoneConfig).filter(Boolean)
         : [];
     const targets = Array.isArray(rawConfig.targets)
-        ? rawConfig.targets.map(normalizeTargetConfig).filter(Boolean)
+        ? rawConfig.targets.map(target => normalizeTargetConfig(target, settings)).filter(Boolean)
         : [];
     return {
         apiKey: String(rawConfig.apiKey || '').trim(),
@@ -1041,7 +1141,8 @@ function normalizeSavedConfig(rawConfig = {}) {
         checkApiBackup: String(rawConfig.checkApiBackup || '').trim(),
         dohApi: String(rawConfig.dohApi || '').trim(),
         authKey: String(rawConfig.authKey || '').trim(),
-        scheduledEnabled: parseBooleanConfig(rawConfig.scheduledEnabled, true)
+        scheduledEnabled: parseBooleanConfig(rawConfig.scheduledEnabled, true),
+        settings
     };
 }
 
@@ -1055,8 +1156,9 @@ async function loadSavedConfig(env) {
     }
 }
 
-async function createConfig(env, request = null) {
+function createEnvConfig(env = {}, request = null) {
     const config = { ...DEFAULT_CONFIG };
+    config.settings = normalizeRuntimeSettings();
 
     config.apiKey = env.CF_KEY || DEFAULT_CONFIG.apiKey;
     config.zoneId = env.CF_ZONEID || DEFAULT_CONFIG.zoneId;
@@ -1072,6 +1174,15 @@ async function createConfig(env, request = null) {
     config.checkApiBackup = env.CHECK_API_BACKUP || DEFAULT_CONFIG.checkApiBackup;
     config.dohApi = env.DOH_API || DEFAULT_CONFIG.dohApi;
     config.scheduledEnabled = parseBooleanConfig(env.SCHEDULED_ENABLED, DEFAULT_CONFIG.scheduledEnabled);
+    if (request) {
+        const url = new URL(request.url);
+        config.projectUrl = `${url.protocol}//${url.host}`;
+    }
+    return config;
+}
+
+async function createConfig(env, request = null) {
+    const config = createEnvConfig(env, request);
 
     const savedConfig = await loadSavedConfig(env);
     if (savedConfig) {
@@ -1085,22 +1196,18 @@ async function createConfig(env, request = null) {
         }
         config.tgEnabled = savedConfig.tgEnabled;
         config.scheduledEnabled = savedConfig.scheduledEnabled;
+        config.settings = savedConfig.settings;
         if (savedConfig.targets.length > 0) {
             config.targets = savedConfig.targets;
         }
     }
 
-    if (request) {
-        const url = new URL(request.url);
-        config.projectUrl = `${url.protocol}//${url.host}`;
-    }
-
     return Object.freeze(config);
 }
 
-async function batchAddToTrash(env, entries) {
+async function batchAddToTrash(env, entries, config = {}) {
     if (!entries || entries.length === 0) return;
-    const trashKey = 'pool_trash';
+    const trashKey = POOL_TRASH_KEY;
     let trashList = parsePoolList(await env.IP_DATA.get(trashKey));
     const trashIPSet = new Set(trashList.map(t => extractIPKey(t)));
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
@@ -1113,8 +1220,9 @@ async function batchAddToTrash(env, entries) {
         }
     }
 
-    if (trashList.length > GLOBAL_SETTINGS.MAX_TRASH_SIZE) {
-        trashList = trashList.slice(-GLOBAL_SETTINGS.MAX_TRASH_SIZE);
+    const maxTrashSize = getRuntimeSettings(config).MAX_TRASH_SIZE;
+    if (trashList.length > maxTrashSize) {
+        trashList = maxTrashSize > 0 ? trashList.slice(-maxTrashSize) : [];
     }
 
     await env.IP_DATA.put(trashKey, trashList.join('\n'));
@@ -1197,7 +1305,7 @@ function cleanIPList(text) {
     return Array.from(map.values()).join('\n');
 }
 
-async function loadFromRemoteUrl(url) {
+async function loadFromRemoteUrl(url, config = {}) {
     try {
         const parsed = new URL(url);
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
@@ -1221,7 +1329,7 @@ async function loadFromRemoteUrl(url) {
 
     try {
         const r = await fetch(url, {
-            signal: AbortSignal.timeout(GLOBAL_SETTINGS.REMOTE_LOAD_TIMEOUT)
+            signal: AbortSignal.timeout(getRuntimeSettings(config).REMOTE_LOAD_TIMEOUT)
         });
         if (r.ok) {
             const text = await r.text();
@@ -1234,10 +1342,11 @@ async function loadFromRemoteUrl(url) {
 }
 
 async function dohQuery(domain, type, config) {
+    const settings = getRuntimeSettings(config);
     try {
         const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=${encodeURIComponent(type)}`, {
             headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(GLOBAL_SETTINGS.DOH_TIMEOUT)
+            signal: AbortSignal.timeout(settings.DOH_TIMEOUT)
         });
         const d = await r.json();
         return Array.isArray(d.Answer) ? d.Answer : [];
@@ -1273,10 +1382,11 @@ async function resolveDomain(domain, config) {
 }
 
 async function resolveTXTRecord(domain, config) {
+    const settings = getRuntimeSettings(config);
     try {
         const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=TXT`, {
             headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(GLOBAL_SETTINGS.DOH_TIMEOUT)
+            signal: AbortSignal.timeout(settings.DOH_TIMEOUT)
         });
         const d = await r.json();
 
@@ -1466,7 +1576,7 @@ async function batchCheckIPs(ipList, checkFn, config, useBackupApi = false) {
     const effectiveCheckFn = (useBackupApi && config.checkApiBackup)
         ? (addr) => {
             const normalized = normalizeCheckAddr(addr);
-            return checkProxyIPOnce(normalized, config.checkApiBackup)
+            return checkProxyIPOnce(normalized, config.checkApiBackup, config)
                 .then(r => r ?? { success: false });
         }
         : checkFn;
@@ -1573,11 +1683,12 @@ async function getDomainStatus(target, config) {
 }
 
 // 单次检测IP（不带重试）
-async function checkProxyIPOnce(addr, apiUrl) {
+async function checkProxyIPOnce(addr, apiUrl, config = {}) {
+    const timeout = getRuntimeSettings(config).CHECK_TIMEOUT;
     try {
         const url = buildCheckApiUrl(apiUrl, addr);
 
-        const r = await fetch(url, { signal: AbortSignal.timeout(GLOBAL_SETTINGS.CHECK_TIMEOUT) });
+        const r = await fetch(url, { signal: AbortSignal.timeout(timeout) });
         if (!r.ok) return null;
 
         const data = safeJSONParse(await r.text(), null);
@@ -1595,12 +1706,12 @@ async function checkProxyIP(input, config) {
     const addr = normalizeCheckAddr(input);
 
     // 主接口检测
-    const result = await checkProxyIPOnce(addr, config.checkApi);
+    const result = await checkProxyIPOnce(addr, config.checkApi, config);
     if (result !== null) return result;
 
     // 备用接口检测
     if (config.checkApiBackup) {
-        const backup = await checkProxyIPOnce(addr, config.checkApiBackup);
+        const backup = await checkProxyIPOnce(addr, config.checkApiBackup, config);
         if (backup !== null) return backup;
     }
 
@@ -1698,9 +1809,10 @@ async function addAddressRecord(cfConfig, domain, ip) {
 
 async function getCandidateIPs(env, target, addLog, poolKey) {
     const pool = await env.IP_DATA.get(poolKey) || '';
+    const poolName = getPoolFixedName(poolKey);
     
     if (!pool) {
-        addLog(`⚠️ ${poolKey} 为空`);
+        addLog(`⚠️ ${poolName} 为空`);
         return [];
     }
     
@@ -1709,7 +1821,6 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
     // TXT模式不过滤端口，地址记录模式才过滤
     if (target.mode === 'A') {
         candidates = candidates.filter(l => {
-            // 出口类型必须靠检测 API 实时判断；池内旧 stack 字段只保留兼容，不参与预筛。
             const ipPort = extractIPKey(l);
             return extractPortFromAddr(ipPort) === target.port && targetMetaMatchesStoredEntry(l, target);
         });
@@ -1717,7 +1828,7 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
         candidates = candidates.filter(l => targetMetaMatchesStoredEntry(l, target));
     }
     
-    addLog(`📦 使用 ${poolKey}: ${candidates.length} 个候选IP`);
+    addLog(`📦 使用 ${poolName}: ${candidates.length} 个候选IP`);
     return candidates;
 }
 
@@ -1750,8 +1861,8 @@ function removePoolEntry(poolList, ipAddr) {
     return { list: next, removed: before !== next.length };
 }
 
-async function savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch) {
-    if (trashBatch.length > 0) await batchAddToTrash(env, trashBatch);
+async function savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch, config = {}) {
+    if (trashBatch.length > 0) await batchAddToTrash(env, trashBatch, config);
     if (poolModified) await env.IP_DATA.put(poolKey, poolList.join('\n'));
 }
 
@@ -1860,11 +1971,11 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn, c
 
         if (validHosts.length < target.minActive) {
             report.poolExhausted = true;
-            addLog(`⚠️ ${poolKey} 库存不足，无法达到最小活跃数 ${target.minActive}`);
+            addLog(`⚠️ ${getPoolFixedName(poolKey)} 库存不足，无法达到最小活跃数 ${target.minActive}`);
         }
     }
 
-    await savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch);
+    await savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch, config);
     report.poolAfterCount = poolList.length;
     report.afterActive = validHosts.length;
 }
@@ -1951,7 +2062,7 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
 
         if (validIPs.length < target.minActive) {
             report.poolExhausted = true;
-            addLog(`⚠️ ${poolKey} 库存不足，无法达到最小活跃数 ${target.minActive}`);
+            addLog(`⚠️ ${getPoolFixedName(poolKey)} 库存不足，无法达到最小活跃数 ${target.minActive}`);
         }
     }
 
@@ -1967,7 +2078,7 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
         report.txtUpdated = true;
     }
 
-    await savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch);
+    await savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch, config);
     report.poolAfterCount = poolList.length;
     report.afterActive = validIPs.length;
 }
@@ -1976,9 +2087,9 @@ async function maintainAllDomains(env, isManual = false, config) {
     const startTime = Date.now();
 
     const poolStats = new Map();
-    // 内联 loadDomainPoolMapping
-    const mappingJson = await env.IP_DATA.get('domain_pool_mapping') || '{}';
-    const domainPoolMapping = safeJSONParse(mappingJson, {});
+    const poolNames = await readPoolDisplayNames(env);
+    await ensurePoolDefaults(env);
+    const domainPoolMapping = await readDomainPoolMapping(env);
 
     // 单次维护任务内缓存 proxyip 检测结果，减少重复外部请求（不改变结果，仅减少请求次数）
     const checkCache = new Map();
@@ -2028,6 +2139,8 @@ async function maintainAllDomains(env, isManual = false, config) {
             removed: [],
             poolRemoved: 0,
             poolExhausted: false,
+            poolKeyUsed: '',
+            poolDisplayName: '',
             configError: false,
             checkDetails: [],
             logs: []
@@ -2041,7 +2154,10 @@ async function maintainAllDomains(env, isManual = false, config) {
         
         addLog(`🚀 开始维护: ${target.domain}`);
         // 内联 getPoolKeyForDomain
-        const poolKey = domainPoolMapping?.[target.domain] ?? 'pool';
+        const mappedPoolKey = domainPoolMapping?.[target.domain] ?? POOL_DEFAULT_KEY;
+        const poolKey = isUserPoolKey(mappedPoolKey) ? mappedPoolKey : POOL_DEFAULT_KEY;
+        report.poolKeyUsed = poolKey;
+        report.poolDisplayName = getPoolDisplayName(poolKey, poolNames);
 
         if (target.mode === 'A') {
             await maintainARecords(env, target, addLog, report, poolKey, checkProxyIPCached, config);
@@ -2061,9 +2177,9 @@ async function maintainAllDomains(env, isManual = false, config) {
     }
 
     // 重新读取垃圾桶的实际数量（维护过程中 batchAddToTrash 直接写入 KV，不经过 report）
-    if (poolStats.has('pool_trash')) {
-        const trashRaw = await env.IP_DATA.get('pool_trash') || '';
-        poolStats.get('pool_trash').after = parsePoolList(trashRaw).length;
+    if (poolStats.has(POOL_TRASH_KEY)) {
+        const trashRaw = await env.IP_DATA.get(POOL_TRASH_KEY) || '';
+        poolStats.get(POOL_TRASH_KEY).after = parsePoolList(trashRaw).length;
     }
      
     // 1. 检查是否有IP变化（删除或新增）
@@ -2089,7 +2205,7 @@ async function maintainAllDomains(env, isManual = false, config) {
 
     let tgResult = { sent: false, reason: 'no_need' };
     if (shouldNotify && config.tgEnabled !== false) {
-        tgResult = await sendTG(allReports, poolStats, isManual, config);
+        tgResult = await sendTG(allReports, poolStats, isManual, { ...config, poolNames });
     } else if (shouldNotify) {
         tgResult = { sent: false, reason: 'disabled', message: 'TG通知已关闭' };
     }
@@ -2150,6 +2266,7 @@ async function sendTG(reports, poolStats, isManual, config) {
 
     const modeLabel = { 'A': 'A/AAAA', 'TXT': 'TXT' };
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const poolNames = config.poolNames || {};
 
     let msg = isManual ? `🔧 <b>DDNS 手动维护报告</b>\n` : `⚙️ <b>DDNS 自动维护报告</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n⏰ ${timestamp}\n\n`;
@@ -2164,7 +2281,8 @@ async function sendTG(reports, poolStats, isManual, config) {
         msg += `━━ <code>${report.domain}</code> ━━\n`;
         msg += `${modeLabel[report.mode]}`;
         if (report.mode === 'A') msg += ` · 端口 ${report.port}`;
-        msg += ` · 最小活跃数 ${report.minActive}\n\n`;
+        msg += ` · 最小活跃数 ${report.minActive}\n`;
+        msg += `📦 使用池: <b>${report.poolDisplayName || getPoolDisplayName(report.poolKeyUsed, poolNames)}</b>\n\n`;
 
         if (report.configError) {
             msg += `❌ <b>配置错误，无法获取记录</b>\n`;
@@ -2193,7 +2311,7 @@ async function sendTG(reports, poolStats, isManual, config) {
     msg += `📦 <b>IP池库存统计</b>\n`;
 
     for (const [poolKey, stats] of poolStats) {
-        const displayName = getPoolDisplayName(poolKey);
+        const displayName = getPoolDisplayName(poolKey, poolNames);
         msg += `\n<b>${displayName}</b>\n`;
         msg += `   维护前: ${stats.before} 个\n`;
         msg += `   维护后: ${stats.after} 个\n`;
@@ -2204,13 +2322,14 @@ async function sendTG(reports, poolStats, isManual, config) {
             msg += `   ${changeSymbol} 变化: ${change > 0 ? '+' : ''}${change}\n`;
         }
 
-        // 垃圾桶/系统数据池不参与枯竭或低库存告警
-        if (poolKey !== 'pool_trash' && poolKey !== 'domain_pool_mapping') {
-            if (stats.after === 0 && stats.before > 0) {
-                msg += `   ⚠️ <b>警告：${displayName}已枯竭！</b>\n`;
-            } else if (stats.after < 10) {
-                msg += `   ⚠️ 库存较低\n`;
-            }
+        if (poolKey === POOL_TRASH_KEY) {
+            continue;
+        }
+
+        if (stats.after === 0 && stats.before > 0) {
+            msg += `   ⚠️ <b>警告：${displayName}已枯竭！</b>\n`;
+        } else if (stats.after < 10) {
+            msg += `   ⚠️ 库存较低\n`;
         }
     }
 
@@ -2256,7 +2375,7 @@ async function sendTG(reports, poolStats, isManual, config) {
 
 function renderHTML(C, runtimeState = {}) {
     const targetsJson = JSON.stringify(C.targets);
-    const settingsJson = JSON.stringify(GLOBAL_SETTINGS);
+    const settingsJson = JSON.stringify(getRuntimeSettings(C));
     const appConfigJson = JSON.stringify(getEditableConfig(C));
     const kvReady = runtimeState.kvReady !== false;
     const version = APP_VERSION;
@@ -3226,7 +3345,7 @@ function renderHTML(C, runtimeState = {}) {
     <div id="usage-guide" class="usage-guide" style="display:none">
         <ol>
             <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【⚡ 检测清洗】筛出可用 IP。</li>
-            <li><strong>保存到池</strong>：选择上方的 IP 池（默认为通用池），点击【💾 保存到当前池】将可用 IP 入库。</li>
+            <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【💾 保存到当前池】将可用 IP 入库。</li>
             <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【🔧 执行全部维护】或依靠定时任务自动维护。</li>
         </ol>
     </div>
@@ -3296,7 +3415,7 @@ function renderHTML(C, runtimeState = {}) {
                     <h6 class="m-0 fw-bold">📦 IP库管理</h6>
                     <div class="pool-tools">
                         <select id="pool-selector" class="form-select form-select-sm" onchange="switchPool()">
-                            <option value="pool">通用池</option>
+                            <option value="${POOL_DEFAULT_KEY}">默认池</option>
                         </select>
                         <button class="btn btn-sm" onclick="createNewPool()" title="新建池" style="padding:6px 8px">➕</button>
                         <button class="btn btn-sm" onclick="renameCurrentPool()" title="重命名池" style="padding:6px 8px">✏️</button>
@@ -3425,6 +3544,12 @@ function renderHTML(C, runtimeState = {}) {
                 <label class="field"><span>面板密钥</span><small>为空则关闭前端鉴权。</small><input id="cfg-auth-key" class="form-control form-control-sm" placeholder="AUTH_KEY"></label>
                 <label class="field"><span>TG Bot Token</span><small>开启 TG 通知时必填。</small><input id="cfg-tg-token" class="form-control form-control-sm" placeholder="TG_TOKEN"></label>
                 <label class="field"><span>TG Chat ID</span><small>通知接收账号或群组 ID。</small><input id="cfg-tg-id" class="form-control form-control-sm" placeholder="TG_ID"></label>
+                <label class="field"><span>检测并发</span><small>前端批量检测并发数。</small><input id="cfg-concurrent-checks" type="number" min="1" max="128" class="form-control form-control-sm" placeholder="32"></label>
+                <label class="field"><span>检测超时(ms)</span><small>单次 ProxyIP 检测。</small><input id="cfg-check-timeout" type="number" min="500" max="30000" class="form-control form-control-sm" placeholder="3000"></label>
+                <label class="field"><span>远程加载超时(ms)</span><small>远程 TXT URL 加载。</small><input id="cfg-remote-timeout" type="number" min="1000" max="60000" class="form-control form-control-sm" placeholder="5000"></label>
+                <label class="field"><span>DoH超时(ms)</span><small>DNS over HTTPS 查询。</small><input id="cfg-doh-timeout" type="number" min="1000" max="30000" class="form-control form-control-sm" placeholder="5000"></label>
+                <label class="field"><span>默认活跃数</span><small>新增管理域名默认值。</small><input id="cfg-default-min-active" type="number" min="0" max="100" class="form-control form-control-sm" placeholder="3"></label>
+                <label class="field"><span>垃圾桶上限</span><small>超过后保留最新条目。</small><input id="cfg-max-trash-size" type="number" min="0" max="100000" class="form-control form-control-sm" placeholder="1000"></label>
             </div>
         </div>
 
@@ -3452,15 +3577,17 @@ function renderHTML(C, runtimeState = {}) {
 <script>
     // ===== Client state =====
     const TARGETS = ${targetsJson};
-    const SETTINGS = ${settingsJson};
+    let SETTINGS = ${settingsJson};
     const INITIAL_APP_CONFIG = ${appConfigJson};
     const AUTH_ENABLED = ${C.authKey ? 'true' : 'false'};
     const MODE_LABELS = {'A': 'A/AAAA', 'TXT': 'TXT'};
     let currentTargetIndex = 0;
-    let currentPool = 'pool';
+    const POOL_DEFAULT_KEY = '${POOL_DEFAULT_KEY}';
+    const POOL_TRASH_KEY = '${POOL_TRASH_KEY}';
+    let currentPool = POOL_DEFAULT_KEY;
     let abortController = null;
     let domainPoolMapping = {};
-    let availablePools = ['pool'];
+    let availablePools = [POOL_DEFAULT_KEY];
     let poolDisplayNames = {};
     let toastTimer = null;
     let configDraft = null;
@@ -3506,8 +3633,42 @@ function renderHTML(C, runtimeState = {}) {
     }
     
     // 池名显示（统一格式）
-    const POOL_NAMES = { pool: '通用池', pool_trash: '🗑️ 垃圾桶', domain_pool_mapping: '系统数据' };
-    function getPoolName(key) { return poolDisplayNames[key] || POOL_NAMES[key] || key.replace('pool_', '') + '池'; }
+    const POOL_NAMES = { [POOL_DEFAULT_KEY]: '默认池', [POOL_TRASH_KEY]: '🗑️ 垃圾桶' };
+    const NUMBERED_POOL_KEY_RE = /^ip_pool_(\\d{3})$/;
+    function getPoolName(key) {
+        if (poolDisplayNames[key]) return poolDisplayNames[key];
+        if (POOL_NAMES[key]) return POOL_NAMES[key];
+        const numbered = NUMBERED_POOL_KEY_RE.exec(key || '');
+        if (numbered) return \`池 \${numbered[1]}\`;
+        return String(key || '').replace(/^ip_pool_/, '池 ');
+    }
+    function getPoolFixedName(key) {
+        if (POOL_NAMES[key]) return POOL_NAMES[key];
+        const numbered = NUMBERED_POOL_KEY_RE.exec(key || '');
+        if (numbered) return \`池 \${numbered[1]}\`;
+        return getPoolName(key);
+    }
+    function comparePoolKeys(a, b) {
+        const order = key => key === POOL_DEFAULT_KEY ? 0 : (key === POOL_TRASH_KEY ? 1 : 2);
+        const oa = order(a);
+        const ob = order(b);
+        if (oa !== ob) return oa - ob;
+        const na = NUMBERED_POOL_KEY_RE.exec(a || '');
+        const nb = NUMBERED_POOL_KEY_RE.exec(b || '');
+        if (na && nb) return Number(na[1]) - Number(nb[1]);
+        if (na) return -1;
+        if (nb) return 1;
+        return String(a || '').localeCompare(String(b || ''), 'zh-CN', { numeric: true });
+    }
+
+    function applyPoolState(state = {}) {
+        domainPoolMapping = state.mapping && typeof state.mapping === 'object' && !Array.isArray(state.mapping) ? state.mapping : {};
+        availablePools = Array.isArray(state.pools) && state.pools.length ? state.pools : [POOL_DEFAULT_KEY, POOL_TRASH_KEY];
+        poolDisplayNames = state.poolNames && typeof state.poolNames === 'object' && !Array.isArray(state.poolNames) ? state.poolNames : {};
+        if (!availablePools.includes(currentPool)) currentPool = POOL_DEFAULT_KEY;
+        updatePoolSelector();
+        updateDomainBindingTable();
+    }
     
     // ===== Form / toast / navigation helpers =====
     function setInputValue(id, value) {
@@ -3518,6 +3679,11 @@ function renderHTML(C, runtimeState = {}) {
     function getInputValue(id) {
         const el = document.getElementById(id);
         return el ? el.value.trim() : '';
+    }
+
+    function getNumberInputValue(id, fallback) {
+        const value = parseInt(getInputValue(id), 10);
+        return Number.isFinite(value) ? value : fallback;
     }
 
     function showToast(message, type = 'success') {
@@ -3586,7 +3752,7 @@ function renderHTML(C, runtimeState = {}) {
     }
 
     function bindConfigGlobalChangeHandlers() {
-        ['cfg-scheduled-enabled', 'cfg-tg-enabled', 'cfg-check-api', 'cfg-check-api-backup', 'cfg-doh-api', 'cfg-auth-key', 'cfg-tg-token', 'cfg-tg-id'].forEach(id => {
+        ['cfg-scheduled-enabled', 'cfg-tg-enabled', 'cfg-check-api', 'cfg-check-api-backup', 'cfg-doh-api', 'cfg-auth-key', 'cfg-tg-token', 'cfg-tg-id', 'cfg-concurrent-checks', 'cfg-check-timeout', 'cfg-remote-timeout', 'cfg-doh-timeout', 'cfg-default-min-active', 'cfg-max-trash-size'].forEach(id => {
             const el = document.getElementById(id);
             if (!el || el.dataset.dirtyBound) return;
             el.dataset.dirtyBound = '1';
@@ -3705,7 +3871,7 @@ function renderHTML(C, runtimeState = {}) {
             <div class="config-edit-grid">
                 <label class="field"><span>配置</span><small>自动编号。</small><input id="edit-zone-name" class="form-control form-control-sm" value="\${escapeHTML(zone.name || ('配置' + number))}" readonly></label>
                 <label class="field"><span>别名</span><small>卡片显示名称。</small><input id="edit-zone-label" class="form-control form-control-sm" value="\${escapeHTML(zone.label || zone.baseDomain || ('配置' + number))}" placeholder="配置\${number}"></label>
-                <label class="field"><span>维护根域</span><small>例如 dwb.cc.cd。</small><input id="edit-zone-base" class="form-control form-control-sm" value="\${escapeHTML(zone.baseDomain || '')}" placeholder="dwb.cc.cd"></label>
+                <label class="field"><span>目标维护域名</span><small>目前只支持托管在cf的域名</small><input id="edit-zone-base" class="form-control form-control-sm" value="\${escapeHTML(zone.baseDomain || '')}" placeholder="example.com"></label>
                 <label class="field"><span>Zone ID</span><small>Cloudflare 区域 ID。</small><input id="edit-zone-id" class="form-control form-control-sm" value="\${escapeHTML(zone.zoneId || '')}" placeholder="Zone ID"></label>
                 <label class="field span-2"><span>CF Key</span><small>需要 DNS 编辑权限。</small><input id="edit-zone-key" class="form-control form-control-sm" value="\${escapeHTML(zone.apiKey || '')}" placeholder="CF API Token"></label>
             </div>
@@ -3772,7 +3938,7 @@ function renderHTML(C, runtimeState = {}) {
         const enabled = target.enabled !== false;
         return \`
             <div class="config-mini-card" onclick="editTargetConfig(\${index})">
-                <h5>\${escapeHTML(domain || '未生成域名')}</h5>
+                <h5>\${escapeHTML(domain || '等待生成')}</h5>
                 <div class="meta"><span>\${escapeHTML(meta)}</span><span>\${escapeHTML(exitLabel)}</span><span>\${escapeHTML(getZoneDisplayName(target.zoneIndex || 0))}</span><span>\${enabled ? '维护开启' : '维护关闭'}</span></div>
                 <div class="meta"><span>活跃数 \${escapeHTML(String(target.minActive ?? 3))}</span>\${filters ? '<span>' + escapeHTML(filters) + '</span>' : ''}</div>
                 <div class="actions" onclick="event.stopPropagation()">
@@ -3789,7 +3955,7 @@ function renderHTML(C, runtimeState = {}) {
 
     function addTargetConfigRow() {
         if (!ensureConfigEditable()) return;
-        showTargetEditor((configDraft?.targets || []).length, { mode: 'A', zoneIndex: 0, prefix: '', port: '443', minActive: 3 });
+        showTargetEditor((configDraft?.targets || []).length, { mode: 'A', zoneIndex: 0, prefix: '', port: '443', minActive: (configDraft?.settings?.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE) });
     }
 
     function loadAppConfigToForm(config) {
@@ -3800,6 +3966,13 @@ function renderHTML(C, runtimeState = {}) {
         setInputValue('cfg-auth-key', config.authKey);
         setInputValue('cfg-tg-token', config.tgToken);
         setInputValue('cfg-tg-id', config.tgId);
+        const settings = config.settings || SETTINGS;
+        setInputValue('cfg-concurrent-checks', settings.CONCURRENT_CHECKS ?? SETTINGS.CONCURRENT_CHECKS);
+        setInputValue('cfg-check-timeout', settings.CHECK_TIMEOUT ?? SETTINGS.CHECK_TIMEOUT);
+        setInputValue('cfg-remote-timeout', settings.REMOTE_LOAD_TIMEOUT ?? SETTINGS.REMOTE_LOAD_TIMEOUT);
+        setInputValue('cfg-doh-timeout', settings.DOH_TIMEOUT ?? SETTINGS.DOH_TIMEOUT);
+        setInputValue('cfg-default-min-active', settings.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE);
+        setInputValue('cfg-max-trash-size', settings.MAX_TRASH_SIZE ?? SETTINGS.MAX_TRASH_SIZE);
         const scheduledToggle = document.getElementById('cfg-scheduled-enabled');
         const tgToggle = document.getElementById('cfg-tg-enabled');
         if (scheduledToggle) scheduledToggle.checked = config.scheduledEnabled !== false;
@@ -3828,19 +4001,20 @@ function renderHTML(C, runtimeState = {}) {
         const mode = target.mode === 'TXT' ? 'TXT' : 'A';
         const modeOptions = ['A', 'TXT'].map(value => \`<option value="\${value}" \${mode === value ? 'selected' : ''}>\${MODE_LABELS[value]}</option>\`).join('');
         const exit = target.exitFilter || 'any';
+        const portValue = mode === 'TXT' ? '任意' : (target.port || '443');
+        const previousAPort = mode === 'TXT' && target.port && target.port !== 'any' ? target.port : '443';
         panel.classList.add('active');
         panel.innerHTML = \`
             <h6 class="mb-3 fw-bold">\${index >= (configDraft?.targets || []).length ? '添加' : '编辑'}管理域名</h6>
             <div class="config-edit-grid">
-                <label class="field"><span>权限配置</span><small>选择配置1/2/3。</small><select id="edit-target-zone" class="form-select form-select-sm" onchange="updateTargetEditorPreview()">\${getZoneOptionsHtml(target.zoneIndex ?? 0)}</select></label>
-                <label class="field"><span>维护类型</span><small>A/AAAA 或 TXT。</small><select id="edit-target-mode" class="form-select form-select-sm" onchange="updateTargetEditorPreview()">\${modeOptions}</select></label>
+                <label class="field"><span>权限配置</span><small>选择配置1/2/3。</small><select id="edit-target-zone" class="form-select form-select-sm">\${getZoneOptionsHtml(target.zoneIndex ?? 0)}</select></label>
+                <label class="field"><span>维护类型</span><small>A/AAAA 或 TXT。</small><select id="edit-target-mode" class="form-select form-select-sm" onchange="handleTargetModeChange()">\${modeOptions}</select></label>
                 <label class="field"><span>出口类型</span><small>由检测 API 实时判断。</small><select id="edit-target-exit" class="form-select form-select-sm"><option value="any" \${exit === 'any' ? 'selected' : ''}>任意</option><option value="v4" \${exit === 'v4' ? 'selected' : ''}>IPv4</option><option value="v6" \${exit === 'v6' ? 'selected' : ''}>IPv6</option><option value="dual" \${exit === 'dual' ? 'selected' : ''}>IPv4 & IPv6</option></select></label>
-                <label class="field"><span>域名前缀</span><small>留空表示根域。</small><input id="edit-target-prefix" class="form-control form-control-sm" value="\${escapeHTML(target.prefix || '')}" placeholder="kr" oninput="updateTargetEditorPreview()"></label>
-                <label class="field"><span>端口</span><small>A/AAAA 模式显示。</small><input id="edit-target-port" class="form-control form-control-sm" value="\${escapeHTML(target.port || '443')}" placeholder="443"></label>
+                <label class="field"><span>域名前缀</span><small>留空表示根域。</small><input id="edit-target-prefix" class="form-control form-control-sm" value="\${escapeHTML(target.prefix || '')}" placeholder="kr"></label>
+                <label class="field"><span>端口</span><small id="edit-target-port-hint">A/AAAA 模式使用，TXT 为任意。</small><input id="edit-target-port" class="form-control form-control-sm" value="\${escapeHTML(portValue)}" data-a-port="\${escapeHTML(previousAPort)}" placeholder="443"></label>
                 <label class="field"><span>活跃数</span><small>最小可用数量。</small><input id="edit-target-min" type="number" min="0" class="form-control form-control-sm" value="\${escapeHTML(String(target.minActive ?? 3))}" placeholder="3"></label>
                 <label class="field"><span>国家</span><small>可选，例如 KR。</small><input id="edit-target-country" class="form-control form-control-sm" value="\${escapeHTML(target.country || '')}" placeholder="KR"></label>
                 <label class="field"><span>ASN</span><small>可选，例如 AS4766。</small><input id="edit-target-asn" class="form-control form-control-sm" value="\${escapeHTML(target.asn || '')}" placeholder="AS4766"></label>
-                <label class="field"><span>完整域名</span><small>自动生成，点击可复制。</small><code id="edit-target-preview" class="copyable" onclick="copyText(this.textContent, '域名')"></code></label>
             </div>
             <input type="hidden" id="edit-target-enabled" value="\${target.enabled !== false ? 'true' : 'false'}">
             <div class="config-edit-actions">
@@ -3848,16 +4022,45 @@ function renderHTML(C, runtimeState = {}) {
                 <button class="btn btn-primary btn-sm" onclick="commitTargetEditor(\${index})">保存到页面</button>
             </div>
         \`;
-        updateTargetEditorPreview();
+        syncTargetPortMode();
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function syncTargetPortMode() {
+        const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
+        const portInput = document.getElementById('edit-target-port');
+        const hint = document.getElementById('edit-target-port-hint');
+        if (!portInput) return;
+        if (mode === 'TXT') {
+            if (!portInput.dataset.aPort || portInput.value !== '任意') {
+                portInput.dataset.aPort = (portInput.value && portInput.value !== '任意') ? portInput.value : (portInput.dataset.aPort || '443');
+            }
+            portInput.value = '任意';
+            portInput.disabled = true;
+            if (hint) hint.textContent = 'TXT 模式不限制端口。';
+        } else {
+            portInput.disabled = false;
+            portInput.value = portInput.dataset.aPort || (portInput.value === '任意' ? '443' : portInput.value) || '443';
+            if (hint) hint.textContent = 'A/AAAA 模式使用。';
+        }
+    }
+
+    function handleTargetModeChange() {
+        const portInput = document.getElementById('edit-target-port');
+        if (portInput && !portInput.disabled && portInput.value && portInput.value !== '任意') {
+            portInput.dataset.aPort = portInput.value;
+        }
+        syncTargetPortMode();
     }
 
     function getTargetEditorValue() {
         const zoneIndex = parseInt(getInputValue('edit-target-zone') || '0', 10) || 0;
         const prefix = getInputValue('edit-target-prefix').replace(/^\\.+|\\.+$/g, '');
-        const port = getInputValue('edit-target-port') || '443';
-        const minActive = parseInt(getInputValue('edit-target-min') || '3', 10) || 3;
         const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
+        const portInput = document.getElementById('edit-target-port');
+        const port = mode === 'TXT' ? 'any' : ((portInput?.value || '').trim() || '443');
+        const parsedMinActive = parseInt(getInputValue('edit-target-min'), 10);
+        const minActive = Number.isFinite(parsedMinActive) ? Math.max(0, parsedMinActive) : (configDraft?.settings?.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE);
         const target = {
             mode,
             zoneIndex,
@@ -3873,16 +4076,10 @@ function renderHTML(C, runtimeState = {}) {
         return target;
     }
 
-    function updateTargetEditorPreview() {
-        const preview = document.getElementById('edit-target-preview');
-        if (!preview) return;
-        preview.textContent = computeDomainFromTarget(getTargetEditorValue()) || '未生成域名';
-    }
-
     function commitTargetEditor(index) {
         if (!ensureConfigEditable()) return;
         const target = getTargetEditorValue();
-        if (!target.domain || target.domain === '未生成域名') {
+        if (!target.domain) {
             showToast('请先填写权限配置和域名前缀', 'error');
             return;
         }
@@ -3928,6 +4125,14 @@ function renderHTML(C, runtimeState = {}) {
             tgId: getInputValue('cfg-tg-id'),
             scheduledEnabled: scheduledToggle ? scheduledToggle.checked : true,
             tgEnabled: tgToggle ? tgToggle.checked : true,
+            settings: {
+                CONCURRENT_CHECKS: getNumberInputValue('cfg-concurrent-checks', SETTINGS.CONCURRENT_CHECKS),
+                CHECK_TIMEOUT: getNumberInputValue('cfg-check-timeout', SETTINGS.CHECK_TIMEOUT),
+                REMOTE_LOAD_TIMEOUT: getNumberInputValue('cfg-remote-timeout', SETTINGS.REMOTE_LOAD_TIMEOUT),
+                DOH_TIMEOUT: getNumberInputValue('cfg-doh-timeout', SETTINGS.DOH_TIMEOUT),
+                DEFAULT_MIN_ACTIVE: getNumberInputValue('cfg-default-min-active', SETTINGS.DEFAULT_MIN_ACTIVE),
+                MAX_TRASH_SIZE: getNumberInputValue('cfg-max-trash-size', SETTINGS.MAX_TRASH_SIZE)
+            },
             targets: collectTargetConfigRows()
         };
         try {
@@ -3945,7 +4150,8 @@ function renderHTML(C, runtimeState = {}) {
                 showToast(r.error || '配置保存失败', 'error');
                 return;
             }
-            configDraft = cloneConfig(config);
+            configDraft = cloneConfig(r.config || config);
+            SETTINGS = configDraft.settings || SETTINGS;
             clearConfigDirty();
             setConfigEditMode(false);
             log('✅ 配置已保存到 KV，刷新页面后生效', 'success');
@@ -4130,7 +4336,6 @@ function renderHTML(C, runtimeState = {}) {
             address: fields[0] || '',
             asn: formatAsn(fields[1]) || 'null',
             country: fields[2] || 'null',
-            stack: fields[3] || 'null',
             comment: raw.includes('#') ? raw.slice(raw.indexOf('#') + 1).trim() : ''
         };
     }
@@ -4517,7 +4722,7 @@ function renderHTML(C, runtimeState = {}) {
         pausedCheckState = null;
 
         // 继续检测
-        return await batchCheck(cleaningPool === 'pool_trash');
+        return await batchCheck(cleaningPool === POOL_TRASH_KEY);
     }
     
     // 放弃检测
@@ -4836,12 +5041,7 @@ function renderHTML(C, runtimeState = {}) {
     async function loadDomainPoolMapping() {
         try {
             const r = await apiFetch('/api/get-domain-pool-mapping').then(r => r.json());
-            domainPoolMapping = r.mapping || {};
-            availablePools = r.pools || ['pool'];
-            poolDisplayNames = r.poolNames || {};
-            
-            updatePoolSelector();
-            updateDomainBindingTable();
+            applyPoolState(r);
             log('✅ 已加载池配置', 'success');
         } catch (e) {
             log('❌ 加载配置失败', 'error');
@@ -4850,29 +5050,17 @@ function renderHTML(C, runtimeState = {}) {
     
     function updatePoolSelector() {
         const selector = document.getElementById('pool-selector');
-        
-        const pools = ['pool'];
-        const hasTrash = availablePools.includes('pool_trash');
-        if (hasTrash) {
-            pools.push('pool_trash');
-        }
-        
-        availablePools.forEach(p => {
-            if (p !== 'pool' && p !== 'pool_trash' && p !== 'domain_pool_mapping' && p !== 'pool_display_names') {
-                pools.push(p);
-            }
-        });
-        
-        if (!hasTrash) {
-            pools.splice(1, 0, 'pool_trash');
-        }
-        
+        if (!selector) return;
+        const pools = [...new Set([POOL_DEFAULT_KEY, POOL_TRASH_KEY, ...(Array.isArray(availablePools) ? availablePools : [])])]
+            .sort(comparePoolKeys);
+
         selector.innerHTML = pools.map(pool => \`<option value="\${escapeHTML(pool)}">\${escapeHTML(getPoolName(pool))}</option>\`).join('');
         selector.value = currentPool;
     }
     
     function updateDomainBindingTable() {
         const tbody = document.getElementById('domain-binding-list');
+        if (!tbody) return;
         const domains = TARGETS.map(t => t.domain);
         if (domains.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="text-center text-secondary">请先到配置中心添加管理域名</td></tr>';
@@ -4880,11 +5068,10 @@ function renderHTML(C, runtimeState = {}) {
         }
         
         tbody.innerHTML = domains.map(domain => {
-            const boundPool = domainPoolMapping[domain] || 'pool';
+            const boundPool = domainPoolMapping[domain] || POOL_DEFAULT_KEY;
             
-            const selectablePools = availablePools.filter(p => 
-                p !== 'pool_trash' && p !== 'domain_pool_mapping' && p !== 'pool_display_names'
-            );
+            const selectablePools = (Array.isArray(availablePools) ? availablePools : [POOL_DEFAULT_KEY])
+                .filter(p => p !== POOL_TRASH_KEY);
             
             const options = selectablePools.map(pool => {
                 const selected = pool === boundPool ? 'selected' : '';
@@ -4906,39 +5093,25 @@ function renderHTML(C, runtimeState = {}) {
     }
     
     async function createNewPool() {
-        const name = prompt('输入池名称 (支持中文、字母、数字、下划线、横杠)');
+        const name = prompt('输入池显示名称');
         if (!name) return;
+        const displayName = name.trim();
         
-        // 放宽限制：支持中文
-        if (!/^[\u4e00-\u9fa5a-zA-Z0-9_-]+$/.test(name)) {
-            alert('池名称只能包含中文、字母、数字、下划线、横杠!');
-            return;
-        }
-        
-        if (name.length > 40) {
-            alert('池名称不能超过40个字符!');
-            return;
-        }
-        
-        const poolKey = \`pool_\${name}\`;
-        
-        if (availablePools.includes(poolKey)) {
-            alert('池已存在!');
+        if (!displayName) {
+            alert('显示名称不能为空!');
             return;
         }
         
         try {
             const r = await apiFetch('/api/create-pool', {
                 method: 'POST',
-                body: JSON.stringify({ name })
+                body: JSON.stringify({ displayName })
             }).then(r => r.json());
             
             if (r.success) {
-                const createdPoolKey = r.poolKey || poolKey;
-                if (!availablePools.includes(createdPoolKey)) availablePools.push(createdPoolKey);
+                const createdPoolKey = r.poolKey;
                 currentPool = createdPoolKey;
-                updatePoolSelector();
-                updateDomainBindingTable();
+                applyPoolState(r);
                 log(\`✅ 已创建池: \${getPoolName(createdPoolKey)}\`, 'success');
             } else {
                 alert(r.error || '创建失败');
@@ -4949,7 +5122,7 @@ function renderHTML(C, runtimeState = {}) {
     }
 
     async function renameCurrentPool() {
-        if (currentPool === 'pool_trash' || currentPool === 'domain_pool_mapping') {
+        if (currentPool === POOL_TRASH_KEY) {
             alert(\`不能重命名\${getPoolName(currentPool)}!\`);
             return;
         }
@@ -4959,12 +5132,8 @@ function renderHTML(C, runtimeState = {}) {
         if (!name) return;
         const displayName = name.trim();
 
-        if (!/^[\u4e00-\u9fa5a-zA-Z0-9_\\-\\s]+$/.test(displayName)) {
-            alert('显示名称只能包含中文、字母、数字、空格、下划线、横杠!');
-            return;
-        }
-        if (displayName.length > 40) {
-            alert('显示名称不能超过40个字符!');
+        if (!displayName) {
+            alert('显示名称不能为空!');
             return;
         }
 
@@ -4979,9 +5148,7 @@ function renderHTML(C, runtimeState = {}) {
                 return;
             }
 
-            poolDisplayNames = r.poolNames || { ...poolDisplayNames, [currentPool]: displayName };
-            updatePoolSelector();
-            updateDomainBindingTable();
+            applyPoolState(r);
             log(\`✅ 已重命名为: \${displayName}\`, 'success');
             showToast('池名称已更新');
         } catch (e) {
@@ -4990,13 +5157,24 @@ function renderHTML(C, runtimeState = {}) {
     }
     
     async function deleteCurrentPool() {
-        const protectedPools = ['pool', 'pool_trash', 'domain_pool_mapping'];
+        const protectedPools = [POOL_DEFAULT_KEY, POOL_TRASH_KEY];
         if (protectedPools.includes(currentPool)) {
             alert(\`不能删除\${getPoolName(currentPool)}!\`);
             return;
         }
         
-        if (!confirm(\`确认删除 \${currentPool}?\`)) return;
+        const boundDomains = Object.entries(domainPoolMapping)
+            .filter(([, poolKey]) => poolKey === currentPool)
+            .map(([domain]) => domain);
+        const confirmLines = [
+            \`确认删除 \${getPoolFixedName(currentPool)}（\${getPoolName(currentPool)}）？\`
+        ];
+        if (boundDomains.length) {
+            confirmLines.push('', \`当前有 \${boundDomains.length} 个管理域名绑定到该池，删除后会自动改回默认池。\`);
+            confirmLines.push(...boundDomains.slice(0, 5).map(domain => \`- \${domain}\`));
+            if (boundDomains.length > 5) confirmLines.push(\`...还有 \${boundDomains.length - 5} 个\`);
+        }
+        if (!confirm(confirmLines.join('\\n'))) return;
         
         try {
             const r = await apiFetch(\`/api/delete-pool?poolKey=\${currentPool}\`, {
@@ -5008,10 +5186,8 @@ function renderHTML(C, runtimeState = {}) {
                 return;
             }
             
-            availablePools = availablePools.filter(p => p !== currentPool);
-            currentPool = 'pool';
-            updatePoolSelector();
-            updateDomainBindingTable();
+            currentPool = POOL_DEFAULT_KEY;
+            applyPoolState(r);
             log(\`✅ 已删除池\`, 'success');
         } catch (e) {
             log('❌ 删除失败', 'error');
@@ -5024,7 +5200,7 @@ function renderHTML(C, runtimeState = {}) {
         
         const trashActions = document.getElementById('trash-actions');
         if (trashActions) {
-            if (currentPool === 'pool_trash') {
+            if (currentPool === POOL_TRASH_KEY) {
                 trashActions.style.display = 'block';
             } else {
                 trashActions.style.display = 'none';
@@ -5035,16 +5211,41 @@ function renderHTML(C, runtimeState = {}) {
     }
     
     async function bindDomainToPool(domain, poolKey) {
+        const oldPool = domainPoolMapping[domain] || POOL_DEFAULT_KEY;
+        if (oldPool === poolKey) return;
+        const oldName = getPoolName(oldPool);
+        const newName = getPoolName(poolKey);
+        const message = [
+            \`确认切换 \${domain} 的绑定池？\`,
+            \`\`,
+            \`当前：\${oldName}（\${getPoolFixedName(oldPool)}）\`,
+            \`切换到：\${newName}（\${getPoolFixedName(poolKey)}）\`,
+            \`\`,
+            \`切换后下一次维护会从新池补充 IP。\`
+        ].join('\\n');
+        if (!confirm(message)) {
+            updateDomainBindingTable();
+            return;
+        }
         domainPoolMapping[domain] = poolKey;
         
         try {
-            await apiFetch('/api/save-domain-pool-mapping', {
+            const r = await apiFetch('/api/save-domain-pool-mapping', {
                 method: 'POST',
                 body: JSON.stringify({ mapping: domainPoolMapping })
-            });
+            }).then(r => r.json());
+            if (!r.success) {
+                domainPoolMapping[domain] = oldPool;
+                updateDomainBindingTable();
+                log(\`❌ 绑定失败: \${r.error || '未知错误'}\`, 'error');
+                return;
+            }
+            applyPoolState(r);
             
             log(\`✅ \${domain} → \${getPoolName(poolKey)}\`, 'success');
         } catch (e) {
+            domainPoolMapping[domain] = oldPool;
+            updateDomainBindingTable();
             log('❌ 绑定失败', 'error');
         }
     }
@@ -5071,7 +5272,7 @@ function renderHTML(C, runtimeState = {}) {
     // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
     // 垃圾桶：有效IP恢复到原来的库
     async function oneClickClean() {
-        const isTrash = currentPool === 'pool_trash';
+        const isTrash = currentPool === POOL_TRASH_KEY;
         
         log(\`🧹 开始一键洗库: \${getPoolName(currentPool)}\`, 'warn');
         cleaningPool = currentPool;
@@ -5176,7 +5377,7 @@ function renderHTML(C, runtimeState = {}) {
                 
                 await apiFetch('/api/save-pool', {
                     method: 'POST',
-                    body: JSON.stringify({ pool: trashContent, poolKey: 'pool_trash', mode: 'append' })
+                    body: JSON.stringify({ pool: trashContent, poolKey: POOL_TRASH_KEY, mode: 'append' })
                 });
                 
                 log(\`🗑️ 已将 \${invalidLines.length} 个失效IP移入垃圾桶\`, 'info');
@@ -5223,6 +5424,7 @@ function renderHTML(C, runtimeState = {}) {
             
             if (r.success) {
                 log(\`✅ 垃圾桶洗库完成: \${r.message}\`, 'success');
+                logRestoreSummary(r);
                 document.getElementById('ip-input').value = '';
                 updateFilterPreview();
                 // 刷新垃圾桶数量
@@ -5257,6 +5459,7 @@ function renderHTML(C, runtimeState = {}) {
             
             if (r.success) {
                 log(\`✅ \${r.message}\`, 'success');
+                logRestoreSummary(r);
                 loadCurrentPool();
                 updateFilterPreview();
             } else {
@@ -5265,6 +5468,14 @@ function renderHTML(C, runtimeState = {}) {
         } catch (e) {
             log('❌ 恢复失败', 'error');
         }
+    }
+
+    function logRestoreSummary(result) {
+        const entries = Array.isArray(result.restoredByPoolDisplay) ? result.restoredByPoolDisplay : [];
+        if (entries.length <= 1) return;
+        entries.forEach(item => {
+            log(\`   \${item.label || item.name}: \${item.count} 个\`, 'info');
+        });
     }
  
     function smartFilter(mode) {
