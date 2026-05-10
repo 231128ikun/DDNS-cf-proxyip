@@ -2,13 +2,18 @@
  * DDNS Pro & Proxy IP Manager
  */
 
+// ==================== Editable configuration ====================
+// Change these values first when tuning runtime behavior.
+const APP_VERSION = '2026.05.10-22.49';
+const APP_CONFIG_KEY = 'app_config';
+
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
-    CONCURRENT_CHECKS: 15,       // 前端批量检测并发数（参考检测页实现）
-    CHECK_TIMEOUT: 5000,         // 单次 ProxyIP 检测超时(ms)
+    CONCURRENT_CHECKS: 32,       // 前端批量检测并发数（参考检测页实现）
+    CHECK_TIMEOUT: 8000,         // 单次 ProxyIP 检测超时(ms)
 
     // ── 网络超时 ──
-    REMOTE_LOAD_TIMEOUT: 5000,   // 远程 URL 加载超时(ms)
+    REMOTE_LOAD_TIMEOUT: 8000,   // 远程 URL 加载超时(ms)
     DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
 
     // ── 数据限制 ──
@@ -70,9 +75,6 @@ function normalizeRuntimeSettings(raw = {}) {
 function getRuntimeSettings(config = {}) {
     return normalizeRuntimeSettings(config.settings || GLOBAL_SETTINGS);
 }
-
-const APP_CONFIG_KEY = 'app_config';
-const APP_VERSION = '2026.05.09-22.00';
 
 function safeJSONParse(str, defaultValue = null) {
     try { return str ? JSON.parse(str) : defaultValue; }
@@ -144,7 +146,7 @@ function formatAddr(ip, port = '443') {
 function splitComment(line) {
     if (!line) return { main: '', comment: '' };
     const idx = line.indexOf('#');
-    if (idx >= 0) return { main: line.substring(0, idx).trim(), comment: line.substring(idx) };
+    if (idx >= 0) return { main: line.substring(0, idx).trim(), comment: ` ${line.substring(idx).trim()}` };
     return { main: line.trim(), comment: '' };
 }
 
@@ -164,7 +166,10 @@ function parsePoolEntry(line) {
 }
 
 function formatPoolAsn(asn) {
-    const values = String(asn || '').split(/[\/,\s]+/).map(item => item.trim()).filter(Boolean);
+    const values = String(asn || '')
+        .split(/[\/,\s]+/)
+        .map(item => item.trim())
+        .filter(item => item && !isUnknownMetaValue(item));
     if (!values.length) return 'null';
     return values.map(item => item.toUpperCase().startsWith('AS') ? item.toUpperCase() : `AS${item}`).join('/');
 }
@@ -291,7 +296,6 @@ const badRequest = data => jsonResponse(data, 400);
 const serverError = data => jsonResponse(data, 500);
 const readJsonBody = async req => { try { return await req.json(); } catch { return null; } };
 const hasKVBinding = env => Boolean(env?.IP_DATA && typeof env.IP_DATA.get === 'function' && typeof env.IP_DATA.put === 'function');
-const escapeHTML = str => String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 function parseCookieHeader(cookieHeader) {
     const out = {};
@@ -339,40 +343,11 @@ function unauthorizedResponse(url) {
             message: '需要提供 AUTH_KEY'
         }, 401);
     }
-    const nextPath = `${url.pathname || '/'}${url.search ? url.search.replace(/[?&]key=[^&]*/g, '') : ''}`;
-    const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DDNS Pro - 登录</title>
-  <style>
-    *{box-sizing:border-box}
-    body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f}
-    .login{width:100%;max-width:380px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
-    h1{font-size:22px;line-height:1.2;margin:0 0 8px;font-weight:750}
-    p{margin:0 0 22px;color:#6b7280;font-size:13px;line-height:1.55}
-    label{display:block;margin-bottom:8px;font-size:13px;font-weight:700;color:#374151}
-    input{width:100%;height:44px;border:1px solid #d8dce3;border-radius:12px;padding:0 13px;font:inherit;outline:none;background:#f9fafb}
-    input:focus{background:#fff;border-color:#007aff;box-shadow:0 0 0 4px rgba(0,122,255,.12)}
-    button{width:100%;height:44px;margin-top:14px;border:0;border-radius:12px;background:#007aff;color:#fff;font-weight:750;font:inherit;cursor:pointer}
-    button:hover{background:#0068d9}
-    .hint{margin-top:14px;text-align:center;color:#9ca3af;font-size:12px}
-  </style>
-</head>
-<body>
-  <form class="login" method="GET" action="${escapeHTML(nextPath || '/')}">
-    <h1>DDNS Pro</h1>
-    <p>该面板已开启访问保护，输入访问密钥后会保持登录状态。</p>
-    <label for="key">访问密钥</label>
-    <input id="key" name="key" type="password" autocomplete="current-password" autofocus required />
-    <button type="submit">进入面板</button>
-    <div class="hint">未配置 AUTH_KEY 时会直接进入面板</div>
-  </form>
-</body>
-</html>`;
+    const html = renderLoginHTML(url);
     return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
 }
+
+// ==================== Worker entry ====================
 
 export default {
     async fetch(request, env, ctx) {
@@ -469,6 +444,8 @@ export default {
     }
 };
 
+// ==================== API routes ====================
+
 const API_ROUTES = {
     '/api/get-pool': (url, req, env, config) => handleGetPool(url, env),
     '/api/save-pool': (url, req, env, config) => handleSavePool(req, env),
@@ -541,7 +518,7 @@ async function handleSavePool(request, env) {
     }
     const newIPs = cleanIPList(body.pool || '');
 
-    if (!newIPs && mode !== 'remove') {
+    if (!newIPs && !['remove', 'replace'].includes(mode)) {
         return badRequest({ success: false, error: '没有有效IP' });
     }
 
@@ -966,7 +943,10 @@ async function handleRestoreFromTrash(request, env) {
 
             const toPool = pickTargetPoolFromTrashEntry(trashEntry);
             const poolObj = await loadPool(toPool);
-            const restoredEntry = parseIPLine(trashEntry) || ip;
+            const poolEntry = parsePoolEntry(trashEntry);
+            const restoredEntry = poolEntry
+                ? [poolEntry.address, poolEntry.asn || 'null', poolEntry.country || 'null', formatPoolStack(poolEntry.stack)].join(',')
+                : (parseIPLine(trashEntry) || ip);
             const restoredKey = extractIPKey(restoredEntry);
 
             // 添加到目标池（如果不存在）- 保留 IP 池元数据，不携带垃圾桶注释
@@ -1237,14 +1217,15 @@ async function batchAddToTrash(env, entries, config = {}) {
     const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 
     for (const { ipAddr, reason, poolKey } of entries) {
-        if (!trashIPSet.has(ipAddr)) {
+        const ipKey = extractIPKey(ipAddr);
+        if (ipKey && !trashIPSet.has(ipKey)) {
             const poolEntry = parsePoolEntry(ipAddr);
             const cleanEntry = poolEntry
                 ? [poolEntry.address, poolEntry.asn || 'null', poolEntry.country || 'null', formatPoolStack(poolEntry.stack)].join(',')
                 : ipAddr;
             const trashEntry = `${cleanEntry} # ${reason} ${timestamp}${poolKey ? ' 来自 ' + poolKey : ''}`;
             trashList.push(trashEntry);
-            trashIPSet.add(ipAddr);
+            trashIPSet.add(ipKey);
         }
     }
 
@@ -1402,11 +1383,6 @@ async function resolveDomainRecords(domain, config) {
         seen.add(key);
         return true;
     });
-}
-
-async function resolveDomain(domain, config) {
-    const records = await resolveDomainRecords(domain, config);
-    return records.map(record => record.ip);
 }
 
 async function resolveTXTRecord(domain, config) {
@@ -1587,7 +1563,7 @@ function targetMetaMatchesResult(result, target) {
 
 function isUnknownMetaValue(value) {
     const text = String(value ?? '').trim().toLowerCase();
-    return !text || text === 'null' || text === 'unknown' || text === 'n/a' || text === '-';
+    return !text || text === 'null' || text === 'unknown' || text === 'n/a' || text === '-' || text === 'asnull' || text === 'asunknown';
 }
 
 function targetMetaMatchesStoredEntry(entry, target) {
@@ -2244,12 +2220,7 @@ async function maintainAllDomains(env, isManual = false, config) {
     }
      
     // 1. 检查是否有IP变化（删除或新增）
-    const hasIPChanges = allReports.some(r => 
-        r.added.length > 0 || 
-        r.removed.length > 0 || 
-        (r.txtAdded && r.txtAdded.length > 0) || 
-        (r.txtRemoved && r.txtRemoved.length > 0)
-    );
+    const hasIPChanges = allReports.some(r => r.added.length > 0 || r.removed.length > 0);
     
     // 2. 检查是否有配置错误
     const hasConfigError = allReports.some(r => r.configError);
@@ -2287,8 +2258,10 @@ function formatReportMeta(item = {}) {
     const parts = [];
     if (item.colo && item.colo !== 'N/A') parts.push(item.colo);
     if (item.time && item.time !== '-') parts.push(`${item.time}ms`);
-    const countries = String(item.country || '').split(/[\/,\s]+/).filter(v => v && v !== 'null');
-    const asns = String(item.asn || '').split(/[\/,\s]+/).filter(v => v && v !== 'null').map(v => v.toUpperCase().startsWith('AS') ? v.toUpperCase() : 'AS' + v);
+    const countries = String(item.country || '').split(/[\/,\s]+/).filter(v => !isUnknownMetaValue(v));
+    const asns = String(item.asn || '').split(/[\/,\s]+/)
+        .filter(v => !isUnknownMetaValue(v))
+        .map(v => v.toUpperCase().startsWith('AS') ? v.toUpperCase() : 'AS' + v);
     if (countries.length) parts.push([...new Set(countries)].join('/'));
     if (asns.length) parts.push([...new Set(asns)].join('/'));
     return parts.length ? parts.join(' · ') : '无详情';
@@ -2432,6 +2405,54 @@ async function sendTG(reports, poolStats, isManual, config) {
             detail: e.message
         };
     }
+}
+
+// ==================== UI rendering ====================
+
+function escapeHTML(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderLoginHTML(url) {
+    const cleanUrl = new URL(url.href);
+    cleanUrl.searchParams.delete('key');
+    const nextPath = `${cleanUrl.pathname || '/'}${cleanUrl.search}`;
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DDNS Pro - 登录</title>
+  <style>
+    *{box-sizing:border-box}
+    body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f}
+    .login{width:100%;max-width:380px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
+    h1{font-size:22px;line-height:1.2;margin:0 0 8px;font-weight:750}
+    p{margin:0 0 22px;color:#6b7280;font-size:13px;line-height:1.55}
+    label{display:block;margin-bottom:8px;font-size:13px;font-weight:700;color:#374151}
+    input{width:100%;height:44px;border:1px solid #d8dce3;border-radius:12px;padding:0 13px;font:inherit;outline:none;background:#f9fafb}
+    input:focus{background:#fff;border-color:#007aff;box-shadow:0 0 0 4px rgba(0,122,255,.12)}
+    button{width:100%;height:44px;margin-top:14px;border:0;border-radius:12px;background:#007aff;color:#fff;font-weight:750;font:inherit;cursor:pointer}
+    button:hover{background:#0068d9}
+    .hint{margin-top:14px;text-align:center;color:#9ca3af;font-size:12px}
+  </style>
+</head>
+<body>
+  <form class="login" method="GET" action="${escapeHTML(nextPath || '/')}">
+    <h1>DDNS Pro</h1>
+    <p>该面板已开启访问保护，输入访问密钥后会保持登录状态。</p>
+    <label for="key">访问密钥</label>
+    <input id="key" name="key" type="password" autocomplete="current-password" autofocus required />
+    <button type="submit">进入面板</button>
+    <div class="hint">未配置 AUTH_KEY 时会直接进入面板</div>
+  </form>
+</body>
+</html>`;
 }
 
 function renderHTML(C, runtimeState = {}) {
@@ -4276,6 +4297,8 @@ function renderHTML(C, runtimeState = {}) {
         if (!input) return null;
         
         input = input.trim();
+        const isValidIP = ip => ip.split('.').every(o => { const n = Number(o); return n >= 0 && n <= 255; });
+        const isValidPort = port => { const n = Number(port); return n >= 1 && n <= 65535; };
         
         // 分离注释
         let comment = '';
@@ -4283,7 +4306,7 @@ function renderHTML(C, runtimeState = {}) {
         const commentIndex = input.indexOf('#');
         if (commentIndex > 0) {
             mainPart = input.substring(0, commentIndex).trim();
-            comment = input.substring(commentIndex);
+            comment = ' ' + input.substring(commentIndex).trim();
         }
         const fields = mainPart.split(',').map(item => item.trim());
         if (fields.length > 1) {
@@ -4292,16 +4315,18 @@ function renderHTML(C, runtimeState = {}) {
             const metaFields = fields.slice(1, 4).map(item => item || 'null');
             return [normalizedAddress.split('#')[0].trim(), ...metaFields].join(',') + comment;
         }
-        if (/^\\[[0-9a-fA-F:]+\\]:\\d+$/.test(mainPart)) {
-            return mainPart + comment;
+        let match = mainPart.match(/^\\[([0-9a-fA-F:]+)\\]:(\\d+)$/);
+        if (match && isValidPort(match[2])) {
+            return \`[\${match[1]}]:\${match[2]}\${comment}\`;
         }
         if (/^[0-9a-fA-F:]+$/.test(mainPart) && mainPart.includes(':')) {
             return \`[\${mainPart.replace(/^\\[/, '').replace(/\\]$/, '')}]:443\${comment}\`;
         }
         
         // 已经是标准格式
-        if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d+$/.test(mainPart)) {
-            return mainPart + comment;
+        match = mainPart.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}):(\\d+)$/);
+        if (match && isValidIP(match[1]) && isValidPort(match[2])) {
+            return \`\${match[1]}:\${match[2]}\${comment}\`;
         }
         
         // 空格分隔
@@ -4310,20 +4335,25 @@ function renderHTML(C, runtimeState = {}) {
             const ip = parts[0].trim();
             const port = parts[1].trim();
             
-            if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(ip) && /^\\d+$/.test(port)) {
+            if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(ip) && /^\\d+$/.test(port) && isValidIP(ip) && isValidPort(port)) {
                 return \`\${ip}:\${port}\${comment}\`;
             }
         }
         
         // 纯IP（默认443端口）
-        if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(mainPart)) {
+        if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(mainPart) && isValidIP(mainPart)) {
             return \`\${mainPart}:443\${comment}\`;
         }
         
         // 中文冒号
-        const match = mainPart.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})：(\\d+)$/);
-        if (match) {
+        match = mainPart.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})：(\\d+)$/);
+        if (match && isValidIP(match[1]) && isValidPort(match[2])) {
             return \`\${match[1]}:\${match[2]}\${comment}\`;
+        }
+
+        const complexMatch = mainPart.match(/(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\D+(\\d+)/);
+        if (complexMatch && isValidIP(complexMatch[1]) && isValidPort(complexMatch[2])) {
+            return \`\${complexMatch[1]}:\${complexMatch[2]}\${comment}\`;
         }
         
         return null;
@@ -4349,9 +4379,12 @@ function renderHTML(C, runtimeState = {}) {
     }
 
     function formatAsn(asn) {
-        const text = String(asn || '').trim();
-        if (!text) return '';
-        return text.toUpperCase().startsWith('AS') ? text : 'AS' + text;
+        const values = String(asn || '')
+            .split(/[\/,\s]+/)
+            .map(item => item.trim())
+            .filter(item => item && !['null', 'unknown', 'n/a', '-', 'asnull', 'asunknown'].includes(item.toLowerCase()));
+        if (!values.length) return '';
+        return values.map(item => item.toUpperCase().startsWith('AS') ? item.toUpperCase() : 'AS' + item).join('/');
     }
 
     function formatExitInfo(exits) {
@@ -5508,8 +5541,8 @@ function renderHTML(C, runtimeState = {}) {
         }
         
         const ips = lines.map(line => {
-            const parts = line.split('#');
-            return parts[0].trim();
+            const normalized = normalizeIPFormat(line);
+            return normalized ? getPoolEntryKey(normalized) : getPoolEntryKey(line);
         }).filter(ip => ip);
         
         try {
@@ -5600,8 +5633,8 @@ function renderHTML(C, runtimeState = {}) {
         if (criteria.ports.length && !criteria.ports.some(p => typeof p === 'number' ? portNum === p : portNum >= p.start && portNum <= p.end)) return false;
         const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
         if (criteria.countries.length && !criteria.countries.some(country => countryValues.includes(country))) return false;
-        const asn = String(meta.asn || '').replace(/^AS/i, '').toUpperCase();
-        if (criteria.asns.length && !criteria.asns.includes(asn)) return false;
+        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
+        if (criteria.asns.length && !criteria.asns.some(asn => asnValues.includes(asn))) return false;
         if (criteria.text.length && !criteria.text.some(token => searchable.includes(token))) return false;
         return true;
     }
