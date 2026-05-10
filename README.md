@@ -1,10 +1,10 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-一个部署在 Cloudflare Workers 上的动态 DNS 与 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
+一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
 项目不依赖自建服务器，核心代码是单文件 Worker：[`_worker.js`](./_worker.js)。
 
-> 本项目依赖 check-proxyip-api，若要自行部署暂无具体的开源代码，其中主要的原理见下方参考代码。
+> 本项目依赖 check-proxyip-api，若要自行部署后端代码，暂无具体的开源代码，其中主要的原理见下方参考代码。
 
 ---
 
@@ -17,7 +17,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 ### ✨ 核心特性
 
-- **多域名维护**：支持多个托管域名。
+- **多域名维护**：支持添加多个cf托管域名。
 - **两种记录模式**：地址记录模式维护 `A/AAAA`，TXT 模式维护一条 TXT 记录里的 IP 列表。
 - **自动补位**：检测失效 IP，删除不合格记录，并从 IP 池补充新 IP。
 - **IP 池管理**：支持通用池、自定义池、域名绑定池和垃圾桶恢复。
@@ -41,7 +41,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 ## 💡 快速部署
 
 > [!TIP]
-> 推荐部署顺序：复制 Worker 代码 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 打开面板 -> 配置中心保存配置。
+> 推荐部署顺序：复制 Worker 代码 并部署 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 打开面板 -> 配置中心保存配置 -> 设置corn触发器
 
 ### ⚙️ Workers 部署
 
@@ -74,7 +74,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
    | --- | --- | --- |
    | `AUTH_KEY` | 可选 | 管理面板访问密钥 |
 
-   首次访问时，可以直接在页面中输入 `AUTH_KEY` 的值，也可以访问：
+   首次访问时，可以直接在页面中输入 `AUTH_KEY` 的值，也可以直接访问：
 
    ```text
    https://你的-worker-url/?key=你的AUTH_KEY
@@ -186,7 +186,7 @@ Worker -> **Triggers** -> **Cron Triggers** 添加，例如：
    ```
 
    - 也可以从 Excel 复制 `IP地址` 和 `端口` 两列后直接粘贴。
-   - 或输入一个 `http://` / `https://` 的 TXT 地址，从远程 URL 加载。
+   - 或输入一个 远程 TXT链接 ，从远程 URL 加载。
    - 点击 **检测** 验证可用性并规范格式。
    - 点击 **入库** 保存到当前 IP 池。
 
