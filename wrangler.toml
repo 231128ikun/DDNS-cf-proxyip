@@ -14,12 +14,7 @@ binding = "IP_DATA"
 # binding = "IP_DATA"
 # id = "你的_KV_Namespace_ID"
 
-<<<<<<< HEAD
 # 每 3 小时触发一次 scheduled()
 [triggers]
 crons = ["0 */3 * * *"]
-=======
-# 每 3 小时触发一次 scheduled()，是否实际维护仍受配置中心自动维护开关控制。
-[triggers]
-crons = ["0 */3 * * *"]
->>>>>>> e3fae5223cfbfd7a62aff75017c7d6f2357cbd05
+
