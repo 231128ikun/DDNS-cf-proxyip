@@ -1,0 +1,19 @@
+# Cloudflare Git/Fork 自动部署使用本文件。
+name = "ddns-cf-proxyip"
+main = "_worker.js"
+compatibility_date = "2026-05-11"
+
+# 自动创建/绑定 KV，Worker 代码中变量名必须为 IP_DATA。
+[[kv_namespaces]]
+binding = "IP_DATA"
+
+# 如需绑定已有 KV，可改用下面写法，并替换为真实 Namespace ID。
+# 注意：启用已有 KV 写法时，请注释掉上面的自动绑定块，避免重复声明 IP_DATA。
+#
+# [[kv_namespaces]]
+# binding = "IP_DATA"
+# id = "你的_KV_Namespace_ID"
+
+# 每 3 小时触发一次 scheduled()
+[triggers]
+crons = ["0 */3 * * *"]

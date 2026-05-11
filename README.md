@@ -43,10 +43,10 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 > [!TIP]
 > 推荐部署顺序：复制 Worker 代码并部署 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 打开面板 -> 配置中心保存配置 -> 设置 cron 触发器
 
-### ⚙️ Workers 部署
+### ⚙️ Worker 手动部署
 
 <details>
-<summary><code><strong>「 Workers 部署文字教程 」</strong></code></summary>
+<summary><code><strong>「 Worker 手动部署文字教程 」</strong></code></summary>
 
 1. 部署 CF Worker：
    - 进入 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)。
@@ -88,22 +88,33 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
    - 填写维护域名、Zone ID、CF Key、管理域名、检测 API、Telegram 等配置。
    - 保存后配置会写入 KV 的 `app_config`，优先级高于环境变量。
 
+5. 配置定时任务：
+   - 如需自动维护，需要同时开启配置中心里的自动维护开关，并在 Worker 中配置 Cron Triggers。
+   - Worker -> **Triggers** -> **Cron Triggers** 添加，例如：
+
+   ```text
+   0 */3 * * *
+   ```
+
+   表示每 3 小时执行一次自动维护。
+
 </details>
 
-### ⏱️ 定时任务配置
+### 🚀 Worker 自动部署
 
 <details>
-<summary><code><strong>「 Cron Triggers 配置 」</strong></code></summary>
+<summary><code><strong>「 Worker 自动部署文字教程 」</strong></code></summary>
 
-如需自动维护，需要同时开启配置中心里的自动维护开关，并在 Worker 中配置 Cron Triggers。只开启自动维护开关但没有配置定时任务时，自动维护不会触发。
+1. Fork 本仓库并在 Cloudflare 中连接该仓库。
 
-Worker -> **Triggers** -> **Cron Triggers** 添加，例如：
+2. Cloudflare 中创建/连接的 Worker 项目名称需与 [`wrangler.toml`](./wrangler.toml) 里的 `name` 保持一致，例如 `ddns-cf-proxyip`。
 
-```text
-0 */3 * * *
-```
+3. 然后环境变量可选设置面板密码，进入面板配置即可使用。
 
-表示每 3 小时执行一次自动维护。
+4. 可打开 **action** 自动同步工作流，这样就可以自动同步上游并更新项目了。
+
+> 本仓库的 [`wrangler.toml`](./wrangler.toml) 会指定 Worker 入口为 `_worker.js`，并声明 `IP_DATA` KV 绑定和每 3 小时一次的 cron 触发器。
+
 
 </details>
 
