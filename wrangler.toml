@@ -8,4 +8,4 @@ preview_urls = true
 binding = "IP_DATA"
 
 [triggers]
-crons = ["0 */3 * * *"]
+crons = ["0 */1 * * *"]
