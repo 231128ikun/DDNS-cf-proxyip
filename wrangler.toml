@@ -1,0 +1,10 @@
+name = "ddns-cf-proxyip"
+main = "_worker.js"
+compatibility_date = "2026-05-11"
+
+# For Git/Wrangler deployments, uncomment this block after creating a KV
+# namespace and replacing the id with your own namespace id.
+#
+# [[kv_namespaces]]
+# binding = "IP_DATA"
+# id = "your_kv_namespace_id"
