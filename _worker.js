@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.05.11-09.08';
+const APP_VERSION = '2026.05.11-15.15';
 const APP_CONFIG_KEY = 'app_config';
 
 const GLOBAL_SETTINGS = {
@@ -2906,6 +2906,77 @@ function renderHTML(C, runtimeState = {}) {
             width: 160px;
             border-radius: 8px;
         }
+        .domain-binding-card {
+            overflow: hidden;
+        }
+        .domain-binding-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            margin-bottom: 0;
+        }
+        .domain-binding-card.is-expanded .domain-binding-header {
+            margin-bottom: 1rem;
+        }
+        .domain-binding-header h6 {
+            min-width: 0;
+        }
+        .domain-binding-table-wrap {
+            display: none;
+            max-height: 280px;
+            overflow: auto;
+            border: 1px solid #e8edf5;
+            border-radius: 12px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .domain-binding-card.is-expanded .domain-binding-table-wrap {
+            display: block;
+        }
+        .domain-binding-table-wrap::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .domain-binding-table-wrap::-webkit-scrollbar-thumb {
+            background: #d1d1d6;
+            border-radius: 3px;
+        }
+        .domain-binding-table-wrap .table {
+            table-layout: fixed;
+            width: 100%;
+            min-width: 0;
+            margin-bottom: 0;
+        }
+        .domain-binding-table-wrap th:first-child,
+        .domain-binding-table-wrap td:first-child {
+            width: 58%;
+        }
+        .domain-binding-table-wrap th:last-child,
+        .domain-binding-table-wrap td:last-child {
+            width: 42%;
+        }
+        .domain-binding-table-wrap thead {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #fff;
+        }
+        .domain-binding-table-wrap th,
+        .domain-binding-table-wrap td {
+            padding: 10px 12px;
+        }
+        .domain-binding-domain {
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .domain-binding-select {
+            width: 100%;
+            min-width: 0;
+        }
         .filter-line {
             display: grid;
             grid-template-columns: minmax(0, 1fr) 34px repeat(3, minmax(58px, 76px));
@@ -3314,6 +3385,17 @@ function renderHTML(C, runtimeState = {}) {
             .pool-tools .form-select {
                 width: 100%;
             }
+            .domain-binding-table-wrap {
+                max-height: 240px;
+            }
+            .domain-binding-table-wrap th,
+            .domain-binding-table-wrap td {
+                padding: 8px;
+            }
+            .domain-binding-select {
+                font-size: 11px;
+                padding: 6px 28px 6px 8px;
+            }
             .exit-list-cell {
                 min-width: 480px;
             }
@@ -3421,14 +3503,14 @@ function renderHTML(C, runtimeState = {}) {
     <div class="hero-actions">
         <div class="guide-toggle" onclick="toggleGuide()" title="使用步骤提示">?</div>
         <div class="config-info">
-            🧭 建议流程：导入IP → 检测清洗 → 保存到池 → 执行维护
+            🧭 建议流程：导入IP → 检测 → 入库 → 执行维护
         </div>
     </div>
     ${kvReady ? '' : `<div class="kv-alert"><strong>KV 未绑定。</strong>请在 Worker Settings &gt; Bindings 中绑定 KV Namespace，变量名必须为 <code>IP_DATA</code>。未绑定前配置保存、IP 池、维护任务都不可用。</div>`}
     <div id="usage-guide" class="usage-guide" style="display:none">
         <ol>
-            <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【⚡ 检测清洗】筛出可用 IP。</li>
-            <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【💾 保存到当前池】将可用 IP 入库。</li>
+            <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【⚡ 检测】筛出可用 IP。</li>
+            <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【💾 入库】将可用 IP 入库。</li>
             <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【🔧 执行全部维护】或依靠定时任务自动维护。</li>
         </ol>
     </div>
@@ -3561,12 +3643,12 @@ function renderHTML(C, runtimeState = {}) {
             </div>
             
             <!-- 域名池绑定 -->
-            <div class="card p-4 mb-3">
-                <div class="d-flex justify-content-between align-items-center mb-3">
+            <div id="domain-binding-card" class="card p-4 mb-3 domain-binding-card">
+                <div class="domain-binding-header" onclick="toggleDomainBindingPanel()" title="点击展开/折叠域名池绑定">
                     <h6 class="m-0 fw-bold">🔗 域名池绑定</h6>
-                    <button class="btn btn-sm btn-outline-primary" onclick="loadDomainPoolMapping()">🔄 刷新</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation(); loadDomainPoolMapping()" title="刷新">🔄</button>
                 </div>
-                <div class="table-responsive">
+                <div class="domain-binding-table-wrap">
                     <table class="table table-sm">
                         <thead>
                             <tr>
@@ -3676,6 +3758,7 @@ function renderHTML(C, runtimeState = {}) {
     let configDraft = null;
     let configDirty = false;
     let configEditMode = false;
+    let domainBindingExpanded = false;
     
     // 检测中断状态
     let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
@@ -5177,6 +5260,16 @@ function renderHTML(C, runtimeState = {}) {
         selector.innerHTML = pools.map(pool => \`<option value="\${escapeHTML(pool)}">\${escapeHTML(getPoolName(pool))}</option>\`).join('');
         selector.value = currentPool;
     }
+
+    function setDomainBindingExpanded(expanded) {
+        domainBindingExpanded = Boolean(expanded);
+        const card = document.getElementById('domain-binding-card');
+        if (card) card.classList.toggle('is-expanded', domainBindingExpanded);
+    }
+
+    function toggleDomainBindingPanel() {
+        setDomainBindingExpanded(!domainBindingExpanded);
+    }
     
     function updateDomainBindingTable() {
         const tbody = document.getElementById('domain-binding-list');
@@ -5200,10 +5293,10 @@ function renderHTML(C, runtimeState = {}) {
 
             return \`
                 <tr>
-                    <td><code>\${escapeHTML(domain)}</code></td>
+                    <td><code class="domain-binding-domain" title="\${escapeHTML(domain)}">\${escapeHTML(domain)}</code></td>
                     <td>
-                        <select class="form-select form-select-sm"
-                                onchange="bindDomainToPool('\${escapeHTML(domain)}', this.value)">
+                        <select class="form-select form-select-sm domain-binding-select"
+                                onchange="bindDomainToPool('\${escapeJSString(domain)}', this.value)">
                             \${options}
                         </select>
                     </td>
