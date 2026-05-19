@@ -2570,14 +2570,14 @@ function renderHTML(C, runtimeState = {}) {
         .w-100 { width: 100% !important; }
         h6 { margin-top: 0; margin-bottom: .5rem; font-size: 1rem; font-weight: 500; }
         .hero {
-            padding: 40px 0 20px;
+            padding: 28px 0 16px;
             position: relative;
         }
         .hero h1 {
             font-size: 1.5rem;
             font-weight: 600;
             color: var(--secondary);
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         .hero-actions {
             display: flex;
@@ -2659,6 +2659,7 @@ function renderHTML(C, runtimeState = {}) {
         }
         .domain-selector {
             max-width: 600px;
+            margin-top: 12px;
         }
         .domain-selector select {
             border-radius: 12px;
@@ -2781,6 +2782,24 @@ function renderHTML(C, runtimeState = {}) {
             background: #f5f5f7;
             padding: 4px 10px;
             border-radius: 8px;
+        }
+        .toolbar-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+            gap: 8px;
+            align-items: center;
+        }
+        .toolbar-row .btn {
+            white-space: nowrap;
+        }
+        .primary-actions {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: stretch;
+        }
+        .primary-actions .btn {
+            border-radius: 10px;
         }
         .kv-alert {
             margin-top: 12px;
@@ -3449,6 +3468,20 @@ function renderHTML(C, runtimeState = {}) {
             .input-group .btn {
                 white-space: nowrap;
             }
+            .toolbar-row {
+                grid-template-columns: minmax(0, 1fr) repeat(3, 38px);
+                gap: 6px;
+            }
+            .toolbar-row .btn {
+                padding-left: 8px !important;
+                padding-right: 8px !important;
+            }
+            .primary-actions {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            }
+            .primary-actions .btn-outline-secondary {
+                grid-column: 1 / -1;
+            }
             /* 筛选工具栏移动端适配 */
             .filter-toolbar {
                 display: block !important;
@@ -3583,7 +3616,7 @@ function renderHTML(C, runtimeState = {}) {
                 <!-- 内容区域 - 自动扩展 -->
                 <div class="ip-content-area">
                     <!-- 加载区 -->
-                    <div class="d-flex gap-2 mb-2 align-items-center">
+                    <div class="toolbar-row mb-2">
                         <input type="text" id="remote-url" class="form-control form-control-sm flex-grow-1" placeholder="远程TXT URL" style="border-radius:8px">
                         <button class="btn btn-sm btn-outline-primary" onclick="loadRemoteUrl()" style="white-space:nowrap" title="从远程URL加载">🌐 加载</button>
                         <button class="btn btn-sm btn-outline-secondary" onclick="loadCurrentPool()" title="加载当前池到输入框" style="white-space:nowrap">📂 从库</button>
@@ -3613,10 +3646,10 @@ function renderHTML(C, runtimeState = {}) {
                 <!-- 底部按钮区域 - 固定在底部 -->
                 <div class="ip-actions-area mt-auto">
                     <!-- 主操作按钮 -->
-                    <div class="d-flex gap-2" id="main-actions">
-                        <button id="btn-check" class="btn btn-primary flex-grow-1" onclick="batchCheck()" style="border-radius:10px">⚡ 检测</button>
-                        <button class="btn btn-success flex-grow-1" onclick="saveToCurrentPool('append')" style="border-radius:10px">💾 入库</button>
-                        <button class="btn btn-outline-secondary btn-sm" onclick="removeFromPool()" title="从库中移除输入框中的IP" style="border-radius:8px">从库中移除</button>
+                    <div class="primary-actions" id="main-actions">
+                        <button id="btn-check" class="btn btn-primary" onclick="batchCheck()">⚡ 检测</button>
+                        <button class="btn btn-success" onclick="saveToCurrentPool('append')">💾 入库</button>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="removeFromPool()" title="从库中移除输入框中的IP">从库中移除</button>
                     </div>
                     
                     <!-- 垃圾桶专用操作 -->
