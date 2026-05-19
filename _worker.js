@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.05.11-15.15';
+const APP_VERSION = '2026.05.19-22.59';
 const APP_CONFIG_KEY = 'app_config';
 
 const GLOBAL_SETTINGS = {
@@ -693,11 +693,6 @@ async function handleAddARecord(request, config) {
 
     const addr = target.mode === 'TXT' ? normalizeCheckAddr(ip) : parseAddr(ip, target.port).address;
 
-    const check = await checkProxyIP(addr, config);
-    if (!check.success) {
-        return jsonResponse({ success: false, error: 'IP检测失败' });
-    }
-
     // TXT模式：追加到TXT记录
     if (target.mode === 'TXT') {
         const records = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=TXT`);
@@ -718,8 +713,6 @@ async function handleAddARecord(request, config) {
 
         return jsonResponse({
             success: true,
-            colo: check.colo,
-            time: check.responseTime,
             mode: 'TXT'
         });
     }
@@ -729,8 +722,6 @@ async function handleAddARecord(request, config) {
 
     return jsonResponse({
         success: added.ok,
-        colo: check.colo,
-        time: check.responseTime,
         mode: added.type
     });
 }
@@ -5057,7 +5048,7 @@ function renderHTML(C, runtimeState = {}) {
             
             if (r.success) {
                 const mode = r.mode || 'A';
-                log(\`✅ 成功添加到\${mode}记录 - \${r.colo} (\${r.time}ms)\`, 'success');
+                log(\`✅ 成功添加到\${mode}记录\`, 'success');
                 input.value = '';
                 updateFilterPreview();
                 refreshStatus();
