@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.05.22-16.36';
+const APP_VERSION = '2026.05.23-00.50';
 const APP_CONFIG_KEY = 'app_config';
 
 const GLOBAL_SETTINGS = {
@@ -2567,13 +2567,11 @@ function renderAppStyles() {
         .table-sm > :not(caption) > * > * { padding: .25rem; }
         .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         /* ── Bootstrap replacement: Badge / Progress ── */
-        .badge { display: inline-block; padding: .35em .65em; font-size: .75em; font-weight: 700; line-height: 1; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: .375rem; }
         .progress { display: flex; height: 1rem; overflow: hidden; font-size: .75rem; background-color: #e9ecef; border-radius: .375rem; }
         .progress-bar { display: flex; flex-direction: column; justify-content: center; overflow: hidden; color: #fff; text-align: center; white-space: nowrap; transition: width .6s ease; }
         /* ── Bootstrap replacement: Utilities - Spacing ── */
         .m-0 { margin: 0 !important; }
         .mb-0 { margin-bottom: 0 !important; }
-        .mb-1 { margin-bottom: .25rem !important; }
         .mb-2 { margin-bottom: .5rem !important; }
         .mb-3 { margin-bottom: 1rem !important; }
         .mt-2 { margin-top: .5rem !important; }
@@ -2585,7 +2583,6 @@ function renderAppStyles() {
         .d-flex { display: flex !important; }
         .flex-wrap { flex-wrap: wrap !important; }
         .flex-grow-1 { flex-grow: 1 !important; }
-        .flex-shrink-0 { flex-shrink: 0 !important; }
         .gap-1 { gap: .25rem !important; }
         .gap-2 { gap: .5rem !important; }
         .align-items-center { align-items: center !important; }
@@ -2595,14 +2592,9 @@ function renderAppStyles() {
         .text-center { text-align: center !important; }
         .text-secondary { color: var(--secondary) !important; }
         .text-danger { color: var(--danger) !important; }
-        .text-dark { color: #212529 !important; }
         .text-decoration-none { text-decoration: none !important; }
         .fw-bold { font-weight: 700 !important; }
         .small, small { font-size: .875em; }
-        /* ── Bootstrap replacement: Utilities - Background ── */
-        .bg-light { background-color: #f8f9fa !important; }
-        .bg-success { background-color: var(--success) !important; }
-        .bg-danger { background-color: var(--danger) !important; }
         /* ── Bootstrap replacement: Utilities - Size ── */
         .w-100 { width: 100% !important; }
         h6 { margin-top: 0; margin-bottom: .5rem; font-size: 1rem; font-weight: 500; }
@@ -2695,14 +2687,17 @@ function renderAppStyles() {
             }
         }
         .domain-selector {
-            max-width: 600px;
+            max-width: 560px;
             margin-top: 12px;
         }
         .target-summary {
-            display: block;
+            display: inline-flex;
+            width: fit-content;
+            max-width: 100%;
             position: relative;
             min-height: 76px;
-            padding: 14px 96px 14px 16px;
+            padding: 16px 18px;
+            align-items: center;
             border: 1px solid #e5e5e7;
             border-radius: 16px;
             background: rgba(255,255,255,0.9);
@@ -2711,25 +2706,40 @@ function renderAppStyles() {
             cursor: pointer;
             overflow: hidden;
         }
+        #current-target-summary-content {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px 10px;
+            min-width: 0;
+        }
         .target-summary-domain {
             display: block;
+            flex: 1 1 auto;
+            order: 1;
+            min-width: 0;
+            max-width: min(58vw, 390px);
             color: #1d1d1f;
             font-size: 1.08rem;
             font-weight: 800;
             line-height: 1.3;
-            overflow-wrap: anywhere;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .target-summary-meta {
             display: block;
-            margin-top: 6px;
+            flex-basis: 100%;
+            order: 3;
+            margin-top: 0;
             color: #6b7280;
             font-size: .82rem;
             font-weight: 600;
         }
         .target-summary .record-badge {
-            position: absolute;
-            top: 12px;
-            right: 14px;
+            position: static;
+            order: 2;
+            flex: 0 0 auto;
             margin-left: 0;
         }
         .target-select-overlay {
@@ -2743,9 +2753,11 @@ function renderAppStyles() {
         @media (max-width: 768px) {
             .target-summary {
                 min-height: 68px;
-                padding: 12px 86px 12px 12px;
+                width: 100%;
+                padding: 12px;
             }
             .target-summary-domain {
+                max-width: calc(100vw - 156px);
                 font-size: 1rem;
             }
             .target-summary-meta {
@@ -3344,22 +3356,21 @@ function renderAppStyles() {
             white-space: nowrap;
         }
         .exit-list-cell {
-            min-width: 520px;
+            min-width: 500px;
             text-align: left;
-            max-width: 760px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
+            max-width: 560px;
+            overflow: hidden;
         }
         .exit-detail {
             display: grid;
-            grid-template-columns: 54px minmax(180px, 240px) minmax(86px, max-content) minmax(160px, max-content);
-            gap: 6px;
+            grid-template-columns: 54px minmax(140px, 1fr) minmax(86px, 128px) minmax(110px, 180px);
+            gap: 8px;
             align-items: center;
             margin: 2px 0;
             padding: 4px 0;
             border-bottom: 1px solid rgba(0,0,0,.05);
             min-height: 30px;
-            width: max-content;
+            width: 100%;
             min-width: 100%;
         }
         .exit-detail.is-dual {
@@ -3401,8 +3412,10 @@ function renderAppStyles() {
         .exit-field {
             max-width: 260px;
             white-space: nowrap;
-            overflow: visible;
-            text-overflow: clip;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            background: #eef6ff;
+            color: #0b65d8;
         }
         @media (max-width: 768px) {
             .ip-info-tag {
@@ -3521,11 +3534,7 @@ function renderAppStyles() {
                 min-width: 480px;
             }
             .exit-detail {
-                grid-template-columns: 48px minmax(160px, 220px) minmax(72px, max-content) minmax(130px, max-content);
-            }
-            .badge {
-                font-size: 10px;
-                padding: 3px 6px;
+                grid-template-columns: 48px minmax(120px, 1fr) minmax(72px, 108px) minmax(110px, 150px);
             }
         }
 
@@ -4174,14 +4183,26 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         renderTargetConfigRows(getDraftTargets());
     }
 
-    function renderZoneConfigRows(zones) {
-        const list = document.getElementById('zone-config-list');
+    const ZONE_SAVED_MSG = '权限配置已保存到页面，点击“保存到 KV”后生效';
+    const TARGET_SAVED_MSG = '管理域名已保存到页面，点击“保存到 KV”后生效';
+
+    function applyConfigDraftChange(key, value, editorType, message) {
+        configDraft[key] = value;
+        renderConfigCards();
+        closeConfigEditor(editorType);
+        setConfigDirty(true, message);
+    }
+
+    function renderConfigRows(listId, rows, draftKey, renderCard, emptyHtml) {
+        const list = document.getElementById(listId);
         if (!list) return;
+        if (configDraft) configDraft[draftKey] = rows;
+        list.innerHTML = rows.length ? rows.map((item, index) => renderCard(item, index)).join('') : emptyHtml;
+    }
+
+    function renderZoneConfigRows(zones) {
         const rows = (Array.isArray(zones) ? zones : []).map(normalizeDraftZone).filter(hasZoneConfigValue);
-        if (configDraft) configDraft.zones = rows;
-        list.innerHTML = rows.length
-            ? rows.map((zone, index) => buildZoneCard(zone, index)).join('')
-            : '<div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>';
+        renderConfigRows('zone-config-list', rows, 'zones', buildZoneCard, '<div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>');
     }
 
     function buildZoneCard(zone = {}, index = 0) {
@@ -4223,27 +4244,39 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         showZoneEditor(index, getDraftZones()[index] || {});
     }
 
+    function openConfigEditor(type, title, content) {
+        const panel = document.getElementById(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
+        if (!panel) return null;
+        panel.classList.add('active');
+        panel.innerHTML = '<h6 class="mb-3 fw-bold">' + title + '</h6>' + content;
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return panel;
+    }
+
+    function renderField(tag, { id, label, hint = '', value = '', placeholder = '', className = 'form-control form-control-sm', attrs = '' }, content = '') {
+        const body = tag === 'select'
+            ? '<select id="' + id + '" class="' + className + '" ' + attrs + '>' + content + '</select>'
+            : '<input id="' + id + '" class="' + className + '" value="' + escapeHTML(value) + '" placeholder="' + placeholder + '" ' + attrs + '>';
+        return '<label class="field"><span>' + label + '</span><small>' + hint + '</small>' + body + '</label>';
+    }
+
+    function renderEditorActions(type, submitAction) {
+        return '<div class="config-edit-actions"><button class="btn btn-outline-secondary btn-sm" onclick="closeConfigEditor(&quot;' + escapeHTML(type) + '&quot;)">取消</button><button class="btn btn-primary btn-sm" onclick="' + submitAction + '">保存到页面</button></div>';
+    }
+
     function showZoneEditor(index, zone = {}) {
         const panel = document.getElementById('zone-edit-panel');
         if (!panel) return;
         const noteValue = zone.label && zone.label !== zone.baseDomain
             ? zone.label
             : (zone.name && zone.name !== zone.baseDomain ? zone.name : '');
-        panel.classList.add('active');
-        panel.innerHTML = \`
-            <h6 class="mb-3 fw-bold">\${index >= getDraftZones().length ? '添加' : '编辑'}权限配置</h6>
-            <div class="config-edit-grid">
-                <label class="field"><span>备注</span><small>可选；不填时使用维护域名。</small><input id="edit-zone-label" class="form-control form-control-sm" value="\${escapeHTML(noteValue)}" placeholder="可选"></label>
-                <label class="field"><span>目标维护域名</span><small>目前只支持托管在cf的域名</small><input id="edit-zone-base" class="form-control form-control-sm" value="\${escapeHTML(zone.baseDomain || '')}" placeholder="example.com"></label>
-                <label class="field"><span>Zone ID</span><small>Cloudflare 区域 ID。</small><input id="edit-zone-id" class="form-control form-control-sm" value="\${escapeHTML(zone.zoneId || '')}" placeholder="Zone ID"></label>
-                <label class="field span-2"><span>CF Key</span><small>需要 DNS 编辑权限。</small><input id="edit-zone-key" class="form-control form-control-sm" value="\${escapeHTML(zone.apiKey || '')}" placeholder="CF API Token"></label>
-            </div>
-            <div class="config-edit-actions">
-                <button class="btn btn-outline-secondary btn-sm" onclick="closeConfigEditor('zone')">取消</button>
-                <button class="btn btn-primary btn-sm" onclick="commitZoneEditor(\${index})">保存到页面</button>
-            </div>
-        \`;
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        const zoneFields = [
+            renderField('input', { id: 'edit-zone-label', label: '备注', hint: '可选；不填时使用维护域名。', value: noteValue, placeholder: '可选' }),
+            renderField('input', { id: 'edit-zone-base', label: '目标维护域名', hint: '目前只支持托管在cf的域名', value: zone.baseDomain || '', placeholder: 'example.com' }),
+            renderField('input', { id: 'edit-zone-id', label: 'Zone ID', hint: 'Cloudflare 区域 ID。', value: zone.zoneId || '', placeholder: 'Zone ID' }),
+            '<label class="field span-2"><span>CF Key</span><small>需要 DNS 编辑权限。</small><input id="edit-zone-key" class="form-control form-control-sm" value="' + escapeHTML(zone.apiKey || '') + '" placeholder="CF API Token"></label>'
+        ].join('');
+        openConfigEditor('zone', (index >= getDraftZones().length ? '添加' : '编辑') + '权限配置', '<div class="config-edit-grid">' + zoneFields + '</div>' + renderEditorActions('zone', 'commitZoneEditor(' + index + ')'));
     }
 
     function commitZoneEditor(index) {
@@ -4265,24 +4298,18 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             showToast(duplicateMessage, 'error');
             return;
         }
-        configDraft.zones = nextZones;
-        renderConfigCards();
-        closeConfigEditor('zone');
-        setConfigDirty(true, '权限配置已保存到页面，点击“保存到 KV”后生效');
+        applyConfigDraftChange('zones', nextZones, 'zone', ZONE_SAVED_MSG);
     }
 
     function deleteZoneConfig(index) {
         const zones = getDraftZones();
         if (!confirm('确认删除这个权限配置？相关管理域名会改到第一组权限配置。')) return;
         zones.splice(index, 1);
-        configDraft.zones = zones.map(normalizeDraftZone).filter(hasZoneConfigValue);
         configDraft.targets = getDraftTargets().map(target => ({
             ...target,
             zoneIndex: target.zoneIndex === index ? 0 : (target.zoneIndex > index ? target.zoneIndex - 1 : target.zoneIndex)
         }));
-        renderConfigCards();
-        closeConfigEditor('zone');
-        setConfigDirty(true, '权限配置已保存到页面，点击“保存到 KV”后生效');
+        applyConfigDraftChange('zones', zones.map(normalizeDraftZone).filter(hasZoneConfigValue), 'zone', ZONE_SAVED_MSG);
     }
 
     function closeConfigEditor(type) {
@@ -4294,13 +4321,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function renderTargetConfigRows(targets) {
-        const list = document.getElementById('target-config-list');
-        if (!list) return;
         const rows = (Array.isArray(targets) ? targets : []).filter(target => target && typeof target === 'object');
-        if (configDraft) configDraft.targets = rows;
-        list.innerHTML = rows.length
-            ? rows.map((target, index) => buildTargetCard(target, index)).join('')
-            : '<div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>';
+        renderConfigRows('target-config-list', rows, 'targets', buildTargetCard, '<div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>');
     }
 
     function buildTargetCard(target = {}, index = 0) {
@@ -4368,27 +4390,23 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const exit = target.exitFilter || 'any';
         const portValue = mode === 'TXT' ? '任意' : (target.port || '443');
         const previousAPort = mode === 'TXT' && target.port && target.port !== 'any' ? target.port : '443';
-        panel.classList.add('active');
-        panel.innerHTML = \`
-            <h6 class="mb-3 fw-bold">\${index >= (configDraft?.targets || []).length ? '添加' : '编辑'}管理域名</h6>
-            <div class="config-edit-grid">
-                <label class="field"><span>权限配置</span><small>选择配置1/2/3。</small><select id="edit-target-zone" class="form-select form-select-sm">\${getZoneOptionsHtml(target.zoneIndex ?? 0)}</select></label>
-                <label class="field"><span>维护类型</span><small>A/AAAA 或 TXT。</small><select id="edit-target-mode" class="form-select form-select-sm" onchange="handleTargetModeChange()">\${modeOptions}</select></label>
-                <label class="field"><span>出口类型</span><small>由检测 API 实时判断。</small><select id="edit-target-exit" class="form-select form-select-sm"><option value="any" \${exit === 'any' ? 'selected' : ''}>任意</option><option value="v4" \${exit === 'v4' ? 'selected' : ''}>IPv4</option><option value="v6" \${exit === 'v6' ? 'selected' : ''}>IPv6</option><option value="dual" \${exit === 'dual' ? 'selected' : ''}>IPv4 & IPv6</option></select></label>
-                <label class="field"><span>域名前缀</span><small>留空表示根域。</small><input id="edit-target-prefix" class="form-control form-control-sm" value="\${escapeHTML(target.prefix || '')}" placeholder="kr"></label>
-                <label class="field"><span>端口</span><small id="edit-target-port-hint">A/AAAA 模式使用，TXT 为任意。</small><input id="edit-target-port" class="form-control form-control-sm" value="\${escapeHTML(portValue)}" data-a-port="\${escapeHTML(previousAPort)}" placeholder="443"></label>
-                <label class="field"><span>活跃数</span><small>最小可用数量。</small><input id="edit-target-min" type="number" min="0" class="form-control form-control-sm" value="\${escapeHTML(String(target.minActive ?? 3))}" placeholder="3"></label>
-                <label class="field"><span>国家</span><small>可选，填写国家代码。</small><input id="edit-target-country" class="form-control form-control-sm" value="\${escapeHTML(target.country || '')}" placeholder="国家代码"></label>
-                <label class="field"><span>ASN</span><small>可选，填写 ASN 编号。</small><input id="edit-target-asn" class="form-control form-control-sm" value="\${escapeHTML(target.asn || '')}" placeholder="ASN编号"></label>
-            </div>
-            <input type="hidden" id="edit-target-enabled" value="\${target.enabled !== false ? 'true' : 'false'}">
-            <div class="config-edit-actions">
-                <button class="btn btn-outline-secondary btn-sm" onclick="closeConfigEditor('target')">取消</button>
-                <button class="btn btn-primary btn-sm" onclick="commitTargetEditor(\${index})">保存到页面</button>
-            </div>
-        \`;
+        const exitOptions = '<option value="any" ' + (exit === 'any' ? 'selected' : '') + '>任意</option><option value="v4" ' + (exit === 'v4' ? 'selected' : '') + '>IPv4</option><option value="v6" ' + (exit === 'v6' ? 'selected' : '') + '>IPv6</option><option value="dual" ' + (exit === 'dual' ? 'selected' : '') + '>IPv4 & IPv6</option>';
+        const targetFields = [
+            renderField('input', { id: 'edit-target-prefix', label: '域名前缀', hint: '留空表示根域。', value: target.prefix || '', placeholder: 'kr' }),
+            renderField('input', { id: 'edit-target-min', label: '活跃数', hint: '最小可用数量。', value: String(target.minActive ?? 3), placeholder: '3', attrs: 'type="number" min="0"' }),
+            renderField('input', { id: 'edit-target-country', label: '国家', hint: '可选，填写国家代码。', value: target.country || '', placeholder: '国家代码' }),
+            renderField('input', { id: 'edit-target-asn', label: 'ASN', hint: '可选，填写 ASN 编号。', value: target.asn || '', placeholder: 'ASN编号' })
+        ].join('');
+        const targetContent = '<div class="config-edit-grid">'
+            + renderField('select', { id: 'edit-target-zone', label: '权限配置', hint: '选择配置1/2/3。', className: 'form-select form-select-sm' }, getZoneOptionsHtml(target.zoneIndex ?? 0))
+            + renderField('select', { id: 'edit-target-mode', label: '维护类型', hint: 'A/AAAA 或 TXT。', className: 'form-select form-select-sm', attrs: 'onchange="handleTargetModeChange()"' }, modeOptions)
+            + renderField('select', { id: 'edit-target-exit', label: '出口类型', hint: '由检测 API 实时判断。', className: 'form-select form-select-sm' }, exitOptions)
+            + targetFields
+            + '<label class="field"><span>端口</span><small id="edit-target-port-hint">A/AAAA 模式使用，TXT 为任意。</small><input id="edit-target-port" class="form-control form-control-sm" value="' + escapeHTML(portValue) + '" data-a-port="' + escapeHTML(previousAPort) + '" placeholder="443"></label>'
+            + '</div><input type="hidden" id="edit-target-enabled" value="' + (target.enabled !== false ? 'true' : 'false') + '">'
+            + renderEditorActions('target', 'commitTargetEditor(' + index + ')');
+        openConfigEditor('target', (index >= (configDraft?.targets || []).length ? '添加' : '编辑') + '管理域名', targetContent);
         syncTargetPortMode();
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function syncTargetPortMode() {
@@ -4455,20 +4473,14 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             showToast(duplicateMessage, 'error');
             return;
         }
-        configDraft.targets = nextTargets;
-        renderConfigCards();
-        closeConfigEditor('target');
-        setConfigDirty(true, '管理域名已保存到页面，点击“保存到 KV”后生效');
+        applyConfigDraftChange('targets', nextTargets, 'target', TARGET_SAVED_MSG);
     }
 
     function deleteTargetConfig(index) {
         if (!confirm('确认删除这个管理域名？')) return;
         const targets = getDraftTargets();
         targets.splice(index, 1);
-        configDraft.targets = targets;
-        renderConfigCards();
-        closeConfigEditor('target');
-        setConfigDirty(true, '管理域名已保存到页面，点击“保存到 KV”后生效');
+        applyConfigDraftChange('targets', targets, 'target', TARGET_SAVED_MSG);
     }
 
     function toggleTargetEnabled(index, enabled) {
@@ -4545,7 +4557,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
     }
 
-    async function apiFetch(path, options = {}) {
+    async function apiRequest(path, options = {}) {
         const opts = { ...options };
         const headers = new Headers(opts.headers || {});
         headers.set('Accept', 'application/json');
@@ -4561,33 +4573,14 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         return resp;
     }
 
-    async function apiJson(path, options = {}) {
-        return apiFetch(path, options).then(r => r.json());
-    }
-
-    async function apiPostJson(path, body = {}, options = {}) {
-        return apiJson(path, {
-            ...options,
-            method: 'POST',
-            body: JSON.stringify(body)
-        });
-    }
-
-    async function apiPost(path, options = {}) {
-        return apiFetch(path, { ...options, method: 'POST' });
-    }
-
-    async function apiPostResult(path, options = {}) {
-        return apiPost(path, options).then(r => r.json());
-    }
-
-    async function savePoolContent(poolKey, pool, mode = 'append') {
-        return apiPostJson('/api/save-pool', { pool, poolKey, mode });
-    }
-
-    async function restoreTrashIPs(ips) {
-        return apiPostJson('/api/restore-from-trash', { ips, restoreToSource: true });
-    }
+    const apiJson = (path, options = {}) => apiRequest(path, options).then(r => r.json());
+    const apiPostJson = (path, body = {}, options = {}) => apiJson(path, {
+        ...options,
+        method: 'POST',
+        body: JSON.stringify(body)
+    });
+    const savePool = (poolKey, pool, mode = 'append') => apiPostJson('/api/save-pool', { pool, poolKey, mode });
+    const restoreTrashIPs = ips => apiPostJson('/api/restore-from-trash', { ips, restoreToSource: true });
 
     function escapeHTML(str) {
         if (!str) return '';
@@ -4750,22 +4743,18 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         };
     }
 
-    function getPoolEntryKey(line) {
-        return parsePoolLine(line).address;
-    }
-
-    function getNormalizedPoolKey(line) {
-        const normalized = normalizeIPFormat(line);
-        return normalized ? getPoolEntryKey(normalized) : getPoolEntryKey(line);
+    function getPoolLineKey(line) {
+        const source = normalizeIPFormat(line) || line;
+        return parsePoolLine(source).address;
     }
 
     function getPoolKeySet(lines) {
-        return new Set(lines.map(getNormalizedPoolKey).filter(Boolean));
+        return new Set(lines.map(line => getPoolLineKey(line)).filter(Boolean));
     }
 
     function filterLinesByKeys(lines, keys, shouldMatch) {
         return lines.filter(line => {
-            const key = getNormalizedPoolKey(line);
+            const key = getPoolLineKey(line);
             return key && (shouldMatch ? keys.has(key) : !keys.has(key));
         });
     }
@@ -4852,13 +4841,24 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
     }
 
+    function setPoolCount(count) {
+        document.getElementById('pool-count').innerText = count;
+    }
+
+    function clearPoolInput() {
+        document.getElementById('ip-input').value = '';
+        updateFilterPreview();
+    }
+
+    const fetchCurrentPool = () => apiJson('/api/get-pool?poolKey=' + currentPool);
+
     async function loadCurrentPool() {
         log(\`📂 加载 \${currentPool}...\`, 'info');
 
         try {
-            const r = await apiJson(\`/api/get-pool?poolKey=\${currentPool}\`);
+            const r = await fetchCurrentPool();
             document.getElementById('ip-input').value = r.pool || '';
-            document.getElementById('pool-count').innerText = r.count;
+            setPoolCount(r.count);
             updateFilterPreview();
             log(\`✅ 已加载 \${r.count} 个IP\`, 'success');
         } catch (e) {
@@ -4877,7 +4877,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         log(\`💾 \${modeLabel}到 \${getPoolName(currentPool)}...\`, 'warn');
 
         try {
-            const r = await savePoolContent(currentPool, content, mode);
+            const r = await savePool(currentPool, content, mode);
 
             if (r.success) {
                 if (mode === 'replace') {
@@ -4885,9 +4885,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 } else {
                     log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\`, 'success');
                 }
-                document.getElementById('pool-count').innerText = r.count;
-                document.getElementById('ip-input').value = '';
-                updateFilterPreview();
+                setPoolCount(r.count);
+                clearPoolInput();
             } else {
                 log(\`❌ 失败: \${r.error}\`, 'error');
             }
@@ -4908,13 +4907,12 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         log(\`🗑️ 从 \${getPoolName(currentPool)} 删除...\`, 'warn');
 
         try {
-            const r = await savePoolContent(currentPool, content, 'remove');
+            const r = await savePool(currentPool, content, 'remove');
 
             if (r.success) {
                 log(\`✅ \${r.message}\`, 'success');
-                document.getElementById('pool-count').innerText = r.count;
-                document.getElementById('ip-input').value = '';
-                updateFilterPreview();
+                setPoolCount(r.count);
+                clearPoolInput();
             } else {
                 log(\`❌ 失败: \${r.error}\`, 'error');
             }
@@ -4925,8 +4923,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     async function showPoolInfo() {
         try {
-            const r = await apiJson(\`/api/get-pool?poolKey=\${currentPool}\`);
-            document.getElementById('pool-count').innerText = r.count;
+            const r = await fetchCurrentPool();
+            setPoolCount(r.count);
         } catch (e) {
             log('❌ 查询失败', 'error');
         }
@@ -5019,7 +5017,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                             pg.style.width = (checked / total * 100) + '%';
                             return;
                         }
-                        checkTargets = [getPoolEntryKey(normalized)];
+                        checkTargets = [getPoolLineKey(normalized)];
                     }
 
                     // 检测所有目标IP
@@ -5178,7 +5176,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             const normalized = normalizeIPFormat(line);
             if (normalized) {
                 // 使用 IP:PORT 作为唯一标识
-                const key = getNormalizedPoolKey(normalized);
+                const key = getPoolLineKey(normalized);
                 seen.set(key, normalized);
             }
         });
@@ -5333,7 +5331,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
             if (isIP) {
                 const normalized = normalizeIPFormat(val);
-                targets = [normalized ? getPoolEntryKey(normalized) : val];
+                targets = [normalized ? getPoolLineKey(normalized) : val];
             } else {
                 const data = await apiJson(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`);
 
@@ -5380,23 +5378,23 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         if (!confirm('确认删除？')) return;
 
         try {
-            await apiPost(\`/api/delete-record?id=\${encodeURIComponent(id)}&target=\${currentTargetIndex}\`);
+            await apiRequest('/api/delete-record?id=' + encodeURIComponent(id) + '&target=' + currentTargetIndex, { method: 'POST' });
             log('🗑️  已删除', 'success');
             refreshStatus();
         } catch (e) {
-            log(\`❌ 失败\`, 'error');
+            log('❌ 失败', 'error');
         }
     }
 
     async function deleteTxtIP(recordId, ip) {
-        if (!confirm(\`确认删除 \${ip}？\`)) return;
+        if (!confirm('确认删除 ' + ip + '？')) return;
 
         try {
-            await apiPost(\`/api/delete-record?id=\${encodeURIComponent(recordId)}&ip=\${encodeURIComponent(ip)}&isTxt=true&target=\${currentTargetIndex}\`);
+            await apiRequest('/api/delete-record?id=' + encodeURIComponent(recordId) + '&ip=' + encodeURIComponent(ip) + '&isTxt=true&target=' + currentTargetIndex, { method: 'POST' });
             log('🗑️ 已从TXT记录删除', 'success');
             refreshStatus();
         } catch (e) {
-            log(\`❌ 删除失败\`, 'error');
+            log('❌ 删除失败', 'error');
         }
     }
 
@@ -5404,7 +5402,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         log('🔧 启动维护...', 'warn');
 
         try {
-            const r = await apiPostResult('/api/maintain?manual=true');
+            const r = await apiJson('/api/maintain?manual=true', { method: 'POST' });
 
             const allLogs = Array.isArray(r.allLogs)
                 ? r.allLogs
@@ -5512,30 +5510,50 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }).join('');
     }
 
-    async function createNewPool() {
-        const name = prompt('输入池显示名称');
-        if (!name) return;
+    function promptPoolName(message, initialValue = '') {
+        const name = prompt(message, initialValue);
+        if (!name) return '';
         const displayName = name.trim();
-
         if (!displayName) {
             alert('显示名称不能为空!');
-            return;
+            return '';
         }
+        return displayName;
+    }
 
+    async function submitPoolStateChange(request, { successMessage, errorMessage, applyResult, onLogicalFailure } = {}) {
         try {
-            const r = await apiPostJson('/api/create-pool', { displayName });
-
-            if (r.success) {
-                const createdPoolKey = r.poolKey;
-                currentPool = createdPoolKey;
-                applyPoolState(r);
-                log(\`✅ 已创建池: \${getPoolName(createdPoolKey)}\`, 'success');
-            } else {
-                alert(r.error || '创建失败');
+            const result = typeof request === 'function' ? await request() : await request;
+            if (!result.success) {
+                if (onLogicalFailure) onLogicalFailure(result);
+                else log(errorMessage + ': ' + (result.error || '未知错误'), 'error');
+                return false;
             }
+            if (applyResult) applyResult(result);
+            log(typeof successMessage === 'function' ? successMessage(result) : successMessage, 'success');
+            return true;
         } catch (e) {
-            log('❌ 创建池失败', 'error');
+            log(errorMessage, 'error');
+            return false;
         }
+    }
+
+    async function createNewPool() {
+        const displayName = promptPoolName('输入池显示名称');
+        if (!displayName) return;
+
+        await submitPoolStateChange(
+            () => apiPostJson('/api/create-pool', { displayName }),
+            {
+                successMessage: r => '✅ 已创建池: ' + getPoolName(r.poolKey),
+                errorMessage: '❌ 创建池失败',
+                applyResult: r => {
+                    currentPool = r.poolKey;
+                    applyPoolState(r);
+                },
+                onLogicalFailure: r => alert(r.error || '创建失败')
+            }
+        );
     }
 
     async function renameCurrentPool() {
@@ -5544,30 +5562,20 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             return;
         }
 
-        const oldName = getPoolName(currentPool);
-        const name = prompt('输入新的池显示名称', oldName);
-        if (!name) return;
-        const displayName = name.trim();
+        const displayName = promptPoolName('输入新的池显示名称', getPoolName(currentPool));
+        if (!displayName) return;
 
-        if (!displayName) {
-            alert('显示名称不能为空!');
-            return;
-        }
-
-        try {
-            const r = await apiPostJson('/api/rename-pool', { poolKey: currentPool, displayName });
-
-            if (!r.success) {
-                log(\`❌ 重命名失败: \${r.error || '未知错误'}\`, 'error');
-                return;
+        await submitPoolStateChange(
+            () => apiPostJson('/api/rename-pool', { poolKey: currentPool, displayName }),
+            {
+                successMessage: '✅ 已重命名为: ' + displayName,
+                errorMessage: '❌ 重命名失败',
+                applyResult: r => {
+                    applyPoolState(r);
+                    showToast('池名称已更新');
+                }
             }
-
-            applyPoolState(r);
-            log(\`✅ 已重命名为: \${displayName}\`, 'success');
-            showToast('池名称已更新');
-        } catch (e) {
-            log('❌ 重命名失败', 'error');
-        }
+        );
     }
 
     async function deleteCurrentPool() {
@@ -5590,20 +5598,17 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
         if (!confirm(confirmLines.join('\\n'))) return;
 
-        try {
-            const r = await apiPostResult(\`/api/delete-pool?poolKey=\${currentPool}\`);
-
-            if (!r.success) {
-                log(\`❌ 删除失败: \${r.error || '未知错误'}\`, 'error');
-                return;
+        await submitPoolStateChange(
+            () => apiJson('/api/delete-pool?poolKey=' + currentPool, { method: 'POST' }),
+            {
+                successMessage: '✅ 已删除池',
+                errorMessage: '❌ 删除失败',
+                applyResult: r => {
+                    currentPool = POOL_DEFAULT_KEY;
+                    applyPoolState(r);
+                }
             }
-
-            currentPool = POOL_DEFAULT_KEY;
-            applyPoolState(r);
-            log(\`✅ 已删除池\`, 'success');
-        } catch (e) {
-            log('❌ 删除失败', 'error');
-        }
+        );
     }
 
     function switchPool() {
@@ -5614,6 +5619,11 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         if (trashActions) trashActions.hidden = currentPool !== POOL_TRASH_KEY;
 
         showPoolInfo();
+    }
+
+    function rollbackDomainPoolMapping(mapping) {
+        domainPoolMapping = mapping;
+        updateDomainBindingTable();
     }
 
     async function bindDomainToPool(bindingKey, poolKey) {
@@ -5643,8 +5653,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         try {
             const r = await apiPostJson('/api/save-domain-pool-mapping', { mapping: domainPoolMapping });
             if (!r.success) {
-                domainPoolMapping = oldMapping;
-                updateDomainBindingTable();
+                rollbackDomainPoolMapping(oldMapping);
                 log(\`❌ 绑定失败: \${r.error || '未知错误'}\`, 'error');
                 return;
             }
@@ -5652,8 +5661,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
             log(\`✅ \${domain} → \${getPoolName(poolKey)}\`, 'success');
         } catch (e) {
-            domainPoolMapping = oldMapping;
-            updateDomainBindingTable();
+            rollbackDomainPoolMapping(oldMapping);
             log('❌ 绑定失败', 'error');
         }
     }
@@ -5661,20 +5669,20 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     async function clearTrash() {
         if (!confirm('确认清空垃圾桶？此操作不可恢复！')) return;
 
-        try {
-            const r = await apiPostResult('/api/clear-trash');
-            if (r.success) {
-                log('✅ 垃圾桶已清空', 'success');
-                loadCurrentPool();
+        await submitPoolStateChange(
+            () => apiJson('/api/clear-trash', { method: 'POST' }),
+            {
+                successMessage: '✅ 垃圾桶已清空',
+                errorMessage: '❌ 清空失败',
+                applyResult: () => {
+                    loadCurrentPool();
+                }
             }
-        } catch (e) {
-            log('❌ 清空失败', 'error');
-        }
+        );
     }
 
     // 一键洗库状态
     let cleaningPool = null;
-    let cleaningOriginalCount = 0;
 
     // 一键洗库：加载池 → 检测 → 自动保存
     // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
@@ -5699,7 +5707,6 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             allIPs = [...originalLines];
             document.getElementById('ip-input').value = r.pool;
             updateFilterPreview();
-            cleaningOriginalCount = r.count;
             log(\`📂 已加载 \${r.count} 个IP\`, 'info');
         } catch (e) {
             log('❌ 加载失败', 'error');
@@ -5730,7 +5737,6 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
 
         cleaningPool = null;
-        cleaningOriginalCount = 0;
     }
 
     // 普通池洗库结果保存：有效IP覆盖保存，失效IP移入垃圾桶
@@ -5743,36 +5749,35 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         try {
             // 1. 保存有效IP到池（覆盖）
             if (validCount > 0) {
-                const r = await savePoolContent(cleaningPool, validLines.join('\\n'), 'replace');
+                const r = await savePool(cleaningPool, validLines.join('\\n'), 'replace');
 
                 if (r.success) {
                     log(\`✅ 洗库完成: \${r.message}\`, 'success');
-                    document.getElementById('pool-count').innerText = r.count;
+                    setPoolCount(r.count);
                 } else {
                     log(\`❌ 保存失败: \${r.error}\`, 'error');
                     return;
                 }
             } else {
                 // 清空池
-                await savePoolContent(cleaningPool, '', 'replace');
+                await savePool(cleaningPool, '', 'replace');
                 log(\`⚠️ 洗库完成，无有效IP，池已清空\`, 'warn');
-                document.getElementById('pool-count').innerText = '0';
+                setPoolCount('0');
             }
 
             // 2. 失效IP移入垃圾桶
             if (invalidLines.length > 0) {
                 const trashContent = invalidLines.map(line => {
-                    const key = getNormalizedPoolKey(line);
+                    const key = getPoolLineKey(line);
                     return \`\${key} # 洗库失效 \${new Date().toISOString()} 来自 \${cleaningPool}\`;
                 }).join('\\n');
 
-                await savePoolContent(POOL_TRASH_KEY, trashContent, 'append');
+                await savePool(POOL_TRASH_KEY, trashContent, 'append');
 
                 log(\`🗑️ 已将 \${invalidLines.length} 个失效IP移入垃圾桶\`, 'info');
             }
 
-            document.getElementById('ip-input').value = '';
-            updateFilterPreview();
+            clearPoolInput();
         } catch (e) {
             log(\`❌ 保存失败\`, 'error');
         }
@@ -5782,13 +5787,12 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     async function saveTrashCleanResult(validLines, originalLines) {
         if (validLines.length === 0) {
             log(\`⚠️ 洗库完成，无有效IP可恢复\`, 'warn');
-            document.getElementById('ip-input').value = '';
-            updateFilterPreview();
+            clearPoolInput();
             return;
         }
 
         const validKeys = getPoolKeySet(validLines);
-        const ipsToRestore = filterLinesByKeys(originalLines, validKeys, true).map(getNormalizedPoolKey);
+        const ipsToRestore = filterLinesByKeys(originalLines, validKeys, true).map(getPoolLineKey);
 
         try {
             const r = await restoreTrashIPs(ipsToRestore);
@@ -5796,9 +5800,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             if (r.success) {
                 log(\`✅ 垃圾桶洗库完成: \${r.message}\`, 'success');
                 logRestoreSummary(r);
-                document.getElementById('ip-input').value = '';
-                updateFilterPreview();
-                // 刷新垃圾桶数量
+                clearPoolInput();
                 showPoolInfo();
             } else {
                 log(\`❌ 恢复失败: \${r.error}\`, 'error');
@@ -5806,6 +5808,10 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         } catch (e) {
             log(\`❌ 恢复失败\`, 'error');
         }
+    }
+
+    function logRestoreFailure(message = '恢复失败') {
+        log('❌ ' + message, 'error');
     }
 
     async function restoreSelected() {
@@ -5817,21 +5823,28 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             return;
         }
 
-        const ips = lines.map(getNormalizedPoolKey).filter(Boolean);
+        const ips = lines.map(line => getPoolLineKey(line)).filter(Boolean);
 
         try {
             const r = await restoreTrashIPs(ips);
 
             if (r.success) {
-                log(\`✅ \${r.message}\`, 'success');
-                logRestoreSummary(r);
-                loadCurrentPool();
-                updateFilterPreview();
+                handleRestoreSuccess(r, true);
             } else {
-                log(\`❌ \${r.error}\`, 'error');
+                logRestoreFailure(r.error);
             }
         } catch (e) {
-            log('❌ 恢复失败', 'error');
+            logRestoreFailure();
+        }
+    }
+
+    function handleRestoreSuccess(result, reloadPool = false) {
+        log('✅ ' + result.message, 'success');
+        logRestoreSummary(result);
+        if (reloadPool) loadCurrentPool();
+        else {
+            clearPoolInput();
+            showPoolInfo();
         }
     }
 
