@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.05.23-00.50';
+const APP_VERSION = '2026.05.23-11.05';
 const APP_CONFIG_KEY = 'app_config';
 
 const GLOBAL_SETTINGS = {
@@ -312,6 +312,15 @@ async function getPoolState(env) {
     return { mapping, pools, poolNames };
 }
 
+function poolListToMap(pool) {
+    const map = new Map();
+    parsePoolList(pool).forEach(line => {
+        const key = extractIPKey(line);
+        if (key) map.set(key, line);
+    });
+    return map;
+}
+
 const formatLogMessage = msg => `[${new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })}] ${msg}`;
 
 const JSON_CONTENT_TYPE = 'application/json; charset=UTF-8';
@@ -570,14 +579,7 @@ async function handleSavePool(body, env) {
         return badRequest({ success: false, error: '没有有效IP' });
     }
 
-    const existingPool = await env.IP_DATA.get(poolKey) || '';
-    const existingMap = new Map();
-
-    // 先加载现有IP
-    parsePoolList(existingPool).forEach(line => {
-        const key = extractIPKey(line);
-        if (key) existingMap.set(key, line);
-    });
+    const existingMap = poolListToMap(await env.IP_DATA.get(poolKey) || '');
 
     const existingCount = existingMap.size;
     let responseData;
@@ -585,10 +587,7 @@ async function handleSavePool(body, env) {
     if (mode === 'replace') {
         // 覆盖模式：清空现有，只保留新IP
         existingMap.clear();
-        parsePoolList(newIPs).forEach(line => {
-            const key = extractIPKey(line);
-            if (key) existingMap.set(key, line);
-        });
+        poolListToMap(newIPs).forEach((line, key) => existingMap.set(key, line));
 
         responseData = {
             success: true,
@@ -620,10 +619,7 @@ async function handleSavePool(body, env) {
         };
     } else {
         // 追加模式
-        parsePoolList(newIPs).forEach(line => {
-            const key = extractIPKey(line);
-            if (key) existingMap.set(key, line);
-        });
+        poolListToMap(newIPs).forEach((line, key) => existingMap.set(key, line));
 
         responseData = {
             success: true,
@@ -2696,7 +2692,7 @@ function renderAppStyles() {
             max-width: 100%;
             position: relative;
             min-height: 76px;
-            padding: 16px 18px;
+            padding: 18px 58px 14px 18px;
             align-items: center;
             border: 1px solid #e5e5e7;
             border-radius: 16px;
@@ -2737,9 +2733,9 @@ function renderAppStyles() {
             font-weight: 600;
         }
         .target-summary .record-badge {
-            position: static;
-            order: 2;
-            flex: 0 0 auto;
+            position: absolute;
+            top: 8px;
+            right: 10px;
             margin-left: 0;
         }
         .target-select-overlay {
@@ -2754,7 +2750,7 @@ function renderAppStyles() {
             .target-summary {
                 min-height: 68px;
                 width: 100%;
-                padding: 12px;
+                padding: 16px 52px 12px 12px;
             }
             .target-summary-domain {
                 max-width: calc(100vw - 156px);
@@ -3073,8 +3069,21 @@ function renderAppStyles() {
             padding: 10px 12px;
         }
         .domain-binding-domain {
-            display: block;
+            display: grid;
+            grid-template-columns: 24px minmax(0, 1fr);
+            align-items: center;
+            gap: 8px;
             max-width: 100%;
+            overflow: hidden;
+        }
+        .domain-binding-domain .record-badge {
+            justify-content: center;
+            width: 24px;
+            margin-left: 0;
+            padding: 0;
+        }
+        .domain-binding-name {
+            min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -3931,6 +3940,21 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     // 检测中断状态
     let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
 
+    const byId = id => document.getElementById(id);
+    const nonEmptyLines = text => String(text || '').split('\\n').filter(line => line.trim());
+    const getInputLines = id => {
+        const el = byId(id);
+        return el ? nonEmptyLines(el.value) : [];
+    };
+    const setElementValue = (id, value) => {
+        const el = byId(id);
+        if (el) el.value = value || '';
+    };
+    const setInputValueAndPreview = (id, value) => {
+        setElementValue(id, value);
+        updateFilterPreview();
+    };
+
 
     // ===== Modal / small UI helpers =====
     // 自定义模态对话框
@@ -3955,11 +3979,11 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             \`;
             document.body.appendChild(overlay);
 
-            document.getElementById('modal-continue').onclick = () => {
+            byId('modal-continue').onclick = () => {
                 document.body.removeChild(overlay);
                 resolve(true);
             };
-            document.getElementById('modal-abandon').onclick = () => {
+            byId('modal-abandon').onclick = () => {
                 document.body.removeChild(overlay);
                 resolve(false);
             };
@@ -4007,9 +4031,10 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
         const mode = target.mode === 'TXT' ? 'TXT' : 'A';
         const modeLabel = MODE_LABELS[mode] || mode;
+        const modeShortLabel = mode === 'TXT' ? 'T' : 'A';
         const port = String(target.port || '').trim();
         const meta = mode !== 'TXT' && port && port !== 'any' ? '端口 ' + port : modeLabel + ' 记录';
-        return '<span class="record-badge record-badge-' + mode.toLowerCase() + '">' + escapeHTML(modeLabel) + '</span>' +
+        return '<span class="record-badge record-badge-' + mode.toLowerCase() + '" title="' + escapeHTML(modeLabel) + '">' + escapeHTML(modeShortLabel) + '</span>' +
             '<span class="target-summary-domain">' + escapeHTML(target.domain) + '</span>' +
             '<span class="target-summary-meta">' + escapeHTML(meta) + '</span>';
     }
@@ -4025,12 +4050,12 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     // ===== Form / toast / navigation helpers =====
     function setInputValue(id, value) {
-        const el = document.getElementById(id);
+        const el = byId(id);
         if (el) el.value = value || '';
     }
 
     function getInputValue(id) {
-        const el = document.getElementById(id);
+        const el = byId(id);
         return el ? el.value.trim() : '';
     }
 
@@ -4040,7 +4065,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function showToast(message, type = 'success') {
-        const el = document.getElementById('toast');
+        const el = byId('toast');
         if (!el) return;
         el.textContent = message;
         el.className = \`toast \${type} show\`;
@@ -4069,7 +4094,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function toggleHidden(id) {
-        const el = document.getElementById(id);
+        const el = byId(id);
         if (el) el.hidden = !el.hidden;
     }
 
@@ -4194,7 +4219,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function renderConfigRows(listId, rows, draftKey, renderCard, emptyHtml) {
-        const list = document.getElementById(listId);
+        const list = byId(listId);
         if (!list) return;
         if (configDraft) configDraft[draftKey] = rows;
         list.innerHTML = rows.length ? rows.map((item, index) => renderCard(item, index)).join('') : emptyHtml;
@@ -4245,7 +4270,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function openConfigEditor(type, title, content) {
-        const panel = document.getElementById(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
+        const panel = byId(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
         if (!panel) return null;
         panel.classList.add('active');
         panel.innerHTML = '<h6 class="mb-3 fw-bold">' + title + '</h6>' + content;
@@ -4265,7 +4290,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function showZoneEditor(index, zone = {}) {
-        const panel = document.getElementById('zone-edit-panel');
+        const panel = byId('zone-edit-panel');
         if (!panel) return;
         const noteValue = zone.label && zone.label !== zone.baseDomain
             ? zone.label
@@ -4313,7 +4338,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function closeConfigEditor(type) {
-        const panel = document.getElementById(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
+        const panel = byId(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
         if (panel) {
             panel.classList.remove('active');
             panel.innerHTML = '';
@@ -4364,7 +4389,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const settings = config.settings || SETTINGS;
         CONFIG_NUMBER_FIELDS.forEach(([key, id]) => setInputValue(id, settings[key] ?? SETTINGS[key]));
         CONFIG_TOGGLE_FIELDS.forEach(([key, id, fallback]) => {
-            const el = document.getElementById(id);
+            const el = byId(id);
             if (el) el.checked = config[key] === undefined ? fallback : config[key] !== false;
         });
         renderConfigCards();
@@ -4383,7 +4408,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function showTargetEditor(index, target = {}) {
-        const panel = document.getElementById('target-edit-panel');
+        const panel = byId('target-edit-panel');
         if (!panel) return;
         const mode = target.mode === 'TXT' ? 'TXT' : 'A';
         const modeOptions = ['A', 'TXT'].map(value => \`<option value="\${value}" \${mode === value ? 'selected' : ''}>\${MODE_LABELS[value]}</option>\`).join('');
@@ -4411,8 +4436,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     function syncTargetPortMode() {
         const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
-        const portInput = document.getElementById('edit-target-port');
-        const hint = document.getElementById('edit-target-port-hint');
+        const portInput = byId('edit-target-port');
+        const hint = byId('edit-target-port-hint');
         if (!portInput) return;
         if (mode === 'TXT') {
             if (!portInput.dataset.aPort || portInput.value !== '任意') {
@@ -4429,7 +4454,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function handleTargetModeChange() {
-        const portInput = document.getElementById('edit-target-port');
+        const portInput = byId('edit-target-port');
         if (portInput && !portInput.disabled && portInput.value && portInput.value !== '任意') {
             portInput.dataset.aPort = portInput.value;
         }
@@ -4440,7 +4465,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const zoneIndex = parseInt(getInputValue('edit-target-zone') || '0', 10) || 0;
         const prefix = getInputValue('edit-target-prefix').replace(/^\\.+|\\.+$/g, '');
         const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
-        const portInput = document.getElementById('edit-target-port');
+        const portInput = byId('edit-target-port');
         const port = mode === 'TXT' ? 'any' : ((portInput?.value || '').trim() || '443');
         const parsedMinActive = parseInt(getInputValue('edit-target-min'), 10);
         const minActive = Number.isFinite(parsedMinActive) ? Math.max(0, parsedMinActive) : (configDraft?.settings?.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE);
@@ -4500,7 +4525,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             config[key] = getInputValue(id);
         });
         CONFIG_TOGGLE_FIELDS.forEach(([key, id, fallback]) => {
-            const el = document.getElementById(id);
+            const el = byId(id);
             config[key] = el ? el.checked : fallback;
         });
         config.settings = {};
@@ -4519,8 +4544,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             return;
         }
         try {
-            const btn = document.getElementById('btn-save-config');
-            const cancelBtn = document.getElementById('btn-cancel-config');
+            const btn = byId('btn-save-config');
+            const cancelBtn = byId('btn-cancel-config');
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = '保存中...';
@@ -4544,8 +4569,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             log(\`❌ 配置保存失败: \${e.message}\`, 'error');
             showToast('配置保存失败', 'error');
         } finally {
-            const btn = document.getElementById('btn-save-config');
-            const cancelBtn = document.getElementById('btn-cancel-config');
+            const btn = byId('btn-save-config');
+            const cancelBtn = byId('btn-cancel-config');
             if (btn) {
                 btn.disabled = false;
                 btn.textContent = '💾 保存到 KV';
@@ -4592,7 +4617,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     const log = (m, t='info', skipTimestamp=false) => {
-        const w = document.getElementById('log-window');
+        const w = byId('log-window');
         const colors = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
 
         let output;
@@ -4782,6 +4807,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         return { ip: addr, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-', exits: r.exits || [], proxyIP: r.proxyIP, portRemote: r.portRemote, ipInfo: r.ipInfo || null, asn: r.asn, country: r.country, stack: r.stack };
     }
 
+    const addProbeButton = r => \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(buildPoolLineFromCheckResult(r.ip, r))}')" title="添加到输入框">➕</button>\`;
+
     function renderIPRow(r, actionHTML) {
         const infoHtml = formatExitInfo(r.exits) || (r.ipInfo ? formatIPInfo(r.ipInfo) : '-');
         return \`<tr>
@@ -4794,24 +4821,31 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         </tr>\`;
     }
 
+    async function renderProbeResults(targets, total = targets.length) {
+        const checkResults = await Promise.all(targets.map(addr => checkIPWithInfo(addr)));
+        byId('status-table').innerHTML = checkResults.map(r => renderIPRow(r, addProbeButton(r))).join('');
+        const activeCount = checkResults.filter(r => r.success).length;
+        log(\`📊 探测完成: \${activeCount}/\${total} 活跃\`, activeCount === total ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
+    }
+
     function switchDomain() {
         if (!TARGETS.length) {
-            const manualSection = document.getElementById('manual-add-section');
-            const t = document.getElementById('status-table');
-            const summary = document.getElementById('current-target-summary-content');
+            const manualSection = byId('manual-add-section');
+            const t = byId('status-table');
+            const summary = byId('current-target-summary-content');
             if (manualSection) manualSection.hidden = true;
             if (summary) summary.innerHTML = renderTargetSummary();
             if (t) t.innerHTML = '<tr><td colspan="6" class="text-secondary p-4">请先到配置中心添加管理域名</td></tr>';
             log('请先在配置中心添加管理域名', 'warn');
             return;
         }
-        currentTargetIndex = parseInt(document.getElementById('domain-select').value);
+        currentTargetIndex = parseInt(byId('domain-select').value);
         const target = TARGETS[currentTargetIndex];
-        const summary = document.getElementById('current-target-summary-content');
+        const summary = byId('current-target-summary-content');
         if (summary) summary.innerHTML = renderTargetSummary(target);
         log(\`切换到: \${target.domain} (\${target.mode})\`);
 
-        const manualSection = document.getElementById('manual-add-section');
+        const manualSection = byId('manual-add-section');
         if (manualSection) manualSection.hidden = false;
 
         refreshStatus();
@@ -4819,7 +4853,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     // ===== Pool editor actions =====
     async function loadRemoteUrl() {
-        const url = document.getElementById('remote-url').value.trim();
+        const url = byId('remote-url').value.trim();
         if (!url) {
             log('❌ 请输入URL', 'error');
             return;
@@ -4830,8 +4864,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             const r = await apiPostJson('/api/load-remote-url', { url });
 
             if (r.success) {
-                document.getElementById('ip-input').value = r.ips || '';
-                updateFilterPreview();
+                setInputValueAndPreview('ip-input', r.ips);
                 log(\`✅ 成功: \${r.count} 个\`, 'success');
             } else {
                 log(\`❌ 失败\`, 'error');
@@ -4842,12 +4875,11 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function setPoolCount(count) {
-        document.getElementById('pool-count').innerText = count;
+        byId('pool-count').innerText = count;
     }
 
     function clearPoolInput() {
-        document.getElementById('ip-input').value = '';
-        updateFilterPreview();
+        setInputValueAndPreview('ip-input', '');
     }
 
     const fetchCurrentPool = () => apiJson('/api/get-pool?poolKey=' + currentPool);
@@ -4857,7 +4889,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
         try {
             const r = await fetchCurrentPool();
-            document.getElementById('ip-input').value = r.pool || '';
+            setElementValue('ip-input', r.pool);
             setPoolCount(r.count);
             updateFilterPreview();
             log(\`✅ 已加载 \${r.count} 个IP\`, 'success');
@@ -4867,7 +4899,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     async function saveToCurrentPool(mode = 'append') {
-        const content = document.getElementById('ip-input').value;
+        const content = byId('ip-input').value;
         if (!content.trim()) {
             log('❌ 内容为空', 'error');
             return;
@@ -4896,7 +4928,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     async function removeFromPool() {
-        const content = document.getElementById('ip-input').value;
+        const content = byId('ip-input').value;
         if (!content.trim()) {
             log('❌ 内容为空', 'error');
             return;
@@ -4931,9 +4963,9 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     async function batchCheck() {
-        const btn = document.getElementById('btn-check');
-        const input = document.getElementById('ip-input');
-        const lines = input.value.split('\\n').filter(i => i.trim());
+        const btn = byId('btn-check');
+        const input = byId('ip-input');
+        const lines = getInputLines('ip-input');
 
         if (!lines.length) {
             log('❌ 请先输入IP', 'error');
@@ -4947,7 +4979,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             btn.classList.remove('btn-danger');
             btn.classList.add('btn-warning');
             log('🛑 已停止检测', 'warn');
-            document.getElementById('pg-bar').style.width = '0%';
+            byId('pg-bar').style.width = '0%';
             return 'abandoned';
         }
 
@@ -4959,7 +4991,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         btn.classList.add('btn-danger');
 
         let valid = [], total = lines.length, checked = 0;
-        const pg = document.getElementById('pg-bar');
+        const pg = byId('pg-bar');
         let checkStatus = 'completed';
 
         log(\`🚀 开始检测 \${total} 个IP (并发: \${SETTINGS.CONCURRENT_CHECKS})\`, 'warn');
@@ -5116,7 +5148,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function clearInput() {
-        const input = document.getElementById('ip-input');
+        const input = byId('ip-input');
         if (input.value.trim() && !confirm('确认清空输入框？')) return;
         input.value = '';
         updateFilterPreview();
@@ -5131,7 +5163,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             return 'abandoned';
         }
 
-        const input = document.getElementById('ip-input');
+        const input = byId('ip-input');
         // 将有效IP和未检测IP合并
         const newContent = [...pausedCheckState.validIPs, ...pausedCheckState.uncheckedLines].join('\\n');
         input.value = newContent;
@@ -5148,7 +5180,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     // 放弃检测
     function abandonCheck() {
         if (pausedCheckState && pausedCheckState.validIPs.length > 0) {
-            const input = document.getElementById('ip-input');
+            const input = byId('ip-input');
             input.value = pausedCheckState.validIPs.join('\\n');
             updateFilterPreview();
             log(\`🚫 已放弃检测，保留 \${pausedCheckState.validIPs.length} 个有效IP在输入框\`, 'warn');
@@ -5160,8 +5192,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function quickDeduplicate() {
-        const input = document.getElementById('ip-input');
-        const lines = input.value.split('\\n').filter(l => l.trim());
+        const input = byId('ip-input');
+        const lines = getInputLines('ip-input');
 
         if (lines.length === 0) {
             log('❌ 输入为空', 'error');
@@ -5195,8 +5227,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     // ===== Domain status / lookup / maintenance actions =====
     async function refreshStatus() {
-        const t = document.getElementById('status-table');
-        const txtDiv = document.getElementById('txt-status');
+        const t = byId('status-table');
+        const txtDiv = byId('txt-status');
             const colspan = '6';
         if (!TARGETS.length) {
             t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">请先到配置中心添加管理域名</td></tr>\`;
@@ -5254,7 +5286,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             log('❌ 请先添加管理域名', 'error');
             return;
         }
-        const input = document.getElementById('manual-add-ip');
+        const input = byId('manual-add-ip');
         const ip = input.value.trim();
 
         if (!ip) {
@@ -5284,7 +5316,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     async function lookupDomain() {
-        const input = document.getElementById('lookup-domain');
+        const input = byId('lookup-domain');
         const val = input.value.trim();
 
         if (!val) {
@@ -5294,8 +5326,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
         log(\`🔍 探测: \${val}\`, 'info');
 
-        const t = document.getElementById('status-table');
-        const txtDiv = document.getElementById('txt-status');
+        const t = byId('status-table');
+        const txtDiv = byId('txt-status');
         const colspan = '6';
         t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 探测中...</td></tr>\`;
         txtDiv.innerHTML = '';
@@ -5312,17 +5344,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 }
 
                 log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
-
-                // 并发检测（与地址记录探测统一模板）
-                const checkResults = await Promise.all(data.ips.map(ip => checkIPWithInfo(ip)));
-
-                // 显示在表格中（与地址记录探测统一模板）
-                t.innerHTML = checkResults.map(r => renderIPRow(r,
-                    \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(buildPoolLineFromCheckResult(r.ip, r))}')" title="添加到输入框">➕</button>\`
-                )).join('');
-
-                const activeCount = checkResults.filter(r => r.success).length;
-                log(\`📊 探测完成: \${activeCount}/\${data.ips.length} 活跃\`, activeCount === data.ips.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
+                await renderProbeResults(data.ips);
                 return;
             }
 
@@ -5345,16 +5367,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 log(\`📡 \${data.ips.length} 个IP (端口: \${data.port || '443'})\`, 'success');
             }
 
-            // 并发检测
-            const checkResults = await Promise.all(targets.map(addr => checkIPWithInfo(addr)));
-
-            // 显示在表格中
-            t.innerHTML = checkResults.map(r => renderIPRow(r,
-                \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(buildPoolLineFromCheckResult(r.ip, r))}')" title="添加到输入框">➕</button>\`
-            )).join('');
-
-            const activeCount = checkResults.filter(r => r.success).length;
-            log(\`📊 探测完成: \${activeCount}/\${targets.length} 活跃\`, activeCount === targets.length ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
+            await renderProbeResults(targets);
         } catch (e) {
             log(\`❌ 失败: \${e.message}\`, 'error');
             t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 探测失败</td></tr>\`;
@@ -5362,8 +5375,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function addToInput(ip) {
-        const input = document.getElementById('ip-input');
-        const lines = input.value.split('\\n').filter(l => l.trim());
+        const input = byId('ip-input');
+        const lines = getInputLines('ip-input');
 
         if (!lines.includes(ip)) {
             input.value = lines.concat([ip]).join('\\n');
@@ -5460,7 +5473,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function updatePoolSelector() {
-        const selector = document.getElementById('pool-selector');
+        const selector = byId('pool-selector');
         if (!selector) return;
         const pools = [...new Set([POOL_DEFAULT_KEY, POOL_TRASH_KEY, ...(Array.isArray(availablePools) ? availablePools : [])])]
             .sort(comparePoolKeys);
@@ -5470,7 +5483,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function updateDomainBindingTable() {
-        const tbody = document.getElementById('domain-binding-list');
+        const tbody = byId('domain-binding-list');
         if (!tbody) return;
         if (TARGETS.length === 0) {
             tbody.innerHTML = '<tr><td colspan="2" class="text-center text-secondary">请先到配置中心添加管理域名</td></tr>';
@@ -5482,6 +5495,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             const boundPool = getBoundPoolForTarget(target);
             const mode = target.mode === 'TXT' ? 'TXT' : 'A';
             const modeLabel = MODE_LABELS[mode] || mode;
+            const modeShortLabel = mode === 'TXT' ? 'T' : 'A';
             const badgeClass = 'record-badge-' + mode.toLowerCase();
 
             const selectablePools = (Array.isArray(availablePools) ? availablePools : [POOL_DEFAULT_KEY])
@@ -5496,7 +5510,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 <tr>
                     <td>
                         <span class="domain-binding-domain" title="\${escapeHTML(target.domain || '')}">
-                            \${escapeHTML(target.domain || '')}<span class="record-badge \${badgeClass}">\${escapeHTML(modeLabel)}</span>
+                            <span class="record-badge \${badgeClass}" title="\${escapeHTML(modeLabel)}">\${escapeHTML(modeShortLabel)}</span>
+                            <span class="domain-binding-name">\${escapeHTML(target.domain || '')}</span>
                         </span>
                     </td>
                     <td>
@@ -5612,10 +5627,10 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function switchPool() {
-        currentPool = document.getElementById('pool-selector').value;
+        currentPool = byId('pool-selector').value;
         log(\`📦 切换到: \${getPoolName(currentPool)}\`, 'info');
 
-        const trashActions = document.getElementById('trash-actions');
+        const trashActions = byId('trash-actions');
         if (trashActions) trashActions.hidden = currentPool !== POOL_TRASH_KEY;
 
         showPoolInfo();
@@ -5703,10 +5718,9 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 cleaningPool = null;
                 return;
             }
-            originalLines = r.pool.split('\\n').filter(l => l.trim());
+            originalLines = nonEmptyLines(r.pool);
             allIPs = [...originalLines];
-            document.getElementById('ip-input').value = r.pool;
-            updateFilterPreview();
+            setInputValueAndPreview('ip-input', r.pool);
             log(\`📂 已加载 \${r.count} 个IP\`, 'info');
         } catch (e) {
             log('❌ 加载失败', 'error');
@@ -5718,7 +5732,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const checkResult = await batchCheck();
 
         // 3. 只有完全检测完成才自动保存，中断或放弃则不保存
-        const content = document.getElementById('ip-input').value;
+        const content = byId('ip-input').value;
         const validLines = content.trim() ? content.trim().split('\\n') : [];
         const validCount = validLines.length;
 
@@ -5815,8 +5829,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     async function restoreSelected() {
-        const content = document.getElementById('ip-input').value;
-        const lines = content.split('\\n').filter(l => l.trim());
+        const lines = getInputLines('ip-input');
 
         if (lines.length === 0) {
             log('❌ 请先选择要恢复的IP', 'error');
@@ -5857,7 +5870,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function smartFilter(mode) {
-        const input = document.getElementById('ip-input');
+        const input = byId('ip-input');
         const criteria = parseFilterExpression(getInputValue('universal-filter'));
 
         if (!criteria) {
@@ -5865,7 +5878,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             return;
         }
 
-        const lines = input.value.split('\\n').filter(l => l.trim());
+        const lines = getInputLines('ip-input');
         const filtered = lines.filter(line => {
             const matched = lineMatchesUniversalFilter(line, criteria);
             return mode === 'keep' ? matched : !matched;
@@ -5924,10 +5937,9 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function updateFilterPreview() {
-        const preview = document.getElementById('filter-preview');
+        const preview = byId('filter-preview');
         if (!preview) return;
-        const input = document.getElementById('ip-input');
-        const lines = input ? input.value.split('\\n').filter(l => l.trim()) : [];
+        const lines = getInputLines('ip-input');
         const criteria = parseFilterExpression(getInputValue('universal-filter'));
         if (!criteria) {
             preview.innerHTML = '输入条件后会显示匹配数量。';
@@ -5969,7 +5981,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const configBody = document.querySelector('.config-details-body');
         ['input', 'change'].forEach(type => configBody?.addEventListener(type, () => setConfigDirty(true, type === 'change' ? '基础配置已保存到页面，点击“保存到 KV”后生效' : '')));
         ['ip-input', 'universal-filter'].forEach(id => {
-            const el = document.getElementById(id);
+            const el = byId(id);
             if (el) el.addEventListener('input', updateFilterPreview);
         });
         updateFilterPreview();
