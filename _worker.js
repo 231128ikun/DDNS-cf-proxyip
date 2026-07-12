@@ -4,13 +4,12 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.06.25-20.14';
+const APP_VERSION = '2026.07.12-19.12';
 const APP_CONFIG_KEY = 'app_config';
-
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
     CONCURRENT_CHECKS: 32,       // 前端批量检测并发数
-    CHECK_TIMEOUT: 8000,         // 单个检测接口请求超时(ms)
+    CHECK_TIMEOUT: 15000,         // 单个检测接口请求超时(ms)
 
     // ── 网络超时 ──
     REMOTE_LOAD_TIMEOUT: 8000,   // 远程 URL 加载超时(ms)
@@ -1101,6 +1100,11 @@ function normalizeTargetMode(value) {
     return 'A';
 }
 
+function normalizeListValues(value, normalizer = item => item) {
+    const source = Array.isArray(value) ? value : String(value || '').split(/[,;\s/]+/);
+    return [...new Set(source.map(item => normalizer(String(item).trim())).filter(Boolean))];
+}
+
 function normalizeExitFilter(value) {
     const text = String(value || '').trim().toLowerCase().replace(/_/g, '-');
     if (!text || ['any', 'all', 'v4/v6', 'v6/v4'].includes(text)) return 'any';
@@ -1109,7 +1113,6 @@ function normalizeExitFilter(value) {
     if (['dual', 'dual-stack', 'both'].includes(text)) return 'dual';
     return 'any';
 }
-
 
 function normalizeTargetConfig(target, settings = GLOBAL_SETTINGS) {
     if (!target || typeof target !== 'object') return null;
@@ -1123,8 +1126,10 @@ function normalizeTargetConfig(target, settings = GLOBAL_SETTINGS) {
     const parsedMinActive = parseInt(target.minActive ?? normalizedSettings.DEFAULT_MIN_ACTIVE, 10);
     const minActive = Math.max(0, Number.isFinite(parsedMinActive) ? parsedMinActive : normalizedSettings.DEFAULT_MIN_ACTIVE);
     const exitFilter = normalizeExitFilter(target.exitFilter);
-    const country = String(target.country || '').trim().toUpperCase();
-    const asn = normalizeAsnValue(target.asn);
+    const countries = normalizeListValues(target.countries?.length ? target.countries : target.country, item => item.toUpperCase());
+    const asns = normalizeListValues(target.asns?.length ? target.asns : target.asn, item => normalizeAsnValue(item));
+    const country = countries.join(',');
+    const asn = asns.join(',');
     const zoneIndex = Number.isInteger(target.zoneIndex) ? target.zoneIndex : (target.zoneIndex === '' || target.zoneIndex === undefined ? null : parseInt(target.zoneIndex, 10));
     const enabled = target.enabled !== false;
     return {
@@ -1138,6 +1143,8 @@ function normalizeTargetConfig(target, settings = GLOBAL_SETTINGS) {
         exitFilter,
         country,
         asn,
+        countries,
+        asns,
         enabled
     };
 }
@@ -1161,8 +1168,6 @@ function normalizeZoneConfig(zone) {
     if (!baseDomain && !zoneId && !apiKey) return null;
     return { name: label, baseDomain, zoneId, apiKey, label };
 }
-
-
 
 function normalizeSavedConfig(rawConfig = {}) {
     const settings = normalizeRuntimeSettings(rawConfig.settings || rawConfig);
@@ -1533,10 +1538,11 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
 
     const exits = extractCheckExits(data);
     const preferredExit = getPreferredExitInfo(exits);
-    const success = data.success === true ||
-        data.ok === true ||
-        data.status === 'success' ||
-        exits.length > 0;
+    const status = normalizeTextValue(data.status).toLowerCase();
+    const explicitFailure = data.success === false || data.ok === false || ['failed', 'failure', 'error'].includes(status);
+    const success = !explicitFailure && (
+        data.success === true || data.ok === true || status === 'success' || exits.length > 0
+    );
     const stack = inferCheckStack(data, exits);
     const asn = joinMetaValues(exits.map(item => item.asn));
     const country = joinMetaValues(exits.map(item => item.country));
@@ -1566,9 +1572,7 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
         supportsIpv4: stack === 'v4' || stack === 'v4/v6',
         supportsIpv6: stack === 'v6' || stack === 'v4/v6',
         dualStack: stack === 'v4/v6',
-        // apiError=true 表示检测接口本身不可用（超时/网络错误/HTTP错误/无法解析JSON），
-        // 不代表该地址被接口判定为失效；data.apiError 用于二次归一化时保留该标记。
-        apiError: Boolean(apiError) || data.apiError === true
+        apiError: Boolean(apiError)
     };
 }
 
@@ -1583,13 +1587,15 @@ function exitFilterMatchesResult(result, exitFilter = 'any') {
 }
 
 function targetMetaMatchesResult(result, target) {
-    if (target.country) {
-        const countries = String(result.country || '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
-        if (!countries.includes(String(target.country).toUpperCase())) return false;
+    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
+    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
+    if (countries.length) {
+        const resultCountries = normalizeListValues(result.country, item => item.toUpperCase());
+        if (!countries.some(country => resultCountries.includes(country))) return false;
     }
-    if (target.asn) {
-        const asns = String(result.asn || '').replace(/AS/gi, '').split(/[\/,\s]+/).filter(Boolean);
-        if (!asns.includes(String(target.asn).replace(/^AS/i, ''))) return false;
+    if (asns.length) {
+        const resultAsns = normalizeListValues(String(result.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
+        if (!asns.some(asn => resultAsns.includes(String(asn).toUpperCase()))) return false;
     }
     return true;
 }
@@ -1602,13 +1608,15 @@ function isUnknownMetaValue(value) {
 function targetMetaMatchesStoredEntry(entry, target) {
     const meta = parsePoolEntry(entry);
     if (!meta) return true;
-    if (target.country && !isUnknownMetaValue(meta.country)) {
-        const countries = String(meta.country || '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
-        if (!countries.includes(String(target.country).toUpperCase())) return false;
+    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
+    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
+    if (countries.length && !isUnknownMetaValue(meta.country)) {
+        const storedCountries = normalizeListValues(meta.country, item => item.toUpperCase());
+        if (!countries.some(country => storedCountries.includes(country))) return false;
     }
-    if (target.asn && !isUnknownMetaValue(meta.asn)) {
-        const asns = String(meta.asn || '').replace(/AS/gi, '').split(/[\/,\s]+/).filter(Boolean);
-        if (!asns.includes(String(target.asn).replace(/^AS/i, ''))) return false;
+    if (asns.length && !isUnknownMetaValue(meta.asn)) {
+        const storedAsns = normalizeListValues(String(meta.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
+        if (!asns.some(asn => storedAsns.includes(String(asn).toUpperCase()))) return false;
     }
     if (normalizeExitFilter(target.exitFilter) !== 'any' && !isUnknownMetaValue(meta.stack)) {
         if (!exitFilterMatchesResult({ stack: meta.stack }, target.exitFilter)) return false;
@@ -1621,17 +1629,27 @@ function buildCheckApiUrl(apiUrl, addr) {
     if (apiUrl.includes('{proxyip}')) return apiUrl.replaceAll('{proxyip}', encoded);
     return `${apiUrl}${encoded}`;
 }
+async function mapWithConcurrency(items, limit, mapper) {
+    const source = Array.isArray(items) ? items : [];
+    const results = new Array(source.length);
+    let cursor = 0;
+    const workerCount = Math.min(source.length, Math.max(1, parseInt(limit, 10) || 1));
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (cursor < source.length) {
+            const index = cursor++;
+            results[index] = await mapper(source[index], index);
+        }
+    }));
+    return results;
+}
 
 // 批量调用检测接口，并统一整理 API 返回的出口、ASN、国家信息
 async function batchCheckIPs(ipList, checkFn, config) {
     if (!ipList || ipList.length === 0) return [];
-
-    const effectiveCheckFn = checkFn;
-
-    const checkSettled = await Promise.allSettled(ipList.map(addr => effectiveCheckFn(addr)));
-    const checkResults = checkSettled.map((r, i) => r.status === 'fulfilled'
-        ? normalizeCheckResult(r.value, ipList[i])
-        : normalizeCheckResult({ success: false }, ipList[i], true));
+    const checkResults = await mapWithConcurrency(ipList, getRuntimeSettings(config).CONCURRENT_CHECKS, async addr => {
+        try { return normalizeCheckResult(await checkFn(addr), addr); }
+        catch { return normalizeCheckResult({ success: false }, addr, true); }
+    });
 
     return checkResults.map((result, i) => ({
         address: ipList[i],
@@ -1648,6 +1666,7 @@ async function batchCheckIPs(ipList, checkFn, config) {
         apiError: result.apiError || false
     }));
 }
+
 async function getDomainStatus(target, config) {
     const cfConfig = getTargetCFConfig(config, target);
     const result = {
@@ -1736,35 +1755,58 @@ async function checkProxyIP(input, config) {
     const addr = normalizeCheckAddr(input);
     const timeout = getRuntimeSettings(config).CHECK_TIMEOUT;
     const apis = [config.checkApi, config.checkApiBackup].map(api => String(api || '').trim()).filter(Boolean);
+
+    if (!apis.length) {
+        // 未配置任何检测接口，无法判断，视为接口异常（失效，不做删除）
+        return normalizeCheckResult({ success: false }, addr, true);
+    }
+
     let lastResult = null;
-    // 只要任意一个检测接口返回了可解析的响应（不论判定结果是成功还是失败），
-    // 就说明接口本身可用；allApisErrored 用于区分"接口不可用"和"接口正常但判定失效"。
-    let allApisErrored = true;
+    // apiBroken：真正的"接口自身故障"——HTTP错误 / 响应不是合法JSON / 非超时的网络异常（如DNS失败、连不上检测服务本身）。
+    // 只有这类情况才代表"无法判断候选真实状态"，标记为 apiError=true（失效，维护时不做删除）。
+    // 单纯的请求超时不计入 apiBroken——超时代表这个候选检测太慢，按真实失败处理（会被删除/替换）。
+    let apiBroken = false;
 
     for (const apiUrl of apis) {
         try {
             const r = await fetch(buildCheckApiUrl(apiUrl, addr), { signal: AbortSignal.timeout(timeout) });
-            if (!r.ok) continue; // HTTP错误，视为接口异常，继续尝试下一个接口
+            if (!r.ok) {
+                // HTTP错误，视为接口自身故障，继续尝试下一个接口
+                apiBroken = true;
+                continue;
+            }
 
             const data = safeJSONParse(await r.text(), null);
-            if (!data || typeof data !== 'object') continue; // 无法解析，视为接口异常
+            if (!data || typeof data !== 'object') {
+                // 响应无法解析，视为接口自身故障，继续尝试下一个接口
+                apiBroken = true;
+                continue;
+            }
 
-            allApisErrored = false; // 接口本身正常返回了数据
             const result = normalizeCheckResult(data, addr);
             lastResult = result;
             if (result.success) return result;
-        } catch {
-            // 当前接口超时/网络异常，继续尝试下一个检测接口。
+        } catch (err) {
+            if (err?.name !== 'TimeoutError' && err?.name !== 'AbortError') {
+                // 非超时的网络异常（DNS失败/连接被拒/无法连上检测接口本身等），视为接口自身故障
+                apiBroken = true;
+            }
+            // 是超时：不标记 apiBroken，视为该候选检测太慢，继续尝试下一个接口确认
         }
     }
 
-    if (allApisErrored) {
-        // 主备接口均不可用（超时/网络错误/HTTP错误/无法解析JSON），无法判断该地址真实状态，
-        // 标记 apiError=true，调用方应避免据此做删除等破坏性操作。
+    if (lastResult) {
+        // 至少有一次拿到接口正常返回的合法结果（即便判定为失败），直接采用，不算 apiError
+        return lastResult;
+    }
+
+    if (apiBroken) {
+        // 所有尝试里至少出现过一次"接口自身故障"，且没有任何一次拿到合法结果，无法判断候选真实状态
         return normalizeCheckResult({ success: false }, addr, true);
     }
 
-    return lastResult ?? normalizeCheckResult({ success: false }, addr, false);
+    // 走到这里：所有尝试都是纯超时，没有接口自身故障——判定为真实失败（会被删除/替换），不算 apiError
+    return normalizeCheckResult({ success: false }, addr, false);
 }
 
 async function fetchCF(config, path, method = 'GET', body = null) {
@@ -1881,16 +1923,13 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
     return candidates;
 }
 
-async function checkCurrentItems(currentItems, checkFn) {
-    const settled = await Promise.allSettled(
-        currentItems.map(item => checkFn(item.addr).then(
-            result => ({ item, result: normalizeCheckResult(result, item.addr) }),
-            () => ({ item, result: normalizeCheckResult({ success: false }, item.addr, true) })
-        ))
-    );
-    return settled
-        .map(r => r.status === 'fulfilled' ? r.value : null)
-        .filter(Boolean);
+async function checkCurrentItems(currentItems, checkFn, config) {
+    return mapWithConcurrency(currentItems, getRuntimeSettings(config).CONCURRENT_CHECKS, async item => {
+        let result;
+        try { result = normalizeCheckResult(await checkFn(item.addr), item.addr); }
+        catch { result = normalizeCheckResult({ success: false }, item.addr, true); }
+        return { item, result };
+    });
 }
 
 function appendCheckDetail(report, item, result) {
@@ -1958,6 +1997,7 @@ async function runMaintenanceCore({
     report,
     poolKey,
     checkFn,
+    config,
     currentItems,
     getCurrentActiveValue,
     onRemoveCurrent = null,
@@ -1971,7 +2011,7 @@ async function runMaintenanceCore({
     const activeItems = [];
     report.poolKeyUsed = poolKey;
 
-    for (const { item, result } of await checkCurrentItems(currentItems, checkFn)) {
+    for (const { item, result } of await checkCurrentItems(currentItems, checkFn, config)) {
         appendCheckDetail(report, item, result);
         if (checkResultMatchesTarget(result, target)) {
             activeItems.push(getCurrentActiveValue(item, result));
@@ -1980,9 +2020,6 @@ async function runMaintenanceCore({
         }
 
         if (result.apiError) {
-            // 检测接口本身异常（超时/网络错误/无法解析），无法判断该地址真实状态。
-            // 为避免误删/误清空（尤其是 TXT 模式整条覆写），将其视为"保留现状"，
-            // 计入 activeItems：不删除DNS记录、不放入垃圾桶、不计入待补充缺口。
             report.apiErrorCount = (report.apiErrorCount || 0) + 1;
             activeItems.push(getCurrentActiveValue(item, result));
             addLog(`  ⚠️ ${item.addr} - 检测接口异常，保留现有记录（未删除）`);
@@ -2060,6 +2097,7 @@ async function runMaintenanceCore({
 
     return { activeItems, poolList, poolModified, trashBatch };
 }
+
 async function finalizeMaintenanceCore(env, poolKey, report, state, config) {
     await savePoolAndTrash(env, poolKey, state.poolList, state.poolModified, state.trashBatch, config);
     report.poolAfterCount = state.poolList.length;
@@ -2098,6 +2136,7 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn, c
         report,
         poolKey,
         checkFn,
+        config,
         currentItems,
         getCurrentActiveValue: item => item.host,
         onRemoveCurrent: item => deleteDNSRecord(cfConfig, item.id),
@@ -2144,6 +2183,7 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
         report,
         poolKey,
         checkFn,
+        config,
         currentItems,
         getCurrentActiveValue: item => item.addr,
         formatCurrentRemovedLog: (item, result) => result.success
@@ -4444,7 +4484,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         showTargetEditor(index, (getDraftTargets()[index] || {}));
     }
 
-    function showTargetEditor(index, target = {}) {
+   function showTargetEditor(index, target = {}) {
         const panel = byId('target-edit-panel');
         if (!panel) return;
         const mode = target.mode === 'TXT' ? 'TXT' : 'A';
@@ -4456,8 +4496,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const targetFields = [
             renderField('input', { id: 'edit-target-prefix', label: '域名前缀', hint: '留空表示根域。', value: target.prefix || '', placeholder: 'kr' }),
             renderField('input', { id: 'edit-target-min', label: '活跃数', hint: '最小可用数量。', value: String(target.minActive ?? 3), placeholder: '3', attrs: 'type="number" min="0"' }),
-            renderField('input', { id: 'edit-target-country', label: '国家', hint: '可选，填写国家代码。', value: target.country || '', placeholder: '国家代码' }),
-            renderField('input', { id: 'edit-target-asn', label: 'ASN', hint: '可选，填写 ASN 编号。', value: target.asn || '', placeholder: 'ASN编号' })
+            renderField('input', { id: 'edit-target-country', label: '国家', hint: '可填多个，逗号分隔；任一命中即可。', value: target.country || '', placeholder: 'JP,US,SG' }),
+            renderField('input', { id: 'edit-target-asn', label: 'ASN', hint: '可填多个，逗号分隔；任一命中即可。', value: target.asn || '', placeholder: '13335,209242' })
         ].join('');
         const targetContent = '<div class="config-edit-grid">'
             + renderField('select', { id: 'edit-target-zone', label: '权限配置', hint: '选择配置1/2/3。', className: 'form-select form-select-sm' }, getZoneOptionsHtml(target.zoneIndex ?? 0))
@@ -4500,7 +4540,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     function getTargetEditorValue() {
         const zoneIndex = parseInt(getInputValue('edit-target-zone') || '0', 10) || 0;
-        const prefix = getInputValue('edit-target-prefix').replace(/^\\.+|\\.+$/g, '');
+        const prefix = getInputValue('edit-target-prefix').replace(/^\.+|\.+$/g, '');
         const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
         const portInput = byId('edit-target-port');
         const port = mode === 'TXT' ? 'any' : ((portInput?.value || '').trim() || '443');
