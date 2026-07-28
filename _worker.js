@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.28-19.33';
+const APP_VERSION = '2026.07.28-19.45';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -640,24 +640,15 @@ async function handleSavePool(body, env) {
             message: `已删除 ${removed} 个IP，剩余 ${existingMap.size} 个IP`
         };
     } else {
-        // 追加模式：同址条目字段级合并（新行已知字段优先，不抹掉已有元数据）；
-        // 跳过垃圾桶内地址（保存到垃圾桶自身时不过滤）
-        const trashSet = poolKey === POOL_TRASH_KEY ? null
-            : new Set(parsePoolList(await env.IP_DATA.get(POOL_TRASH_KEY) || '').map(line => extractIPKey(line)));
-        let skippedTrash = 0;
+        // 追加模式：同址条目字段级合并（新行已知字段优先，不抹掉已有元数据）
         poolListToMap(newIPs).forEach((line, key) => {
-            if (trashSet && trashSet.has(key)) {
-                skippedTrash++;
-                return;
-            }
             existingMap.set(key, existingMap.has(key) ? mergePoolEntryLines(existingMap.get(key), line) : line);
         });
 
         responseData = {
             success: true,
             count: existingMap.size,
-            added: existingMap.size - existingCount,
-            skippedTrash
+            added: existingMap.size - existingCount
         };
     }
 
@@ -5095,8 +5086,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 if (mode === 'replace') {
                     log(\`✅ \${r.message}\`, 'success');
                 } else {
-                    const skipNote = r.skippedTrash ? '，跳过垃圾桶内 ' + r.skippedTrash + ' 个' : '';
-                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\${skipNote}\`, 'success');
+                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\`, 'success');
                 }
                 setPoolCount(r.count);
                 clearPoolInput();
