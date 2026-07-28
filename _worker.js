@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.28-17.20';
+const APP_VERSION = '2026.07.28-19.33';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -214,6 +214,10 @@ function formatPoolStack(stack) {
     return ['v4', 'v6', 'v4/v6'].includes(normalized) ? normalized : 'null';
 }
 
+function extractPoolComment(line) {
+    return splitComment(line).comment;
+}
+
 function buildPoolEntryFromCheckResult(addr, result, previousEntry = null) {
     const parsed = parseAddr(addr);
     const prevMeta = previousEntry ? parsePoolEntry(previousEntry) : null;
@@ -225,18 +229,28 @@ function buildPoolEntryFromCheckResult(addr, result, previousEntry = null) {
     const nextStack = !isUnknownMetaValue(result?.stack) ? formatPoolStack(result?.stack)
         : (prevMeta && !isUnknownMetaValue(prevMeta.stack) ? formatPoolStack(prevMeta.stack) : 'null');
 
-    return [
+    const base = [
         parsed.address || normalizeCheckAddr(addr),
         nextAsn,
         nextCountry,
         nextStack
     ].join(',');
+    return base + (previousEntry ? extractPoolComment(previousEntry) : '');
 }
 
-function poolEntryNeedsMetadataRefresh(entry) {
-    const meta = parsePoolEntry(entry);
-    if (!meta) return false;
-    return isUnknownMetaValue(meta.asn) || isUnknownMetaValue(meta.country) || isUnknownMetaValue(meta.stack);
+function mergePoolEntryLines(oldLine, newLine) {
+    const oldMeta = parsePoolEntry(oldLine);
+    const newMeta = parsePoolEntry(newLine);
+    if (!oldMeta) return newLine;
+    if (!newMeta) return oldLine;
+    const pick = (newVal, oldVal) => !isUnknownMetaValue(newVal) ? newVal : (!isUnknownMetaValue(oldVal) ? oldVal : 'null');
+    const base = [
+        newMeta.address,
+        pick(newMeta.asn, oldMeta.asn),
+        pick(newMeta.country, oldMeta.country),
+        pick(newMeta.stack, oldMeta.stack)
+    ].join(',');
+    return base + (extractPoolComment(newLine) || extractPoolComment(oldLine));
 }
 
 function normalizeStackFilter(value) {
@@ -626,13 +640,24 @@ async function handleSavePool(body, env) {
             message: `已删除 ${removed} 个IP，剩余 ${existingMap.size} 个IP`
         };
     } else {
-        // 追加模式
-        poolListToMap(newIPs).forEach((line, key) => existingMap.set(key, line));
+        // 追加模式：同址条目字段级合并（新行已知字段优先，不抹掉已有元数据）；
+        // 跳过垃圾桶内地址（保存到垃圾桶自身时不过滤）
+        const trashSet = poolKey === POOL_TRASH_KEY ? null
+            : new Set(parsePoolList(await env.IP_DATA.get(POOL_TRASH_KEY) || '').map(line => extractIPKey(line)));
+        let skippedTrash = 0;
+        poolListToMap(newIPs).forEach((line, key) => {
+            if (trashSet && trashSet.has(key)) {
+                skippedTrash++;
+                return;
+            }
+            existingMap.set(key, existingMap.has(key) ? mergePoolEntryLines(existingMap.get(key), line) : line);
+        });
 
         responseData = {
             success: true,
             count: existingMap.size,
-            added: existingMap.size - existingCount
+            added: existingMap.size - existingCount,
+            skippedTrash
         };
     }
 
@@ -1942,7 +1967,7 @@ async function addAddressRecord(cfConfig, domain, ip) {
     return { ok: result !== null, type: recordType };
 }
 
-async function getCandidateIPs(env, target, addLog, poolKey, excludeAddrs = null) {
+async function getCandidateIPs(env, target, addLog, poolKey) {
     const pool = await env.IP_DATA.get(poolKey) || '';
     const poolName = getPoolFixedName(poolKey);
 
@@ -1952,21 +1977,16 @@ async function getCandidateIPs(env, target, addLog, poolKey, excludeAddrs = null
     }
 
     let candidates = parsePoolList(pool);
-    const excluded = excludeAddrs instanceof Set ? excludeAddrs : null;
 
-    // TXT模式不过滤端口，地址记录模式才过滤
+    // TXT模式不过滤端口，地址记录模式才过滤。
+    // 无需排除与DNS同址的条目：buildCandidate 拦截已在 activeItems 的地址，checkCache 让重复检测零成本。
     if (target.mode === 'A') {
         candidates = candidates.filter(l => {
             const ipPort = extractIPKey(l);
-            if (excluded && excluded.has(ipPort)) return false;
             return extractPortFromAddr(ipPort) === target.port && targetMetaMatchesStoredEntry(l, target);
         });
     } else {
-        candidates = candidates.filter(l => {
-            const ipPort = extractIPKey(l);
-            if (excluded && excluded.has(ipPort)) return false;
-            return targetMetaMatchesStoredEntry(l, target);
-        });
+        candidates = candidates.filter(l => targetMetaMatchesStoredEntry(l, target));
     }
 
     addLog(`📦 使用 ${poolName}: ${candidates.length} 个候选IP`);
@@ -2029,11 +2049,13 @@ function appendMaintenanceIPReport(list, ip, result, extra = {}) {
     });
 }
 
-function refreshPoolEntryMetadata(poolList, item, ipPort, result) {
-    if (!(result.success && poolEntryNeedsMetadataRefresh(item))) {
-        return { poolList, modified: false };
-    }
-    const refreshed = buildPoolEntryFromCheckResult(ipPort, result, item);
+// 实测成功即校准：用实测值重建条目（未知字段回落旧值、保留 #备注），有变化才写回
+function refreshPoolEntryMetadata(poolList, ipPort, result) {
+    if (!result.success) return { poolList, modified: false };
+    const existing = poolList.find(line => extractIPKey(line) === ipPort);
+    if (!existing) return { poolList, modified: false };
+    const refreshed = buildPoolEntryFromCheckResult(ipPort, result, existing);
+    if (refreshed === existing) return { poolList, modified: false };
     return {
         poolList: poolList.map(line => extractIPKey(line) === ipPort ? refreshed : line),
         modified: true
@@ -2065,6 +2087,9 @@ async function runMaintenanceCore({
         appendCheckDetail(report, item, result);
         if (checkResultMatchesTarget(result, target)) {
             activeItems.push(getCurrentActiveValue(item, result));
+            const hit = refreshPoolEntryMetadata(poolList, item.addr, result);
+            poolList = hit.poolList;
+            poolModified = poolModified || hit.modified;
             addLog(`  ✅ ${item.addr} - ${result.colo} (${result.responseTime}ms)`);
             continue;
         }
@@ -2080,7 +2105,12 @@ async function runMaintenanceCore({
         appendMaintenanceIPReport(report.removed, item.addr, result, { reason });
         if (onRemoveCurrent) await onRemoveCurrent(item, result);
 
-        if (!result.success) {
+        if (result.success) {
+            // 存活但不符合筛选（如标签错误）：同步校准池内标签，避免下轮按错标签重复误选
+            const hit = refreshPoolEntryMetadata(poolList, item.addr, result);
+            poolList = hit.poolList;
+            poolModified = poolModified || hit.modified;
+        } else {
             const removed = removePoolEntry(poolList, item.addr);
             poolList = removed.list;
             if (removed.removed) {
@@ -2099,8 +2129,7 @@ async function runMaintenanceCore({
 
     if (activeItems.length < target.minActive) {
         addLog(`需补充: ${target.minActive - activeItems.length} 个`);
-        const currentAddrSet = new Set(currentItems.map(item => extractIPKey(item.addr)));
-        const candidates = await getCandidateIPs(env, target, addLog, poolKey, currentAddrSet);
+        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
 
         for (const item of candidates) {
             if (activeItems.length >= target.minActive) break;
@@ -2114,7 +2143,7 @@ async function runMaintenanceCore({
                     report.apiErrorCount = (report.apiErrorCount || 0) + 1;
                     addLog(`  ⚠️ ${candidate.addr} - 检测接口异常，跳过`);
                 } else if (result.success) {
-                    const refreshed = refreshPoolEntryMetadata(poolList, item, candidate.addr, result);
+                    const refreshed = refreshPoolEntryMetadata(poolList, candidate.addr, result);
                     poolList = refreshed.poolList;
                     poolModified = poolModified || refreshed.modified;
                     addLog(`  ⏭️ ${candidate.addr} - ${describeMatchFailure(result, target)}`);
@@ -2125,8 +2154,11 @@ async function runMaintenanceCore({
                         report.poolRemoved++;
                         poolModified = true;
                         trashBatch.push({ ipAddr: removed.entry || candidate.addr, reason: '维护失效', poolKey });
+                        addLog(`  ⏭️ ${candidate.addr} - 检测失败，已从${getPoolFixedName(poolKey)}移除并放入垃圾桶`);
+                    } else {
+                        // 同址条目本轮已作为当前记录处理过（候选读的是维护前的池快照）
+                        addLog(`  ⏭️ ${candidate.addr} - 检测失败，跳过`);
                     }
-                    addLog(`  ⏭️ ${candidate.addr} - 检测失败，已从${getPoolFixedName(poolKey)}移除并放入垃圾桶`);
                 }
                 continue;
             }
@@ -2140,7 +2172,7 @@ async function runMaintenanceCore({
             activeItems.push(addResult.activeValue ?? candidate.activeValue ?? candidate.addr);
             appendMaintenanceIPReport(report.added, candidate.addr, result);
 
-            const refreshed = refreshPoolEntryMetadata(poolList, item, candidate.addr, result);
+            const refreshed = refreshPoolEntryMetadata(poolList, candidate.addr, result);
             poolList = refreshed.poolList;
             poolModified = poolModified || refreshed.modified;
             addLog(`  ✅ ${candidate.addr} - ${result.colo} (${result.responseTime}ms)`);
@@ -5063,7 +5095,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 if (mode === 'replace') {
                     log(\`✅ \${r.message}\`, 'success');
                 } else {
-                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\`, 'success');
+                    const skipNote = r.skippedTrash ? '，跳过垃圾桶内 ' + r.skippedTrash + ' 个' : '';
+                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\${skipNote}\`, 'success');
                 }
                 setPoolCount(r.count);
                 clearPoolInput();
