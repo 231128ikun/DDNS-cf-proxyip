@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.28-15.00';
+const APP_VERSION = '2026.07.28-17.20';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -3979,7 +3979,7 @@ function renderDashboardPage() {
                             <button class="btn btn-sm btn-outline-secondary" onclick="quickDeduplicate()" title="去除重复IP">去重</button>
                         </div>
                         <div id="filter-help" class="filter-help" hidden>
-                            支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4/v6/dual</code>、普通关键词。<br>
+                            支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4</code>、<code>stack:v6</code>、<code>stack:dual</code>（双栈，等同 v4/v6）、普通关键词。<br>
                             空格表示“且”；同一条件内用逗号可以表示“或”，例如 <code>country:US,KR</code> 表示美国或韩国；竖线 <code>|</code> 表示整段条件“或”。<br>
                             例如：<code>country:US,KR stack:v4</code>（美国或韩国 且 出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>。
                         </div>
