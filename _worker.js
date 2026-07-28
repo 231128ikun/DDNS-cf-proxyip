@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.28-20.04';
+const APP_VERSION = '2026.07.29-01.21';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -4623,7 +4623,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     function getTargetEditorValue() {
         const zoneIndex = parseInt(getInputValue('edit-target-zone') || '0', 10) || 0;
-        const prefix = getInputValue('edit-target-prefix').replace(/^\.+|\.+$/g, '');
+        const prefix = getInputValue('edit-target-prefix').replace(/^\\.+|\\.+$/g, '');
         const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
         const portInput = byId('edit-target-port');
         const port = mode === 'TXT' ? 'any' : ((portInput?.value || '').trim() || '443');
