@@ -4,7 +4,7 @@
 
 项目不依赖自建服务器，核心代码是单文件 Worker：[`_worker.js`](./_worker.js)。
 
-> 本项目依赖 check-proxyip-api，若要自行部署后端代码，见下方参考代码。现在可行的方案是部署[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)然后 ` http://部署的项目地址/check?proxyip= `填入检测api中。（目前snippests部署的方案已无法使用）
+> 本项目依赖 check-proxyip-api，若要自行部署后端代码，见下方参考代码。现在可行的方案是部署[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)然后将` http://部署的项目地址/check?proxyip= `填入检测api中。（snippets版本可参考[CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)自行修改）
 
 ---
 
@@ -162,6 +162,8 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | `TG_ID` | Telegram Chat ID | 空 |
 | `TG_ENABLED` | Telegram 通知开关 | `true` |
 | `SCHEDULED_ENABLED` | 定时维护开关 | `true` |
+
+> 备用检测api不保证长期可用，建议自行部署，目前的检测逻辑是主接口检测失败后，备用接口复检。
 
 ### 配置中心填写项
 
