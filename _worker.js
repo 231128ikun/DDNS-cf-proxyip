@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.28-19.45';
+const APP_VERSION = '2026.07.28-20.04';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -4003,8 +4003,8 @@ function renderDashboardPage() {
                         </div>
                         <div id="filter-help" class="filter-help" hidden>
                             支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4</code>、<code>stack:v6</code>、<code>stack:dual</code>（双栈，等同 v4/v6）、普通关键词。<br>
-                            空格表示“且”；同一条件内用逗号可以表示“或”，例如 <code>country:US,KR</code> 表示美国或韩国；竖线 <code>|</code> 表示整段条件“或”。<br>
-                            例如：<code>country:US,KR stack:v4</code>（美国或韩国 且 出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>。
+                            空格表示“且”；逗号表示同一条件内“或”（如 <code>country:US,KR</code> 即美国或韩国）；竖线 <code>|</code> 表示整段之间“或”，优先级最低（先算空格和逗号，最后算 <code>|</code>）。<br>
+                            例如：<code>country:US,KR stack:v4</code>（美国或韩国，且出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>（韩国且ASN为AS4766，或者美国，两者满足其一即可）。
                         </div>
                         <div id="filter-preview" class="filter-preview">输入条件后会显示匹配数量。</div>
                         <span class="text-secondary small pool-stat" title="当前池中IP数量">📊<span id="pool-count">0</span></span>
