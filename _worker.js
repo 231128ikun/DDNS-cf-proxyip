@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.07.12-19.12';
+const APP_VERSION = '2026.07.28-15.00';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -214,13 +214,22 @@ function formatPoolStack(stack) {
     return ['v4', 'v6', 'v4/v6'].includes(normalized) ? normalized : 'null';
 }
 
-function buildPoolEntryFromCheckResult(addr, result) {
+function buildPoolEntryFromCheckResult(addr, result, previousEntry = null) {
     const parsed = parseAddr(addr);
+    const prevMeta = previousEntry ? parsePoolEntry(previousEntry) : null;
+
+    const nextAsn = !isUnknownMetaValue(result?.asn) ? formatPoolAsn(result?.asn)
+        : (prevMeta && !isUnknownMetaValue(prevMeta.asn) ? formatPoolAsn(prevMeta.asn) : 'null');
+    const nextCountry = !isUnknownMetaValue(result?.country) ? result.country
+        : (prevMeta && !isUnknownMetaValue(prevMeta.country) ? prevMeta.country : 'null');
+    const nextStack = !isUnknownMetaValue(result?.stack) ? formatPoolStack(result?.stack)
+        : (prevMeta && !isUnknownMetaValue(prevMeta.stack) ? formatPoolStack(prevMeta.stack) : 'null');
+
     return [
         parsed.address || normalizeCheckAddr(addr),
-        formatPoolAsn(result?.asn),
-        result?.country || 'null',
-        formatPoolStack(result?.stack)
+        nextAsn,
+        nextCountry,
+        nextStack
     ].join(',');
 }
 
@@ -1572,7 +1581,9 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
         supportsIpv4: stack === 'v4' || stack === 'v4/v6',
         supportsIpv6: stack === 'v6' || stack === 'v4/v6',
         dualStack: stack === 'v4/v6',
-        apiError: Boolean(apiError)
+        // checkProxyIP 返回的是已归一化结果，维护流程会二次归一化；
+        // 不代表该地址被接口判定为失效；data.apiError 用于二次归一化时保留该标记。
+        apiError: Boolean(apiError) || data.apiError === true
     };
 }
 
@@ -1622,6 +1633,39 @@ function targetMetaMatchesStoredEntry(entry, target) {
         if (!exitFilterMatchesResult({ stack: meta.stack }, target.exitFilter)) return false;
     }
     return true;
+}
+
+function describeMatchFailure(result, target) {
+    const parts = [];
+
+    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
+    if (countries.length) {
+        const resultCountries = normalizeListValues(result.country, item => item.toUpperCase());
+        const matched = countries.some(country => resultCountries.includes(country));
+        if (!matched) {
+            parts.push(`国家不符(要求${countries.join('/')}，实际${result.country || 'null'})`);
+        }
+    }
+
+    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
+    if (asns.length) {
+        const resultAsns = normalizeListValues(String(result.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
+        const matched = asns.some(asn => resultAsns.includes(String(asn).toUpperCase()));
+        if (!matched) {
+            parts.push(`ASN不符(要求${asns.map(a => 'AS' + a).join('/')}，实际${result.asn || 'null'})`);
+        }
+    }
+
+    const exitFilter = normalizeExitFilter(target.exitFilter);
+    if (exitFilter !== 'any' && !exitFilterMatchesResult(result, exitFilter)) {
+        const filterLabel = { v4: 'IPv4', v6: 'IPv6', dual: '双栈' }[exitFilter] || exitFilter;
+        parts.push(`出口不符(要求${filterLabel}，实际${result.stack || 'null'})`);
+    }
+
+    if (!parts.length) {
+        return '出口/国家/ASN不匹配';
+    }
+    return parts.join('，');
 }
 
 function buildCheckApiUrl(apiUrl, addr) {
@@ -1898,7 +1942,7 @@ async function addAddressRecord(cfConfig, domain, ip) {
     return { ok: result !== null, type: recordType };
 }
 
-async function getCandidateIPs(env, target, addLog, poolKey) {
+async function getCandidateIPs(env, target, addLog, poolKey, excludeAddrs = null) {
     const pool = await env.IP_DATA.get(poolKey) || '';
     const poolName = getPoolFixedName(poolKey);
 
@@ -1908,15 +1952,21 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
     }
 
     let candidates = parsePoolList(pool);
+    const excluded = excludeAddrs instanceof Set ? excludeAddrs : null;
 
     // TXT模式不过滤端口，地址记录模式才过滤
     if (target.mode === 'A') {
         candidates = candidates.filter(l => {
             const ipPort = extractIPKey(l);
+            if (excluded && excluded.has(ipPort)) return false;
             return extractPortFromAddr(ipPort) === target.port && targetMetaMatchesStoredEntry(l, target);
         });
     } else {
-        candidates = candidates.filter(l => targetMetaMatchesStoredEntry(l, target));
+        candidates = candidates.filter(l => {
+            const ipPort = extractIPKey(l);
+            if (excluded && excluded.has(ipPort)) return false;
+            return targetMetaMatchesStoredEntry(l, target);
+        });
     }
 
     addLog(`📦 使用 ${poolName}: ${candidates.length} 个候选IP`);
@@ -1983,7 +2033,7 @@ function refreshPoolEntryMetadata(poolList, item, ipPort, result) {
     if (!(result.success && poolEntryNeedsMetadataRefresh(item))) {
         return { poolList, modified: false };
     }
-    const refreshed = buildPoolEntryFromCheckResult(ipPort, result);
+    const refreshed = buildPoolEntryFromCheckResult(ipPort, result, item);
     return {
         poolList: poolList.map(line => extractIPKey(line) === ipPort ? refreshed : line),
         modified: true
@@ -2026,7 +2076,7 @@ async function runMaintenanceCore({
             continue;
         }
 
-        const reason = result.success ? '出口/国家/ASN不匹配' : '检测失效';
+        const reason = result.success ? describeMatchFailure(result, target) : '检测失效';
         appendMaintenanceIPReport(report.removed, item.addr, result, { reason });
         if (onRemoveCurrent) await onRemoveCurrent(item, result);
 
@@ -2042,14 +2092,15 @@ async function runMaintenanceCore({
 
         addLog(formatCurrentRemovedLog
             ? formatCurrentRemovedLog(item, result)
-            : (result.success ? `  ❌ ${item.addr} - 出口/国家/ASN不匹配，已移除` : `  ❌ ${item.addr} - 失效已移除，已放入垃圾桶`));
+            : (result.success ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已移除` : `  ❌ ${item.addr} - 失效已移除，已放入垃圾桶`));
     }
 
     report.beforeActive = activeItems.length;
 
     if (activeItems.length < target.minActive) {
         addLog(`需补充: ${target.minActive - activeItems.length} 个`);
-        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
+        const currentAddrSet = new Set(currentItems.map(item => extractIPKey(item.addr)));
+        const candidates = await getCandidateIPs(env, target, addLog, poolKey, currentAddrSet);
 
         for (const item of candidates) {
             if (activeItems.length >= target.minActive) break;
@@ -2066,9 +2117,16 @@ async function runMaintenanceCore({
                     const refreshed = refreshPoolEntryMetadata(poolList, item, candidate.addr, result);
                     poolList = refreshed.poolList;
                     poolModified = poolModified || refreshed.modified;
-                    addLog(`  ⏭️ ${candidate.addr} - 出口/国家/ASN不匹配`);
+                    addLog(`  ⏭️ ${candidate.addr} - ${describeMatchFailure(result, target)}`);
                 } else {
-                    addLog(`  ⏭️ ${candidate.addr} - 检测失败，跳过`);
+                    const removed = removePoolEntry(poolList, candidate.addr);
+                    poolList = removed.list;
+                    if (removed.removed) {
+                        report.poolRemoved++;
+                        poolModified = true;
+                        trashBatch.push({ ipAddr: removed.entry || candidate.addr, reason: '维护失效', poolKey });
+                    }
+                    addLog(`  ⏭️ ${candidate.addr} - 检测失败，已从${getPoolFixedName(poolKey)}移除并放入垃圾桶`);
                 }
                 continue;
             }
@@ -2141,7 +2199,7 @@ async function maintainARecords(env, target, addLog, report, poolKey, checkFn, c
         getCurrentActiveValue: item => item.host,
         onRemoveCurrent: item => deleteDNSRecord(cfConfig, item.id),
         formatCurrentRemovedLog: (item, result) => result.success
-            ? `  ❌ ${item.addr} - 出口/国家/ASN不匹配，已删除`
+            ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已删除`
             : `  ❌ ${item.addr} - 失效已删除，已放入垃圾桶`,
         buildCandidate: (item, activeItems) => {
             const ipPort = extractIPKey(item);
@@ -2187,7 +2245,7 @@ async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn,
         currentItems,
         getCurrentActiveValue: item => item.addr,
         formatCurrentRemovedLog: (item, result) => result.success
-            ? `  ❌ ${item.addr} - 出口/国家/ASN不匹配，已从TXT移除`
+            ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已从TXT移除`
             : `  ❌ ${item.addr} - 失效，已从TXT移除并放入垃圾桶`,
         buildCandidate: (item, activeItems) => {
             const ipPort = extractIPKey(item);
@@ -3921,7 +3979,9 @@ function renderDashboardPage() {
                             <button class="btn btn-sm btn-outline-secondary" onclick="quickDeduplicate()" title="去除重复IP">去重</button>
                         </div>
                         <div id="filter-help" class="filter-help" hidden>
-                            支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、普通关键词。空格表示“且”，竖线 <code>|</code> 表示“或”,例如 <code>country:KR asn:AS4766 | country:US</code>
+                            支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4/v6/dual</code>、普通关键词。<br>
+                            空格表示“且”；同一条件内用逗号可以表示“或”，例如 <code>country:US,KR</code> 表示美国或韩国；竖线 <code>|</code> 表示整段条件“或”。<br>
+                            例如：<code>country:US,KR stack:v4</code>（美国或韩国 且 出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>。
                         </div>
                         <div id="filter-preview" class="filter-preview">输入条件后会显示匹配数量。</div>
                         <span class="text-secondary small pool-stat" title="当前池中IP数量">📊<span id="pool-count">0</span></span>
@@ -4791,7 +4851,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
 
     function formatAsn(asn) {
         const values = String(asn || '')
-            .split(/[\/,\s]+/)
+            .split(/[\/,\\s]+/)
             .map(item => item.trim())
             .filter(item => item && !['null', 'unknown', 'n/a', '-', 'asnull', 'asunknown'].includes(item.toLowerCase()));
         if (!values.length) return '';
@@ -4833,6 +4893,15 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         return { host: value, port: '443' };
     }
 
+    function normalizeStackFilter(value) {
+        const text = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+        if (!text) return 'v4/v6';
+        if (['v4', 'ipv4', 'ipv4-only', 'only-ipv4'].includes(text)) return 'v4';
+        if (['v6', 'ipv6', 'ipv6-only', 'only-ipv6'].includes(text)) return 'v6';
+        if (['v4/v6', 'v6/v4', 'dual', 'dual-stack', 'both', 'all', 'ipv4-ipv6'].includes(text)) return 'v4/v6';
+        return text.replace('-', '_');
+    }
+
     function parsePoolLine(line) {
         const raw = String(line || '').trim();
         const beforeComment = raw.split('#')[0].trim();
@@ -4841,6 +4910,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             address: fields[0] || '',
             asn: formatAsn(fields[1]) || 'null',
             country: fields[2] || 'null',
+            stack: fields[3] || 'null',
             comment: raw.includes('#') ? raw.slice(raw.indexOf('#') + 1).trim() : ''
         };
     }
@@ -5968,9 +6038,9 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     }
 
     function parseUniversalFilter(query) {
-        const tokens = String(query || '').split(/[\s,]+/).map(v => v.trim()).filter(Boolean);
+        const tokens = String(query || '').split(/\\s+/).map(v => v.trim()).filter(Boolean);
         if (!tokens.length) return null;
-        const criteria = { ports: [], countries: [], asns: [], text: [] };
+        const criteria = { ports: [], countries: [], asns: [], stacks: [], text: [] };
         for (const token of tokens) {
             const match = token.match(/^([a-zA-Z]+):(.*)$/);
             if (!match) {
@@ -5978,18 +6048,22 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 continue;
             }
             const key = match[1].toLowerCase();
-            const value = match[2].trim();
-            if (!value) continue;
+            const rawValue = match[2].trim();
+            if (!rawValue) continue;
+            const values = rawValue.split(',').map(v => v.trim()).filter(Boolean);
+            if (!values.length) continue;
             if (key === 'port') {
-                const parsed = parsePortFilter(value);
+                const parsed = parsePortFilter(values.join(','));
                 if (!parsed) return null;
                 criteria.ports.push(...parsed);
             } else if (key === 'country') {
-                criteria.countries.push(value.toUpperCase());
+                criteria.countries.push(...values.map(v => v.toUpperCase()));
             } else if (key === 'asn' || key === 'as') {
-                criteria.asns.push(value.replace(/^AS/i, '').toUpperCase());
+                criteria.asns.push(...values.map(v => v.replace(/^AS/i, '').toUpperCase()));
+            } else if (key === 'stack' || key === 'exit') {
+                criteria.stacks.push(...values.map(v => normalizeStackFilter(v)));
             } else {
-                criteria.text.push(value.toLowerCase());
+                criteria.text.push(token.toLowerCase());
             }
         }
         return criteria;
@@ -6006,10 +6080,14 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const searchable = [meta.asn, meta.country, meta.comment, line].join(' ').toLowerCase();
         if (Array.isArray(criteria)) return criteria.some(group => lineMatchesUniversalFilter(line, group));
         if (criteria.ports.length && !criteria.ports.some(p => typeof p === 'number' ? portNum === p : portNum >= p.start && portNum <= p.end)) return false;
-        const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
+        const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\\s]+/).filter(Boolean);
         if (criteria.countries.length && !criteria.countries.some(country => countryValues.includes(country))) return false;
-        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\s]+/).filter(Boolean);
+        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\\s]+/).filter(Boolean);
         if (criteria.asns.length && !criteria.asns.some(asn => asnValues.includes(asn))) return false;
+        if (criteria.stacks.length) {
+            const lineStack = normalizeStackFilter(meta.stack);
+            if (!criteria.stacks.includes(lineStack)) return false;
+        }
         if (criteria.text.length && !criteria.text.some(token => searchable.includes(token))) return false;
         return true;
     }
