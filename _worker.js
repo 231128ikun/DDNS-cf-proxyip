@@ -4,7 +4,7 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.08.19-14.12';
+const APP_VERSION = '2026.09.10-14.29';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
@@ -6506,9 +6506,9 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         const searchable = [meta.asn, meta.country, meta.comment, line].join(' ').toLowerCase();
         if (Array.isArray(criteria)) return criteria.some(group => lineMatchesUniversalFilter(line, group));
         if (criteria.ports.length && !criteria.ports.some(p => typeof p === 'number' ? portNum === p : portNum >= p.start && portNum <= p.end)) return false;
-        const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\uFF0C\\s]+)/.filter(Boolean);
+        const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\uFF0C\\s]+/).filter(Boolean);
         if (criteria.countries.length && !criteria.countries.some(country => countryValues.includes(country))) return false;
-        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\uFF0C\\s]+)/.filter(Boolean);
+        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\uFF0C\\s]+/).filter(Boolean);
         if (criteria.asns.length && !criteria.asns.some(asn => asnValues.includes(asn))) return false;
         if (criteria.stacks.length) {
             const lineStack = normalizeStackFilter(meta.stack);
