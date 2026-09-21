@@ -4,11 +4,12 @@
 
 // ==================== Editable configuration ====================
 // Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.09.10-14.29';
+const APP_VERSION = '2026.09.21-21.25';
 const APP_CONFIG_KEY = 'app_config';
 const GLOBAL_SETTINGS = {
     // ── IP 检测 ──
     CONCURRENT_CHECKS: 32,       // 前端批量检测并发数
+    BACKEND_CONCURRENT_CHECKS: 4, // 单次 Worker 调用的检测并发数
     CHECK_TIMEOUT: 15000,         // 单个检测接口请求超时(ms)
 
     // ── 网络超时 ──
@@ -22,6 +23,7 @@ const GLOBAL_SETTINGS = {
 
 const SETTING_LIMITS = {
     CONCURRENT_CHECKS: { min: 1, max: 128 },
+    BACKEND_CONCURRENT_CHECKS: { min: 1, max: 6 },
     CHECK_TIMEOUT: { min: 500, max: 30000 },
     REMOTE_LOAD_TIMEOUT: { min: 1000, max: 60000 },
     DOH_TIMEOUT: { min: 1000, max: 30000 },
@@ -40,7 +42,8 @@ const CONFIG_TEXT_FIELDS = [
 
 const CONFIG_NUMBER_FIELDS = [
     { key: 'CONCURRENT_CHECKS', id: 'cfg-concurrent-checks', label: '检测并发', help: '前端批量检测并发数。', placeholder: '32' },
-    { key: 'CHECK_TIMEOUT', id: 'cfg-check-timeout', label: '检测超时(ms)', help: '单个检测接口请求超时。', placeholder: '3000' },
+    { key: 'BACKEND_CONCURRENT_CHECKS', id: 'cfg-backend-concurrent', label: '后端检测并发', help: '维护、补货预检及域名状态检测；1–6，独立于前端并发。', placeholder: '4' },
+    { key: 'CHECK_TIMEOUT', id: 'cfg-check-timeout', label: '检测超时(ms)', help: '单个检测接口请求超时；保留纯超时淘汰慢 IP 的策略。', placeholder: '3000' },
     { key: 'REMOTE_LOAD_TIMEOUT', id: 'cfg-remote-timeout', label: '远程加载超时(ms)', help: '远程 TXT URL 加载。', placeholder: '5000' },
     { key: 'DOH_TIMEOUT', id: 'cfg-doh-timeout', label: 'DoH超时(ms)', help: 'DNS over HTTPS 查询。', placeholder: '5000' },
     { key: 'DEFAULT_MIN_ACTIVE', id: 'cfg-default-min-active', label: '默认活跃数', help: '新增管理域名默认值。', placeholder: '3' },
@@ -804,7 +807,9 @@ async function handleLookupDomain(url, config) {
 async function handleCheckIP(url, config) {
     const target = url.searchParams.get('ip');
     if (!target) return badRequest({ error: '缺少ip参数' });
-    const res = await checkProxyIP(target, config);
+    const phase = url.searchParams.get('phase') || 'full';
+    if (!['full', 'primary', 'backup'].includes(phase)) return badRequest({ error: '无效检测阶段' });
+    const res = await checkProxyIP(target, config, { phase });
     return jsonResponse(res);
 }
 
@@ -1347,7 +1352,13 @@ async function loadSavedConfig(env) {
     try {
         const raw = await env.IP_DATA.get(APP_CONFIG_KEY);
         if (!raw) return null;
-        return normalizeSavedConfig(safeJSONParse(raw, {}));
+        const data = safeJSONParse(raw, {});
+        const saved = normalizeSavedConfig(data);
+        // 缺失字段沿用环境默认值；显式保存空检测接口则确实禁用该接口。
+        for (const key of ['checkApi', 'checkApiBackup']) {
+            if (!Object.prototype.hasOwnProperty.call(data, key)) delete saved[key];
+        }
+        return saved;
     } catch {
         return null;
     }
@@ -1380,7 +1391,8 @@ async function createConfig(env, request = null) {
     const savedConfig = await loadSavedConfig(env);
     if (savedConfig) {
         for (const key of ['apiKey', 'zoneId', ...CONFIG_TEXT_KEYS]) {
-            if (savedConfig[key]) config[key] = savedConfig[key];
+            if (savedConfig[key] || (['checkApi', 'checkApiBackup'].includes(key) &&
+                Object.prototype.hasOwnProperty.call(savedConfig, key))) config[key] = savedConfig[key];
         }
         if (savedConfig.zones.length > 0) {
             config.zones = savedConfig.zones;
@@ -1695,7 +1707,9 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
     const preferredExit = getPreferredExitInfo(exits);
     const status = normalizeTextValue(data.status).toLowerCase();
     const explicitFailure = data.success === false || data.ok === false || ['failed', 'failure', 'error'].includes(status);
-    const success = !explicitFailure && (
+    const resultApiError = Boolean(apiError) || data.apiError === true;
+    // 异常标记优先于 success/ok：错误响应若同时带 success:true，也不能进入维护删除/补货判定。
+    const success = !resultApiError && !explicitFailure && (
         data.success === true || data.ok === true || status === 'success' || exits.length > 0
     );
     const stack = inferCheckStack(data, exits);
@@ -1729,7 +1743,7 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
         dualStack: stack === 'v4/v6',
         // checkProxyIP 返回的是已归一化结果，维护流程会二次归一化；
         // 不代表该地址被接口判定为失效；data.apiError 用于二次归一化时保留该标记。
-        apiError: Boolean(apiError) || data.apiError === true
+        apiError: resultApiError
     };
 }
 
@@ -1836,7 +1850,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 // 批量调用检测接口，并统一整理 API 返回的出口、ASN、国家信息
 async function batchCheckIPs(ipList, checkFn, config) {
     if (!ipList || ipList.length === 0) return [];
-    const checkResults = await mapWithConcurrency(ipList, getRuntimeSettings(config).CONCURRENT_CHECKS, async addr => {
+    const checkResults = await mapWithConcurrency(ipList, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS, async addr => {
         try { return normalizeCheckResult(await checkFn(addr), addr); }
         catch { return normalizeCheckResult({ success: false }, addr, true); }
     });
@@ -1941,62 +1955,72 @@ function normalizeCheckAddr(input) {
     return parseAddr(input || '').address;
 }
 
-async function checkProxyIP(input, config) {
+// 有效失败优先于接口异常；全部纯超时仍按用户配置的慢 IP 淘汰策略处理。
+// 此函数也嵌入浏览器脚本，保证分阶段批量检测与完整维护检测的判定一致。
+function combineCheckAttempts(attempts) {
+    const success = attempts.find(result => result.success && !result.apiError);
+    if (success) return success;
+    const failures = attempts.filter(result => !result.apiError && result.checkOutcome !== 'timeout');
+    if (failures.length) return failures[failures.length - 1];
+    return attempts.find(result => result.apiError) || attempts[attempts.length - 1];
+}
+
+async function checkProxyIPAttempt(addr, apiUrl, timeout, signal) {
+    const failed = (outcome, message) => ({
+        ...normalizeCheckResult({ success: false, message }, addr, outcome === 'api_error'),
+        checkOutcome: outcome
+    });
+    if (!apiUrl) return failed('api_error', '未配置检测接口');
+    try {
+        const timeoutSignal = AbortSignal.timeout(timeout);
+        const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+        const r = await fetch(buildCheckApiUrl(apiUrl, addr), { signal: requestSignal });
+        if (!r.ok) {
+            if (r.body) await r.body.cancel().catch(() => {});
+            return failed('api_error', `检测接口 HTTP ${r.status}`);
+        }
+        const data = safeJSONParse(await r.text(), null);
+        const status = normalizeTextValue(data?.status).toLowerCase();
+        // 合法 JSON 不等于合法检测结果：避免把 {}、数组或普通错误对象误当死 IP。
+        const recognized = data && typeof data === 'object' && !Array.isArray(data) && (
+            typeof data.success === 'boolean' || typeof data.ok === 'boolean' ||
+            ['success', 'failed', 'failure', 'error'].includes(status) || extractCheckExits(data).length > 0
+        );
+        if (!recognized) return failed('api_error', '检测接口响应格式不正确');
+        const result = normalizeCheckResult(data, addr);
+        return { ...result, checkOutcome: result.apiError ? 'api_error' : (result.success ? 'success' : 'failure') };
+    } catch (err) {
+        // 主动取消预取不等于超时，不能缓存成失效，更不能据此移除记录。
+        if (signal?.aborted) return failed('api_error', '检测已取消');
+        return failed(['TimeoutError', 'AbortError'].includes(err?.name) ? 'timeout' : 'api_error',
+            ['TimeoutError', 'AbortError'].includes(err?.name) ? '检测超时' : '检测接口网络异常');
+    }
+}
+
+/**
+ * @param {string} input
+ * @param {any} config
+ * @param {{ phase?: 'full' | 'primary' | 'backup', signal?: AbortSignal }} [options]
+ */
+async function checkProxyIP(input, config, options = {}) {
+    const { phase = 'full', signal } = options;
     const addr = normalizeCheckAddr(input);
     const timeout = getRuntimeSettings(config).CHECK_TIMEOUT;
     const apis = [config.checkApi, config.checkApiBackup].map(api => String(api || '').trim()).filter(Boolean);
-
-    if (!apis.length) {
-        // 未配置任何检测接口，无法判断，视为接口异常（失效，不做删除）
-        return normalizeCheckResult({ success: false }, addr, true);
+    // 仅配置备用接口时，它作为有效主接口；默认 full 保持原有主、备用串行确认语义。
+    if (phase !== 'full') {
+        const index = phase === 'backup' ? 1 : 0;
+        const result = await checkProxyIPAttempt(addr, apis[index], timeout, signal);
+        return { ...result, recheckRequired: phase === 'primary' && (!result.success || result.apiError) && apis.length > 1 };
     }
-
-    let lastResult = null;
-    // apiBroken：真正的"接口自身故障"——HTTP错误 / 响应不是合法JSON / 非超时的网络异常（如DNS失败、连不上检测服务本身）。
-    // 只有这类情况才代表"无法判断候选真实状态"，标记为 apiError=true（失效，维护时不做删除）。
-    // 单纯的请求超时不计入 apiBroken——超时代表这个候选检测太慢，按真实失败处理（会被删除/替换）。
-    let apiBroken = false;
-
-    for (const apiUrl of apis) {
-        try {
-            const r = await fetch(buildCheckApiUrl(apiUrl, addr), { signal: AbortSignal.timeout(timeout) });
-            if (!r.ok) {
-                // HTTP错误，视为接口自身故障，继续尝试下一个接口
-                apiBroken = true;
-                continue;
-            }
-
-            const data = safeJSONParse(await r.text(), null);
-            if (!data || typeof data !== 'object') {
-                // 响应无法解析，视为接口自身故障，继续尝试下一个接口
-                apiBroken = true;
-                continue;
-            }
-
-            const result = normalizeCheckResult(data, addr);
-            lastResult = result;
-            if (result.success) return result;
-        } catch (err) {
-            if (err?.name !== 'TimeoutError' && err?.name !== 'AbortError') {
-                // 非超时的网络异常（DNS失败/连接被拒/无法连上检测接口本身等），视为接口自身故障
-                apiBroken = true;
-            }
-            // 是超时：不标记 apiBroken，视为该候选检测太慢，继续尝试下一个接口确认
-        }
+    const attempts = [];
+    for (const apiUrl of (apis.length ? apis : [''])) {
+        if (signal?.aborted) break;
+        const result = await checkProxyIPAttempt(addr, apiUrl, timeout, signal);
+        attempts.push(result);
+        if (result.success && !result.apiError) return result;
     }
-
-    if (lastResult) {
-        // 至少有一次拿到接口正常返回的合法结果（即便判定为失败），直接采用，不算 apiError
-        return lastResult;
-    }
-
-    if (apiBroken) {
-        // 所有尝试里至少出现过一次"接口自身故障"，且没有任何一次拿到合法结果，无法判断候选真实状态
-        return normalizeCheckResult({ success: false }, addr, true);
-    }
-
-    // 走到这里：所有尝试都是纯超时，没有接口自身故障——判定为真实失败（会被删除/替换），不算 apiError
-    return normalizeCheckResult({ success: false }, addr, false);
+    return combineCheckAttempts(attempts) || normalizeCheckResult({ success: false, message: '检测已取消' }, addr, true);
 }
 
 async function fetchCF(config, path, method = 'GET', body = null) {
@@ -2115,7 +2139,7 @@ async function getCandidateIPs(env, target, addLog, poolKey) {
 }
 
 async function checkCurrentItems(currentItems, checkFn, config) {
-    return mapWithConcurrency(currentItems, getRuntimeSettings(config).CONCURRENT_CHECKS, async item => {
+    return mapWithConcurrency(currentItems, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS, async item => {
         let result;
         try { result = normalizeCheckResult(await checkFn(item.addr), item.addr); }
         catch { result = normalizeCheckResult({ success: false }, item.addr, true); }
@@ -2181,6 +2205,39 @@ function refreshPoolEntryMetadata(poolList, ipPort, result) {
         poolList: poolList.map(line => extractIPKey(line) === ipPort ? refreshed : line),
         modified: true
     };
+}
+
+// 只并发做无副作用的检测；调用方逐个提交 DNS/KV 变更，补够即取消剩余预取。
+async function* precheckCandidates(items, limit, buildCandidate, checkFn, activeItems) {
+    const controller = new AbortController();
+    const pending = new Map();
+    const seen = new Set();
+    let cursor = 0;
+    const fill = () => {
+        while (cursor < items.length && pending.size < limit) {
+            const index = cursor++;
+            const item = items[index];
+            const candidate = buildCandidate(item, activeItems);
+            if (!candidate || seen.has(candidate.addr)) continue;
+            seen.add(candidate.addr);
+            const task = Promise.resolve().then(() => checkFn(candidate.addr, { signal: controller.signal }))
+                .then(result => ({ index, item, result: normalizeCheckResult(result, candidate.addr) }))
+                .catch(() => ({ index, item, result: normalizeCheckResult({ success: false }, candidate.addr, true) }));
+            pending.set(index, task);
+        }
+    };
+    try {
+        fill();
+        while (pending.size) {
+            const completed = await Promise.race(pending.values());
+            pending.delete(completed.index);
+            yield completed;
+            fill();
+        }
+    } finally {
+        controller.abort();
+        await Promise.allSettled(pending.values());
+    }
 }
 
 async function runMaintenanceCore({
@@ -2252,13 +2309,14 @@ async function runMaintenanceCore({
         addLog(`需补充: ${target.minActive - activeItems.length} 个`);
         const candidates = await getCandidateIPs(env, target, addLog, poolKey);
 
-        for (const item of candidates) {
+        const prechecks = precheckCandidates(candidates, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS,
+            buildCandidate, checkFn, activeItems);
+        for await (const { item, result } of prechecks) {
             if (activeItems.length >= target.minActive) break;
 
+            // 预取期间 activeItems 可能变化，提交前再次排除当前已生效的地址。
             const candidate = buildCandidate(item, activeItems);
             if (!candidate) continue;
-
-            const result = normalizeCheckResult(await checkFn(candidate.addr), candidate.addr);
             if (!checkResultMatchesTarget(result, target)) {
                 if (result.apiError) {
                     report.apiErrorCount = (report.apiErrorCount || 0) + 1;
@@ -2297,6 +2355,7 @@ async function runMaintenanceCore({
             poolList = refreshed.poolList;
             poolModified = poolModified || refreshed.modified;
             addLog(`  ✅ ${candidate.addr} - ${result.colo} (${result.responseTime}ms)`);
+            if (activeItems.length >= target.minActive) break;
         }
 
         if (activeItems.length < target.minActive) {
@@ -2433,17 +2492,23 @@ async function maintainAllDomains(env, isManual = false, config) {
 
     // 单次维护任务内缓存 proxyip 检测结果，减少重复外部请求（不改变结果，仅减少请求次数）
     const checkCache = new Map();
-    const checkProxyIPCached = async (addr) => {
+    /**
+     * @param {string} addr
+     * @param {{ phase?: 'full' | 'primary' | 'backup', signal?: AbortSignal }} [options]
+     */
+    const checkProxyIPCached = async (addr, options = {}) => {
         const key = (addr || '').trim();
         if (!key) return normalizeCheckResult({ success: false }, key);
         if (checkCache.has(key)) {
             const cached = checkCache.get(key);
             return cached && typeof cached.then === 'function' ? await cached : cached;
         }
-        const p = checkProxyIP(key, config);
+        const p = checkProxyIP(key, config, options);
         checkCache.set(key, p);
         const res = await p;
-        checkCache.set(key, res);
+        // 被取消的预取不能污染后续域名的本轮缓存。
+        if (options.signal?.aborted) checkCache.delete(key);
+        else checkCache.set(key, res);
         return res;
     };
 
@@ -4309,7 +4374,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     let configSavedSnapshot = null;
     let configDirty = false;
     // 检测中断状态
-    let pausedCheckState = null; // { uncheckedLines: [], validIPs: [], total: number }
+    let activeBatchRun = null; // 逐项状态；停止后等在途请求结束再决定是否继续
 
     const byId = id => document.getElementById(id);
     const nonEmptyLines = text => String(text || '').split('\\n').filter(line => line.trim());
@@ -5014,9 +5079,25 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
             output = \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${escapeHTML(m)}</div>\`;
         }
 
-        w.insertAdjacentHTML('beforeend', output);
-        w.scrollTop = w.scrollHeight;
+        if (activeBatchRun) {
+            const run = activeBatchRun;
+            (run.logBuffer ||= []).push(output);
+            if (!run.logTimer) run.logTimer = setTimeout(() => flushBatchLogs(run), 100);
+        } else {
+            w.insertAdjacentHTML('beforeend', output);
+            w.scrollTop = w.scrollHeight;
+        }
     };
+
+    function flushBatchLogs(run) {
+        clearTimeout(run.logTimer);
+        run.logTimer = null;
+        if (!run.logBuffer?.length) return;
+        const w = byId('log-window');
+        w.insertAdjacentHTML('beforeend', run.logBuffer.join(''));
+        run.logBuffer.length = 0;
+        w.scrollTop = w.scrollHeight;
+    }
 
     // ===== IP formatting / status table =====
     function normalizeIPFormat(input) {
@@ -5169,27 +5250,43 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         return parsePoolLine(source).address;
     }
 
+    function canonicalCheckAddress(address) {
+        const parts = parseAddrParts(address);
+        const host = new URL('http://' + (parts.host.includes(':') ? '[' + parts.host + ']' : parts.host)).hostname.toLowerCase();
+        return host + ':' + Number(parts.port);
+    }
+
+    function getPoolComparisonKey(line) {
+        try {
+            const normalized = normalizeIPFormat(line);
+            return normalized ? canonicalCheckAddress(normalized) : getPoolLineKey(line);
+        } catch { return getPoolLineKey(line); }
+    }
+
     function getPoolKeySet(lines) {
-        return new Set(lines.map(line => getPoolLineKey(line)).filter(Boolean));
+        return new Set(lines.map(getPoolComparisonKey).filter(Boolean));
     }
 
     function filterLinesByKeys(lines, keys, shouldMatch) {
         return lines.filter(line => {
-            const key = getPoolLineKey(line);
+            const key = getPoolComparisonKey(line);
             return key && (shouldMatch ? keys.has(key) : !keys.has(key));
         });
     }
 
-    function buildPoolLineFromCheckResult(addr, result) {
-        const parsed = parseAddrParts(addr);
-        const ip = result.proxyIP || parsed.host;
-        const port = result.portRemote || parsed.port;
-        const asn = result.asn || (Array.isArray(result.exits) ? Array.from(new Set(result.exits.map(exit => exit.asn).filter(Boolean))).join('/') : '') || 'null';
-        const country = result.country || (Array.isArray(result.exits) ? Array.from(new Set(result.exits.map(exit => exit.country).filter(Boolean))).join('/') : '') || 'null';
-        const stack = result.stack || 'null';
+    function buildPoolLineFromCheckResult(addr, result, previousEntry = '') {
+        const parsed = parseAddrParts(addr), previous = parsePoolLine(previousEntry);
+        const ip = previousEntry ? parsed.host : (result.proxyIP || parsed.host);
+        const port = previousEntry ? parsed.port : (result.portRemote || parsed.port);
+        const known = value => value && !['null', 'unknown', 'n/a', '-'].includes(String(value).toLowerCase());
+        const pick = (value, old) => known(value) ? value : (known(old) ? old : 'null');
+        const exits = Array.isArray(result.exits) ? result.exits : [];
+        const asn = pick(result.asn, exits.map(exit => exit.asn).filter(known).join('/'));
+        const country = pick(result.country, exits.map(exit => exit.country).filter(known).join('/'));
         const host = String(ip || '').replace(/^\\[/, '').replace(/\\]$/, '');
         const address = host.includes(':') ? \`[\${host}]:\${port}\` : \`\${host}:\${port}\`;
-        return \`\${address},\${formatAsn(asn) || 'null'},\${country || 'null'},\${stack || 'null'}\`;
+        return [address, formatAsn(pick(asn, previous.asn)) || 'null', pick(country, previous.country), pick(result.stack, previous.stack)].join(',') +
+            (previous.comment ? ' # ' + previous.comment : '');
     }
 
     function formatLatencyValue(value) {
@@ -5359,233 +5456,271 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         }
     }
 
-    async function batchCheck() {
-        const btn = byId('btn-check');
-        const input = byId('ip-input');
-        const lines = getInputLines('ip-input');
+    // 动态补位队列：解析和检测分开限流；只有生产者关闭且在途任务结束才完成。
+${combineCheckAttempts.toString()}
 
-        if (!lines.length) {
-            log('❌ 请先输入IP', 'error');
-            return 'abandoned';
-        }
-
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-            btn.textContent = '⚡ 检测清洗';
-            btn.classList.remove('btn-danger');
-            btn.classList.add('btn-warning');
-            log('🛑 已停止检测', 'warn');
-            byId('pg-bar').style.width = '0%';
-            return 'abandoned';
-        }
-
-        abortController = new AbortController();
-        const signal = abortController.signal;
-
-        btn.textContent = '🛑 停止检测';
-        btn.classList.remove('btn-warning');
-        btn.classList.add('btn-danger');
-
-        let valid = [], total = lines.length, checked = 0;
-        const pg = byId('pg-bar');
-        let checkStatus = 'completed';
-
-        log(\`🚀 开始检测 \${total} 个IP (并发: \${SETTINGS.CONCURRENT_CHECKS})\`, 'warn');
-        log(\`💡 可随时中断，已验证的有效IP将自动保留\`, 'info');
-
-        const chunkSize = SETTINGS.CONCURRENT_CHECKS;
-        let wasAborted = false;
-
-        try {
-            for (let i = 0; i < lines.length; i += chunkSize) {
-                if (signal.aborted) {
-                    wasAborted = true;
-                    break;
-                }
-
-                const chunk = lines.slice(i, i + chunkSize);
-
-                await Promise.all(chunk.map(async (line) => {
-                    if (signal.aborted) return;
-
-                    const item = line.trim();
-                    if (!item) return;
-
-                    // 检测是否为域名格式 (example.com 或 example.com:443)
-                    const domainMatch = item.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\\.[a-zA-Z]{2,}):?(\\d+)?$/);
-                    let checkTargets = [];
-
-                    if (domainMatch) {
-                        // 域名格式：调用后端解析
-                        const domain = domainMatch[1];
-                        const port = domainMatch[2] || '443';
-                        try {
-                            const data = await apiJson(\`/api/lookup-domain?domain=\${encodeURIComponent(domain + ':' + port)}\`);
-                            if (data.ips && data.ips.length > 0) {
-                                checkTargets = data.ips.map(ip => ip.includes(':') ? \`[\${ip.replace(/^\\[/, '').replace(/\\]$/, '')}]:\${port}\` : \`\${ip}:\${port}\`);
-                                log(\`  🌐 \${domain} → \${data.ips.length} 个IP\`, 'info');
-                            } else {
-                                log(\`  ⚠️ 域名无解析: \${domain}\`, 'warn');
-                                checked++;
-                                pg.style.width = (checked / total * 100) + '%';
-                                return;
-                            }
-                        } catch (e) {
-                            log(\`  ⚠️ 域名解析失败: \${domain}\`, 'warn');
-                            checked++;
-                            pg.style.width = (checked / total * 100) + '%';
-                            return;
-                        }
-                    } else {
-                        // IP格式
-                        const normalized = normalizeIPFormat(item);
-                        if (!normalized) {
-                            log(\`  ⚠️  格式错误: \${item}\`, 'warn');
-                            checked++;
-                            pg.style.width = (checked / total * 100) + '%';
-                            return;
-                        }
-                        checkTargets = [getPoolLineKey(normalized)];
-                    }
-
-                    // 检测所有目标IP
-                    for (const checkTarget of checkTargets) {
-                        try {
-                            const checkUrl = \`/api/check-ip?ip=\${encodeURIComponent(checkTarget)}\`;
-                            const r = await apiJson(checkUrl, {
-                                signal: signal
-                            });
-
-                            if (r.success) {
-                                valid.push(buildPoolLineFromCheckResult(checkTarget, r));
-                                log(\`  ✅ \${checkTarget} - \${r.colo} (\${r.responseTime}ms)\`, 'success');
-                            } else {
-                                log(\`  ❌ \${checkTarget}\`, 'error');
-                            }
-                        } catch (e) {
-                            if (e.name !== 'AbortError') {
-                                log(\`  ❌ \${checkTarget}\`, 'error');
-                            }
-                        }
-                    }
-
-                    checked++;
-                    if (!signal.aborted) {
-                        pg.style.width = (checked / total * 100) + '%';
-                    }
-                }));
+    function createCheckQueue(limit, signal, onError) {
+        const pending = [];
+        let active = 0, cursor = 0, closed = false, finish;
+        const done = new Promise(resolve => { finish = resolve; });
+        const pump = () => {
+            while (!signal.aborted && active < limit && cursor < pending.length) {
+                const work = pending[cursor++];
+                active++;
+                Promise.resolve().then(() => signal.aborted ? undefined : work())
+                    .catch(onError).finally(() => { active--; pump(); });
             }
-
-            // 核心改进：无论是否中断，都保留有效IP
-            if (valid.length > 0) {
-                input.value = valid.join('\\n');
+            if ((closed || signal.aborted) && active === 0 && (cursor === pending.length || signal.aborted)) {
+                signal.removeEventListener('abort', pump);
+                finish();
             }
+        };
+        signal.addEventListener('abort', pump, { once: true });
+        return {
+            push(work) { pending.push(work); pump(); },
+            close() { closed = true; pump(); return done; }
+        };
+    }
 
-            if (wasAborted) {
-                const rate = valid.length > 0 ? ((valid.length / checked) * 100).toFixed(1) : '0.0';
-                if (valid.length > 0) {
-                    log(\`⏸️ 检测已中断，已保留 \${valid.length} 个有效IP (共检测 \${checked}/\${total}, 有效率 \${rate}%)\`, 'warn');
-                } else {
-                    log(\`⏸️ 检测已中断，尚未发现有效IP (已检测 \${checked}/\${total})\`, 'warn');
-                }
+    function mergeBatchSource(oldLine, newLine) {
+        if (!oldLine) return newLine;
+        const old = parsePoolLine(oldLine), next = parsePoolLine(newLine);
+        const known = value => value && !['null', 'unknown', 'n/a', '-'].includes(String(value).toLowerCase());
+        const pick = (a, b) => known(a) ? a : (known(b) ? b : 'null');
+        const comments = Array.from(new Set([old.comment, next.comment].filter(Boolean))).join(' | ');
+        return [old.address, pick(old.asn, next.asn), pick(old.country, next.country), pick(old.stack, next.stack)].join(',') +
+            (comments ? ' # ' + comments : '');
+    }
 
-                // 保存中断状态
-                const uncheckedLines = lines.filter((line, idx) => idx >= checked);
-                pausedCheckState = {
-                    uncheckedLines,
-                    validIPs: valid,
-                    total: total
-                };
+    function addBatchTarget(run, address, sourceLine, order) {
+        const normalized = normalizeIPFormat(address);
+        if (!normalized) throw new Error('无效检测地址');
+        // 与洗库比较使用同一规范化地址；不会把 IPv6 文本形式变化误判为失效。
+        const key = canonicalCheckAddress(normalized);
+        const source = parsePoolLine(sourceLine);
+        const previousLine = [key, source.asn, source.country, source.stack].join(',') + (source.comment ? ' # ' + source.comment : '');
+        if (run.tasks.has(key)) {
+            const task = run.tasks.get(key);
+            task.sourceLine = mergeBatchSource(task.sourceLine, previousLine);
+            task.order = Math.min(task.order, order);
+            return task;
+        }
+        const task = { address: key, sourceLine: previousLine, order, state: 'pending', primary: null, result: null };
+        run.tasks.set(key, task);
+        return task;
+    }
 
-                // 使用自定义模态对话框
-                const continueAction = await showCheckInterruptModal({
-                    checked,
-                    total,
-                    valid: valid.length,
-                    rate,
-                    unchecked: uncheckedLines.length
+    function batchSnapshot(run) {
+        const tasks = Array.from(run.tasks.values());
+        const unresolved = run.sources.filter(source => source.state !== 'resolved');
+        const pending = tasks.filter(task => ['pending', 'recheck'].includes(task.state)).length +
+            unresolved.filter(source => source.state === 'pending').length;
+        const unknown = tasks.filter(task => task.state === 'unknown').length +
+            unresolved.filter(source => source.state === 'unknown').length;
+        const successful = tasks.filter(task => task.state === 'success').length;
+        const retained = tasks.filter(task => task.state !== 'failed').map(task => ({
+            order: task.order,
+            line: task.state === 'success'
+                ? buildPoolLineFromCheckResult(task.address, task.result, task.sourceLine)
+                : task.sourceLine
+        }));
+        unresolved.forEach(source => retained.push({ order: source.index, line: source.line }));
+        retained.sort((a, b) => a.order - b.order);
+        return { pending, unknown, successful, total: tasks.length + unresolved.length, lines: retained.map(item => item.line) };
+    }
+
+    async function requestBatchCheck(address, phase, signal) {
+        const deadline = AbortSignal.timeout(SETTINGS.CHECK_TIMEOUT * (phase === 'full' ? 2 : 1) + 5000);
+        const response = await apiRequest(\`/api/check-ip?ip=\${encodeURIComponent(address)}&phase=\${phase}\`, {
+            signal: AbortSignal.any([signal, deadline])
+        });
+        if (!response.ok) throw new Error('检测请求 HTTP ' + response.status);
+        const result = await response.json();
+        if (!result || typeof result.success !== 'boolean') throw new Error('检测响应格式错误');
+        return result;
+    }
+
+    async function runBatchPass(run, controller) {
+        const signal = controller.signal;
+        const failQueue = error => { run.error = error; controller.abort(); };
+        const queue = createCheckQueue(SETTINGS.CONCURRENT_CHECKS, signal, failQueue);
+        const resolvers = createCheckQueue(Math.min(4, SETTINGS.CONCURRENT_CHECKS), signal, failQueue);
+        const enqueued = new Set();
+        const refresh = () => {
+            if (run.progressTimer) return;
+            run.progressTimer = setTimeout(() => {
+                run.progressTimer = null;
+                if (activeBatchRun !== run) return;
+                let total = run.tasks.size, pending = 0;
+                run.tasks.forEach(task => { if (['pending', 'recheck'].includes(task.state)) pending++; });
+                run.sources.forEach(source => {
+                    if (source.state !== 'resolved') total++;
+                    if (source.state === 'pending') pending++;
                 });
-
-                if (continueAction && pausedCheckState) {
-                    checkStatus = await continueCheck();
-                } else {
-                    abandonCheck();
-                    checkStatus = 'abandoned';
+                byId('pg-bar').style.width = (total ? (total - pending) / total * 100 : 0) + '%';
+            }, 100);
+        };
+        const finishTask = (task, result) => {
+            task.result = result;
+            task.state = result.apiError ? 'unknown' : (result.success ? 'success' : 'failed');
+            if (task.state === 'success') log(\`  ✅ \${task.address} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
+            else if (task.state === 'unknown') log(\`  ⚠️ \${task.address} - 检测接口异常，保留待确认\`, 'warn');
+            else log(\`  ❌ \${task.address}\${result.checkOutcome === 'timeout' ? ' - 超时淘汰' : ''}\`, 'error');
+            refresh();
+        };
+        // 复检复用当前检测槽位：在当前 worker 内串行执行，不额外占用并发。
+        const runRetry = async task => {
+            if (signal.aborted) return;
+            let result;
+            try { result = await requestBatchCheck(task.address, task.retryPhase, signal); }
+            catch { result = { success: false, apiError: true, checkOutcome: "api_error" }; }
+            if (!signal.aborted) finishTask(task, combineCheckAttempts([task.primary, result]));
+        };
+        const checkPrimary = async task => {
+            try {
+                const result = await requestBatchCheck(task.address, 'primary', signal);
+                if (signal.aborted) return;
+                task.primary = result;
+                if (result.recheckRequired || result.apiError) {
+                    task.state = 'recheck';
+                    task.retryPhase = result.recheckRequired ? 'backup' : 'primary';
+                    await runRetry(task);
+                } else finishTask(task, result);
+            } catch (error) {
+                if (signal.aborted) return;
+                task.primary = { success: false, apiError: true, checkOutcome: 'api_error' };
+                task.state = 'recheck';
+                task.retryPhase = 'full';
+                await runRetry(task);
+            }
+            refresh();
+        };
+        const enqueue = task => {
+            if (!task || task.state !== 'pending' || enqueued.has(task.address)) return;
+            enqueued.add(task.address);
+            queue.push(() => checkPrimary(task));
+        };
+        run.tasks.forEach(enqueue);
+        run.tasks.forEach(task => {
+            if (task.state !== 'recheck' || enqueued.has(task.address)) return;
+            enqueued.add(task.address);
+            queue.push(() => runRetry(task));
+        });
+        for (const source of run.sources) {
+            if (source.state !== 'pending') continue;
+            if (source.address) {
+                try {
+                    enqueue(addBatchTarget(run, source.address, source.line, source.index));
+                    source.state = 'resolved';
+                } catch { source.state = 'unknown'; }
+                continue;
+            }
+            resolvers.push(async () => {
+                try {
+                    const response = await apiRequest(\`/api/lookup-domain?domain=\${encodeURIComponent(source.domain + ':' + source.port)}\`, {
+                        signal: AbortSignal.any([signal, AbortSignal.timeout(SETTINGS.DOH_TIMEOUT * 2 + 5000)])
+                    });
+                    if (!response.ok) throw new Error('域名查询失败');
+                    const data = await response.json();
+                    if (signal.aborted) return;
+                    if (!Array.isArray(data.ips) || !data.ips.length) throw new Error('域名无解析');
+                    const targets = data.ips.map(ip => {
+                        const host = String(ip).replace(/^\\[/, '').replace(/\\]$/, '');
+                        return host.includes(':') ? \`[\${host}]:\${source.port}\` : \`\${host}:\${source.port}\`;
+                    });
+                    targets.forEach(address => enqueue(addBatchTarget(run, address, source.line, source.index)));
+                    source.state = 'resolved';
+                    log(\`  🌐 \${source.domain} → \${targets.length} 个IP\`, 'info');
+                } catch (error) {
+                    if (signal.aborted) return;
+                    source.state = 'unknown';
+                    log(\`  ⚠️ \${source.domain} - 解析异常，保留原输入\`, 'warn');
                 }
-            } else {
-                if (valid.length > 0) {
-                    const rate = ((valid.length / total) * 100).toFixed(1);
-                    log(\`✅ 检测完成: \${valid.length}/\${total} 有效 (\${rate}%)\`, 'success');
-                } else {
-                    log(\`❌ 检测完成: 0/\${total} 有效\`, 'error');
-                    input.value = '';
-                }
-                pausedCheckState = null;
-            }
+                refresh();
+            });
+        }
+        await resolvers.close();
+        await queue.close();
+    }
 
-        } catch (e) {
-            if (e.name !== 'AbortError') {
-                log(\`❌ 出错: \${e.message}\`, 'error');
+    async function batchCheck() {
+        const btn = byId('btn-check'), input = byId('ip-input');
+        if (activeBatchRun) {
+            abortController?.abort();
+            btn.textContent = '⏳ 正在停止';
+            return 'abandoned';
+        }
+        const lines = getInputLines('ip-input');
+        if (!lines.length) { log('❌ 请先输入IP', 'error'); return 'abandoned'; }
+        const run = { tasks: new Map(), sources: [], error: null };
+        run.sources = lines.map((line, index) => {
+            const source = { line, index, state: 'pending' };
+            const normalized = normalizeIPFormat(line);
+            if (normalized) source.address = getPoolLineKey(normalized);
+            else {
+                const match = parsePoolLine(line).address.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\\.[a-zA-Z]{2,})(?::(\\d+))?$/);
+                if (match && Number(match[2] || 443) >= 1 && Number(match[2] || 443) <= 65535) {
+                    source.domain = match[1]; source.port = match[2] || '443';
+                } else {
+                    source.state = 'unknown';
+                    log(\`  ⚠️ 格式无法识别，保留原输入: \${line}\`, 'warn');
+                }
             }
-            // 异常时也保留已验证的IP
-            if (valid.length > 0) {
-                input.value = valid.join('\\n');
-                log(\`⚠️ 检测异常，已保留 \${valid.length} 个有效IP\`, 'warn');
+            return source;
+        });
+        activeBatchRun = run;
+        const wasReadOnly = input.readOnly;
+        input.readOnly = true;
+        log(\`🚀 开始检测 \${lines.length} 行 (检测并发: \${SETTINGS.CONCURRENT_CHECKS}，复检复用同槽位)\`, 'warn');
+        try {
+            while (true) {
+                const controller = new AbortController();
+                abortController = controller;
+                btn.textContent = '🛑 停止检测';
+                btn.classList.add('btn-danger');
+                btn.classList.remove('btn-warning');
+                await runBatchPass(run, controller);
+                const stats = batchSnapshot(run);
+                input.value = stats.lines.join('\\n');
+                if (run.error) throw run.error;
+                if (controller.signal.aborted && stats.pending > 0) {
+                    log(\`⏸️ 检测已停止：成功 \${stats.successful}，待处理 \${stats.pending}；已保留全部未确认项\`, 'warn');
+                    const resume = await showCheckInterruptModal({
+                        checked: stats.total - stats.pending, total: stats.total, valid: stats.successful,
+                        rate: stats.total ? (stats.successful / stats.total * 100).toFixed(1) : '0.0', unchecked: stats.pending
+                    });
+                    if (resume) { log('🔄 继续未完成任务，已完成项不重复检测', 'info'); continue; }
+                    return 'abandoned';
+                }
+                log(\`检测完成：\${stats.successful}/\${stats.total} 有效，\${stats.unknown} 个待确认\`, stats.unknown ? 'warn' : 'success');
+                if (stats.unknown) log('⚠️ 待确认项保留原数据；本次洗库不会自动写回或移入垃圾桶', 'warn');
+                return stats.unknown ? 'incomplete' : 'completed';
             }
+        } catch (error) {
+            input.value = batchSnapshot(run).lines.join('\\n');
+            log(\`❌ 检测中断，已保留成功及未确认项: \${error.message}\`, 'error');
+            return 'incomplete';
         } finally {
             abortController = null;
+            flushBatchLogs(run);
+            activeBatchRun = null;
+            clearTimeout(run.progressTimer);
+            input.readOnly = wasReadOnly;
             updateFilterPreview();
             btn.textContent = '⚡ 检测清洗';
             btn.classList.remove('btn-danger');
             btn.classList.add('btn-warning');
-            setTimeout(() => { pg.style.width = '0%'; }, 1000);
+            byId('pg-bar').style.width = '0%';
         }
-        return checkStatus;
     }
 
     function clearInput() {
+        if (activeBatchRun) { log('⚠️ 请先停止检测', 'warn'); return; }
         const input = byId('ip-input');
         if (input.value.trim() && !confirm('确认清空输入框？')) return;
         input.value = '';
         updateFilterPreview();
-        pausedCheckState = null;
         log('🗑️ 输入框已清空', 'info');
-    }
-
-    // 继续检测
-    async function continueCheck() {
-        if (!pausedCheckState || pausedCheckState.uncheckedLines.length === 0) {
-            log('❌ 没有待检测的IP', 'error');
-            return 'abandoned';
-        }
-
-        const input = byId('ip-input');
-        // 将有效IP和未检测IP合并
-        const newContent = [...pausedCheckState.validIPs, ...pausedCheckState.uncheckedLines].join('\\n');
-        input.value = newContent;
-        updateFilterPreview();
-
-        log(\`🔄 继续检测剩余 \${pausedCheckState.uncheckedLines.length} 个IP\`, 'info');
-
-        pausedCheckState = null;
-
-        // 继续检测
-        return await batchCheck();
-    }
-
-    // 放弃检测
-    function abandonCheck() {
-        if (pausedCheckState && pausedCheckState.validIPs.length > 0) {
-            const input = byId('ip-input');
-            input.value = pausedCheckState.validIPs.join('\\n');
-            updateFilterPreview();
-            log(\`🚫 已放弃检测，保留 \${pausedCheckState.validIPs.length} 个有效IP在输入框\`, 'warn');
-        } else {
-            log(\`🚫 已放弃检测\`, 'warn');
-        }
-
-        pausedCheckState = null;
     }
 
     function quickDeduplicate() {
@@ -6277,6 +6412,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
     // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
     // 垃圾桶：有效IP恢复到原来的库
     async function oneClickClean() {
+        if (activeBatchRun || cleaningPool) { log('⚠️ 请等待当前检测或洗库结束', 'warn'); return; }
         const isTrash = currentPool === POOL_TRASH_KEY;
 
         log(\`🧹 开始一键洗库: \${getPoolName(currentPool)}\`, 'warn');
@@ -6313,7 +6449,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         // 检查是否被中断或放弃
         if (checkResult !== 'completed') {
             // 检测被中断或放弃，不自动保存
-            log(\`⚠️ 洗库被中断，有效IP保留在输入框，未自动保存\`, 'warn');
+            log(\`⚠️ 洗库未完整确认，成功及未确认项已保留，未自动保存\`, 'warn');
         } else if (cleaningPool) {
             if (isTrash) {
                 // 垃圾桶洗库：有效IP恢复到原来的库
