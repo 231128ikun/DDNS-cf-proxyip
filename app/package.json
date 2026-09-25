@@ -1,0 +1,31 @@
+{
+  "name": "ddns-cf-proxyip",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && wrangler dev --config ../wrangler.toml",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && npm run build:worker",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build && npm run check:size",
+    "check:size": "node scripts/check-size.mjs",
+    "audit:ui": "node scripts/ui-audit.mjs",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "build:worker": "node scripts/build-worker.mjs"
+  },
+  "dependencies": {
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260921.1",
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.2",
+    "typescript": "^5.9.0",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,20 +1,22 @@
-# Cloudflare Git/Fork 自动部署使用本文件。
+# 唯一部署配置：Cloudflare Git 构建和 `wrangler deploy` 都直接读取根目录 worker.js。
 name = "ddns-cf-proxyip"
-main = "_worker.js"
-compatibility_date = "2026-05-11"
+main = "worker.js"
+compatibility_date = "2026-09-24"
 
-# 自动创建/绑定 KV，Worker 代码中变量名必须为 IP_DATA。
+# 创建/绑定 KV 后，代码中的变量名必须保持为 IP_DATA。
+# 如果已有 Namespace，请补上 id 并删除下面占位绑定。
 [[kv_namespaces]]
 binding = "IP_DATA"
 
-# 如需绑定已有 KV，可改用下面写法，并替换为真实 Namespace ID。
-# 注意：启用已有 KV 写法时，请注释掉上面的自动绑定块，避免重复声明 IP_DATA。
-#
-# [[kv_namespaces]]
-# binding = "IP_DATA"
-# id = "你的_KV_Namespace_ID"
+# 可选环境变量只是首次启动默认值；面板保存后以 KV 的 app_config 为准。
+[vars]
+PROBE_MODE = "external-api"
+CHECK_API = ""
+CHECK_API_BACKUP = ""
+CHECK_TIMEOUT = "15000"
+SOCKET_PROBE_IPV4_URL = ""
+SOCKET_PROBE_IPV6_URL = ""
 
-# 每 3 小时触发一次 scheduled()
+# 每 3 小时检查一次；面板关闭 scheduledEnabled 时任务会直接跳过。
 [triggers]
 crons = ["0 */3 * * *"]
-

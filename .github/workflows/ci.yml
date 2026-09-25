@@ -1,0 +1,46 @@
+name: CI
+
+# 校验唯一一套模块化源码、测试以及仓库根目录的发布文件。
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'worker.js'
+      - 'wrangler.toml'
+      - 'AGENTS.md'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'worker.js'
+      - 'wrangler.toml'
+      - 'AGENTS.md'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  check:
+    name: typecheck / test / build / size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run check`：类型检查、单元测试、构建根目录 worker.js、体积门禁。
+      # 全部用例使用内存 KV 与 mock fetch，不需要真实密钥或 Cloudflare 绑定。
+      - name: Check
+        run: npm run check
