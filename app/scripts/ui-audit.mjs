@@ -36,7 +36,7 @@ const VIEWPORTS = [
 ];
 const PAGES = [
   { key: "dashboard", path: "/" },
-  { key: "config", path: "/", tab: "#tab-config" },
+  { key: "config", path: "/", tab: "#tab-config", expect: "#page-config" },
 ];
 
 function findChrome() {
@@ -382,6 +382,15 @@ async function main() {
         if (page.tab) {
           await cdp.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(page.tab)})?.click()`, returnByValue: true }, sessionId);
           await sleep(700);
+          if (page.expect) {
+            const target = JSON.stringify(page.expect);
+            const switched = await cdp.send(
+              "Runtime.evaluate",
+              { expression: `Boolean(document.querySelector(${target}))`, returnByValue: true },
+              sessionId,
+            );
+            if (switched.result?.value !== true) throw new Error(`${page.key} 页面未切换：缺少 ${page.expect}`);
+          }
         }
         const data = await checkPage(cdp, sessionId);
         results.push({ page: page.key, viewport: viewport.name, ...data });

@@ -47,11 +47,15 @@ export class KvPoolCatalog implements PoolCatalog {
   }
 
   async create(displayName: string): Promise<PoolSummary> {
-    const [keys, names, savedOrder] = await Promise.all([
+    const [rawKeys, names, rawOrder] = await Promise.all([
       this.listPoolKeys(),
       this.readNames(),
       this.readOrder(),
     ]);
+    // Cloudflare 编辑器的 JS 类型推断无法可靠穿透 Promise.all，显式归一化既消除
+    // 迭代报错，也过滤 KV 中混入的非字符串数据。
+    const keys = toStringArray(rawKeys);
+    const savedOrder = rawOrder ? toStringArray(rawOrder) : null;
     let nextIndex = 1;
     for (const key of keys) {
       const match = NUMBERED_POOL_KEY_RE.exec(key);
@@ -143,6 +147,12 @@ export class KvPoolCatalog implements PoolCatalog {
     } while (cursor);
     return [...keys];
   }
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
 }
 
 function normalizeOrder(saved: readonly string[] | null, actualKeys: readonly string[]): readonly string[] {
