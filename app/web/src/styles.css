@@ -318,6 +318,13 @@
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
+        /* 小尺寸控件必须在基础控件规则之后重新声明，避免被通用尺寸覆盖。 */
+        .btn-sm {
+            min-height: 32px;
+            padding: 4px 8px;
+            border-radius: 9px;
+            font-size: 13px;
+        }
         @media (max-width: 768px) {
             .btn {
                 min-height: 40px;
@@ -341,6 +348,13 @@
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(0,122,255,0.1);
         }
+        .form-control-sm, .form-select-sm {
+            min-height: 32px;
+            padding: 4px 8px;
+            border-radius: 9px;
+            font-size: 13px;
+        }
+        .form-select-sm { padding-right: 28px; }
         /* 固定高度滚动区域 */
         .scroll-box {
             max-height: 200px;
@@ -633,40 +647,39 @@
             flex-wrap: wrap;
             gap: 4px;
         }
-        .pool-action {
-            min-height: 32px;
-            padding: 5px 8px;
-            border-radius: 9px;
-            gap: 4px;
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-        .pool-action .ui-icon {
-            width: 14px;
-            height: 14px;
-            flex-basis: 14px;
-        }
-        .pool-action-icon {
+        .pool-actions .btn {
             width: 32px;
+            min-width: 32px;
             flex: 0 0 32px;
+            height: 32px;
+            min-height: 32px;
             padding: 0;
+            border-radius: 9px;
+            gap: 0;
+        }
+        .pool-actions .btn .ui-icon {
+            width: 16px;
+            height: 16px;
+            flex-basis: 16px;
         }
         .domain-binding-header-actions {
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        .binding-refresh {
+        .domain-binding-actions .btn {
+            width: 32px;
             min-height: 32px;
-            padding: 4px 8px;
+            padding: 0;
             border-radius: 9px;
-            gap: 5px;
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
+            gap: 0;
         }
-        .binding-refresh .ui-icon {
+        .domain-binding-actions .btn.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+        .domain-binding-actions .btn .ui-icon {
             width: 15px;
             height: 15px;
             flex-basis: 15px;
@@ -1393,10 +1406,10 @@
             }
             .pool-actions {
                 display: grid;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
+                grid-template-columns: repeat(6, minmax(0, 1fr));
                 gap: 5px;
             }
-            .pool-action {
+            .pool-actions .btn {
                 width: 100%;
             }
             .domain-binding-table-wrap {
@@ -1523,14 +1536,15 @@
             font-size: 13px;
         }
         .ddns-lookup-form .btn-sm {
-            flex: 0 0 auto;
-            gap: 5px;
+            width: 32px;
+            min-width: 32px;
+            flex: 0 0 32px;
+            height: 32px;
             min-height: 32px;
-            padding: 4px 8px;
+            padding: 0;
             border-radius: 9px;
             font-size: 13px;
             font-weight: 600;
-            white-space: nowrap;
         }
         .ddns-lookup-form .btn-sm .ui-icon {
             width: 15px;

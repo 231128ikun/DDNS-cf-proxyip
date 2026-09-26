@@ -119,16 +119,16 @@ export function DashboardPage({
               aria-label="探测任意域名或 IP"
               disabled={check.status === 'loading'}
             >
-              <Icon name="search" /> 探测
+              <Icon name="search" />
             </button>
             <button
               class="btn btn-primary btn-sm"
               type="button"
               onClick={actions.refresh}
-              title="刷新 Worker 状态"
+              title="刷新 Worker 状态与 IP 池列表"
               aria-label="刷新 Worker 状态与 IP 池列表"
             >
-              <Icon name="refresh" /> 刷新
+              <Icon name="refresh" />
             </button>
           </form>
         </div>
@@ -175,12 +175,12 @@ export function DashboardPage({
                   ))}
                 </select>
                 <div class="pool-actions" role="group" aria-label="IP 池操作">
-                  <button class="btn btn-sm btn-outline-primary pool-action" type="button" title="新建池" aria-label="新建 IP 池" disabled={busy} onClick={actions.createPool}><Icon name="plus" /> 新建</button>
-                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="重命名当前池" aria-label="重命名当前 IP 池" disabled={busy || inTrash} onClick={actions.renamePool}>重命名</button>
-                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="上移当前池" aria-label="上移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(-1)}>↑ 上移</button>
-                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="下移当前池" aria-label="下移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(1)}>↓ 下移</button>
-                  <button class="btn btn-sm btn-outline-danger pool-action" type="button" title="删除当前池" aria-label="删除当前 IP 池" disabled={busy || inTrash} onClick={actions.deletePool}>删除</button>
-                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="一键洗库" aria-label="一键清洗当前 IP 池" disabled={busy || inTrash} onClick={actions.cleanPool}>洗库</button>
+                  <button class="btn btn-sm btn-outline-primary" type="button" title="新建池" aria-label="新建 IP 池" disabled={busy} onClick={actions.createPool}><Icon name="plus" /></button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" title="重命名当前池" aria-label="重命名当前 IP 池" disabled={busy || inTrash} onClick={actions.renamePool}><Icon name="settings" /></button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" title="上移当前池" aria-label="上移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(-1)}>↑</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" title="下移当前池" aria-label="下移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(1)}>↓</button>
+                  <button class="btn btn-sm btn-outline-danger" type="button" title="删除当前池" aria-label="删除当前 IP 池" disabled={busy || inTrash} onClick={actions.deletePool}><Icon name="trash" /></button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" title="一键洗库" aria-label="一键清洗当前 IP 池" disabled={busy || inTrash} onClick={actions.cleanPool}><Icon name="refresh" /></button>
                 </div>
               </div>
             </div>
@@ -339,9 +339,10 @@ export function DashboardPage({
                 <div class="domain-binding-actions">
                   {bindings.status === 'ready' && bindings.data.items.length > 1 && (
                     <button
-                      class={`btn btn-sm btn-outline-primary binding-refresh binding-sort${sortingBindings ? ' active' : ''}`}
+                      class={`btn btn-sm btn-outline-primary${sortingBindings ? ' active' : ''}`}
                       type="button"
-                      title="调整域名池绑定的显示顺序"
+                      title={sortingBindings ? '完成绑定排序' : '调整绑定显示顺序'}
+                      aria-label={sortingBindings ? '完成绑定排序' : '调整绑定显示顺序'}
                       aria-pressed={sortingBindings}
                       onClick={(event) => {
                         event.preventDefault();
@@ -349,11 +350,11 @@ export function DashboardPage({
                         setSortingBindings((current) => !current);
                       }}
                     >
-                      ↑ {sortingBindings ? '完成' : '排序'}
+                      <Icon name="settings" />
                     </button>
                   )}
                   <button
-                    class="btn btn-sm btn-outline-primary binding-refresh"
+                    class="btn btn-sm btn-outline-primary"
                     type="button"
                     title="刷新域名池绑定"
                     disabled={bindings.status === 'loading'}
@@ -363,7 +364,7 @@ export function DashboardPage({
                       actions.refreshBindings();
                     }}
                   >
-                    <Icon name="refresh" /> 刷新
+                    <Icon name="refresh" />
                   </button>
                 </div>
               </summary>
@@ -458,12 +459,12 @@ export function DashboardPage({
               <div class="progress-bar" style={`width:${batchProgress(batch)}%; background:var(--success);`} />
             </div>
             <button
-              class="btn btn-outline-primary btn-sm w-100 mb-3"
+              class="btn btn-dark w-100 mb-3"
               type="button"
               disabled={maintenanceBusy}
               onClick={actions.runMaintenance}
             >
-              <Icon name="refresh" /> {maintenanceBusy ? '维护中…' : '执行全部维护'}
+              <Icon name="settings" /> {maintenanceBusy ? '维护中…' : '执行全部维护'}
             </button>
             <MaintenanceSummary state={maintenance} />
           </div>
