@@ -5,15 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 /**
- * 把 `app/` 中的重构源码构建成独立检查产物 `worker.js`。
+ * 把 `app/` 源码构建成部署入口 `_worker.js` 和检查产物 `app/dist/release/worker.js`。
  *
  * 构建顺序：
  *   1. 用 Vite 构建 `app/web/`；
  *   2. 把前端产物 gzip 后编码为 Worker 内置资源表；
  *   3. 用 Wrangler 打包唯一的 `createWorker()` 入口。
  *
- * 根目录当前仍以手工可读的 `_worker.js` 为部署入口，完成行为对齐前不覆盖它。
- * 构建产物不手工编辑；重构源码始终以 `app/` 为准。
+ * 根目录 `_worker.js` 是提交到仓库的唯一部署入口，由本脚本同步生成。
+ * `_worker.js` 与检查产物都不手工编辑；可维护源码始终以 `app/` 为准。
  */
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -24,6 +24,7 @@ const buildDir = join(appRoot, 'dist', 'bundle-build');
 const generatedDir = join(buildDir, 'generated');
 const bundleDir = join(buildDir, 'bundle');
 const releaseWorkerPath = join(outDir, 'worker.js');
+const deployWorkerPath = join(root, '_worker.js');
 
 /** 前端产物只支持明确列出的类型；出现新类型时先显式登记 MIME。 */
 const CONTENT_TYPES = new Map([
@@ -71,11 +72,13 @@ runWrangler([
 
 const bundle = createBundle();
 writeFileSync(releaseWorkerPath, bundle, 'utf8');
+writeFileSync(deployWorkerPath, bundle, 'utf8');
 rmSync(buildDir, { recursive: true, force: true });
 
 console.log(`  资源 ${assets.length} 个，打包 ${formatKb(assets.reduce((sum, asset) => sum + asset.bytes.length, 0))}`);
 console.log(`  worker.js  raw ${formatKb(Buffer.byteLength(bundle))}  gzip ${formatKb(gzipSync(bundle).length)}`);
-console.log('  构建产物：app/dist/release/worker.js');
+console.log('  部署入口：_worker.js');
+console.log('  检查产物：app/dist/release/worker.js');
 
 /** npm 在 Windows 上是 .cmd 包装器，用字符串形式交给 shell 启动，避免 spawn EINVAL。 */
 function runNpm(script) {
@@ -110,7 +113,8 @@ function createBundle() {
 
 /** Wrangler 产物末尾指向 sourcemap，但发布目录不保留 map 文件，去掉悬空引用。 */
 function stripSourceMapReference(source) {
-  return source.replace(/^\/\/# sourceMappingURL=.*$/gm, '');
+  const withoutMap = source.replace(/^\/\/# sourceMappingURL=.*$/gm, '');
+  return withoutMap.replace(/\s+$/, '') + '\n';
 }
 
 /** 递归收集前端产物，生成以请求路径为 key 的资源表。 */

@@ -1,6756 +1,3719 @@
-/**
- * DDNS Pro & Proxy IP Manager
- */
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// ==================== Editable configuration ====================
-// Change these values first when tuning runtime behavior.
-const APP_VERSION = '2026.09.21-21.25';
-const APP_CONFIG_KEY = 'app_config';
-const GLOBAL_SETTINGS = {
-    // ── IP 检测 ──
-    CONCURRENT_CHECKS: 32,       // 前端批量检测并发数
-    BACKEND_CONCURRENT_CHECKS: 4, // 单次 Worker 调用的检测并发数
-    CHECK_TIMEOUT: 15000,         // 单个检测接口请求超时(ms)
+// app/dist/bundle-build/generated/index.ts
+import { connect } from "cloudflare:sockets";
 
-    // ── 网络超时 ──
-    REMOTE_LOAD_TIMEOUT: 8000,   // 远程 URL 加载超时(ms)
-    DOH_TIMEOUT: 5000,           // DNS over HTTPS 查询超时(ms)
+// app/src/adapters/assets/bundled-assets.ts
+var INDEX_PATH = "/index.html";
+var IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+var REVALIDATE_CACHE = "no-cache";
+var TEXT_HEADERS = { "content-type": "text/plain; charset=utf-8" };
+function createBundledAssets(assets) {
+  const decoded = /* @__PURE__ */ new Map();
+  const load = /* @__PURE__ */ __name((path) => {
+    const cached = decoded.get(path);
+    if (cached) return cached;
+    const pending = decodeAsset(assets[path]);
+    decoded.set(path, pending);
+    return pending;
+  }, "load");
+  const fetcher = {
+    async fetch(input, init) {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
+      }
+      const path = normalizePath(new URL(request.url).pathname);
+      let asset = await load(path);
+      if (!asset && isSpaRoute(path)) asset = await load(INDEX_PATH);
+      if (!asset) return new Response("Not Found", { status: 404, headers: TEXT_HEADERS });
+      const headers = {
+        "content-type": asset.contentType,
+        "cache-control": isHashedAsset(path) ? IMMUTABLE_CACHE : REVALIDATE_CACHE
+      };
+      return new Response(request.method === "HEAD" ? null : asset.bytes, { headers });
+    }
+  };
+  return fetcher;
+}
+__name(createBundledAssets, "createBundledAssets");
+async function decodeAsset(asset) {
+  if (!asset) return null;
+  const stored = decodeBase64(asset.base64);
+  const bytes = asset.gzip ? await gunzip(stored) : stored;
+  return { bytes, contentType: asset.contentType };
+}
+__name(decodeAsset, "decodeAsset");
+async function gunzip(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+__name(gunzip, "gunzip");
+function isSpaRoute(path) {
+  return !path.slice(path.lastIndexOf("/") + 1).includes(".");
+}
+__name(isSpaRoute, "isSpaRoute");
+function isHashedAsset(path) {
+  return path.startsWith("/assets/");
+}
+__name(isHashedAsset, "isHashedAsset");
+function normalizePath(pathname) {
+  const collapsed = pathname.replace(/\/{2,}/g, "/");
+  return collapsed.startsWith("/") ? collapsed : `/${collapsed}`;
+}
+__name(normalizePath, "normalizePath");
+function decodeBase64(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+__name(decodeBase64, "decodeBase64");
 
-    // ── 数据限制 ──
-    DEFAULT_MIN_ACTIVE: 3,       // 默认最小活跃 IP 数
-    MAX_TRASH_SIZE: 1000,        // 垃圾桶最大条目数
+// app/src/domain/proxy-target.ts
+var IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+var NUMERIC_DOTTED_RE = /^\d+(?:\.\d+){3}$/;
+var HOSTNAME_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+function parseProxyTarget(input, defaultPort = 443) {
+  const original = input.trim();
+  if (!original || original.length > 512) return null;
+  const parsed = parseAuthority(original, defaultPort);
+  if (!parsed) return null;
+  const host = parsed.host.toLowerCase();
+  const family = detectFamily(host);
+  if (!family) return null;
+  if (!Number.isInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535) return null;
+  const authority = formatProxyAuthority(host, parsed.port);
+  return {
+    input: original,
+    host,
+    port: parsed.port,
+    family,
+    authority,
+    key: authority.toLowerCase()
+  };
+}
+__name(parseProxyTarget, "parseProxyTarget");
+function formatProxyAuthority(host, port) {
+  return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+__name(formatProxyAuthority, "formatProxyAuthority");
+function dnsRecordTypeForHost(host) {
+  return host.includes(":") ? "AAAA" : "A";
+}
+__name(dnsRecordTypeForHost, "dnsRecordTypeForHost");
+function parseAuthority(value, defaultPort) {
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      const host = stripIpv6Brackets(url.hostname);
+      return { host, port: Number(url.port || defaultPort) };
+    } catch {
+      return null;
+    }
+  }
+  const bracketed = /^\[([^\]]+)\](?::(\d+))?$/.exec(value);
+  if (bracketed) {
+    const host = bracketed[1];
+    if (!host) return null;
+    const port = bracketed[2] ? Number(bracketed[2]) : defaultPort;
+    return { host, port };
+  }
+  const colonCount = [...value].filter((char) => char === ":").length;
+  if (colonCount > 1) return { host: value, port: defaultPort };
+  if (colonCount === 1) {
+    const separator = value.lastIndexOf(":");
+    const host = value.slice(0, separator).trim();
+    const portText = value.slice(separator + 1).trim();
+    if (!host || !/^\d+$/.test(portText)) return null;
+    return { host, port: Number(portText) };
+  }
+  return { host: value, port: defaultPort };
+}
+__name(parseAuthority, "parseAuthority");
+function stripIpv6Brackets(hostname) {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+__name(stripIpv6Brackets, "stripIpv6Brackets");
+function detectFamily(host) {
+  if (isIpv4(host)) return "ipv4";
+  if (isIpv6(host)) return "ipv6";
+  if (NUMERIC_DOTTED_RE.test(host)) return null;
+  return HOSTNAME_RE.test(host) ? "hostname" : null;
+}
+__name(detectFamily, "detectFamily");
+function isIpv4(value) {
+  return IPV4_RE.test(value) && value.split(".").every((part) => Number(part) <= 255);
+}
+__name(isIpv4, "isIpv4");
+function isIpv6(value) {
+  if (!value.includes(":")) return false;
+  try {
+    const parsed = new URL(`http://[${value}]`);
+    return parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+__name(isIpv6, "isIpv6");
+
+// app/src/domain/txt-record.ts
+function parseTxtAddresses(content) {
+  const unquoted = content.trim().replace(/^"|"$/g, "");
+  if (!unquoted) return [];
+  return [...new Set(unquoted.split(",").map((item) => item.trim()).filter(Boolean))];
+}
+__name(parseTxtAddresses, "parseTxtAddresses");
+function formatTxtAddresses(addresses) {
+  return `"${[...new Set(addresses)].join(",")}"`;
+}
+__name(formatTxtAddresses, "formatTxtAddresses");
+
+// app/src/adapters/dns/cloudflare-dns.ts
+var CloudflareDnsRepository = class {
+  static {
+    __name(this, "CloudflareDnsRepository");
+  }
+  baseUrl;
+  timeoutMs;
+  fetchImpl;
+  constructor(options = {}) {
+    this.baseUrl = (options.baseUrl ?? "https://api.cloudflare.com/client/v4").replace(/\/+$/, "");
+    this.timeoutMs = options.timeoutMs ?? 1e4;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+  async listAddressRecords(zone, domain) {
+    const [a, aaaa] = await Promise.all([
+      this.listRecords(zone, domain, "A"),
+      this.listRecords(zone, domain, "AAAA")
+    ]);
+    return [...a, ...aaaa];
+  }
+  async listTxtRecords(zone, domain) {
+    return await this.listRecords(zone, domain, "TXT");
+  }
+  async addAddressRecord(zone, domain, host, type) {
+    const recordType = type ?? dnsRecordTypeForHost(host);
+    const result = await this.request(zone, `/zones/${encodeURIComponent(zone.zoneId)}/dns_records`, {
+      method: "POST",
+      body: JSON.stringify({ type: recordType, name: domain, content: host, ttl: 60, proxied: false })
+    });
+    return parseRecord(result);
+  }
+  async upsertTxtRecord(zone, domain, recordId, addresses) {
+    const body = JSON.stringify({ type: "TXT", name: domain, content: formatTxtAddresses(addresses), ttl: 60 });
+    const result = recordId ? await this.request(zone, `/zones/${encodeURIComponent(zone.zoneId)}/dns_records/${encodeURIComponent(recordId)}`, {
+      method: "PUT",
+      body
+    }) : await this.request(zone, `/zones/${encodeURIComponent(zone.zoneId)}/dns_records`, {
+      method: "POST",
+      body
+    });
+    return parseRecord(result);
+  }
+  async deleteRecord(zone, recordId) {
+    await this.request(zone, `/zones/${encodeURIComponent(zone.zoneId)}/dns_records/${encodeURIComponent(recordId)}`, {
+      method: "DELETE"
+    });
+  }
+  async listRecords(zone, domain, type) {
+    const result = await this.request(
+      zone,
+      `/zones/${encodeURIComponent(zone.zoneId)}/dns_records?name=${encodeURIComponent(domain)}&type=${type}`,
+      { method: "GET" }
+    );
+    if (!Array.isArray(result)) throw new CloudflareDnsError("Cloudflare \u8FD4\u56DE\u7684 DNS \u8BB0\u5F55\u683C\u5F0F\u65E0\u6548");
+    return result.map(parseRecord);
+  }
+  async request(zone, path, init) {
+    if (!zone.apiToken || !zone.zoneId) throw new CloudflareDnsError("Cloudflare \u51ED\u8BC1\u4E0D\u5B8C\u6574");
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${zone.apiToken}`);
+    headers.set("Content-Type", "application/json");
+    let response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(this.timeoutMs)
+      });
+    } catch {
+      throw new CloudflareDnsError("Cloudflare API \u8BF7\u6C42\u5931\u8D25");
+    }
+    let payload;
+    try {
+      const value = await response.json();
+      if (!isRecord(value)) throw new Error("invalid response");
+      payload = value;
+    } catch {
+      throw new CloudflareDnsError(`Cloudflare API \u54CD\u5E94\u65E0\u6548 (HTTP ${response.status})`);
+    }
+    if (!response.ok || payload.success !== true) {
+      throw new CloudflareDnsError(`Cloudflare API \u64CD\u4F5C\u5931\u8D25 (HTTP ${response.status})`);
+    }
+    return payload.result;
+  }
+};
+var CloudflareDnsError = class extends Error {
+  static {
+    __name(this, "CloudflareDnsError");
+  }
+  constructor(message) {
+    super(message);
+    this.name = "CloudflareDnsError";
+  }
+};
+function parseRecord(value) {
+  if (!isRecord(value)) throw new CloudflareDnsError("Cloudflare DNS \u8BB0\u5F55\u683C\u5F0F\u65E0\u6548");
+  const id = readString(value.id);
+  const type = readString(value.type);
+  const name = readString(value.name);
+  const content = readString(value.content);
+  if (!id || !type || !["A", "AAAA", "TXT"].includes(type) || !name || content === void 0) {
+    throw new CloudflareDnsError("Cloudflare DNS \u8BB0\u5F55\u5B57\u6BB5\u4E0D\u5B8C\u6574");
+  }
+  return { id, type, name, content };
+}
+__name(parseRecord, "parseRecord");
+function readString(value) {
+  return typeof value === "string" ? value : void 0;
+}
+__name(readString, "readString");
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+__name(isRecord, "isRecord");
+
+// app/src/adapters/notify/telegram.ts
+var TelegramNotifier = class {
+  static {
+    __name(this, "TelegramNotifier");
+  }
+  enabled;
+  token;
+  chatId;
+  timeoutMs;
+  fetchImpl;
+  constructor(options) {
+    this.enabled = options.enabled;
+    this.token = options.token.trim();
+    this.chatId = options.chatId.trim();
+    this.timeoutMs = options.timeoutMs ?? 1e4;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+  async send(text3) {
+    if (!this.enabled) return { sent: false, reason: "disabled" };
+    if (!this.token || !this.chatId) return { sent: false, reason: "not_configured" };
+    try {
+      const response = await this.fetchImpl(`https://api.telegram.org/bot${this.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: this.chatId,
+          text: text3,
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs)
+      });
+      return response.ok ? { sent: true, reason: "sent" } : { sent: false, reason: "failed" };
+    } catch {
+      return { sent: false, reason: "failed" };
+    }
+  }
 };
 
-const SETTING_LIMITS = {
-    CONCURRENT_CHECKS: { min: 1, max: 128 },
-    BACKEND_CONCURRENT_CHECKS: { min: 1, max: 6 },
-    CHECK_TIMEOUT: { min: 500, max: 30000 },
-    REMOTE_LOAD_TIMEOUT: { min: 1000, max: 60000 },
-    DOH_TIMEOUT: { min: 1000, max: 30000 },
-    DEFAULT_MIN_ACTIVE: { min: 0, max: 100 },
-    MAX_TRASH_SIZE: { min: 0, max: 100000 }
-};
-
-const CONFIG_TEXT_FIELDS = [
-    { key: 'checkApi', id: 'cfg-check-api', label: '检测 API', help: '主检测接口，支持 {proxyip} 占位符。', placeholder: 'CHECK_API', span: 2 },
-    { key: 'checkApiBackup', id: 'cfg-check-api-backup', label: '备用检测 API', help: '主接口失败或返回不可用时用于复检，可留空。', placeholder: 'CHECK_API_BACKUP', span: 2 },
-    { key: 'dohApi', id: 'cfg-doh-api', label: 'DoH API', help: '域名解析查询接口。', placeholder: 'DOH_API' },
-    { key: 'authKey', id: 'cfg-auth-key', label: '面板密钥', help: '为空则关闭前端鉴权。', placeholder: 'AUTH_KEY' },
-    { key: 'tgToken', id: 'cfg-tg-token', label: 'TG Bot Token', help: '开启 TG 通知时必填。', placeholder: 'TG_TOKEN' },
-    { key: 'tgId', id: 'cfg-tg-id', label: 'TG Chat ID', help: '通知接收账号或群组 ID。', placeholder: 'TG_ID' }
-];
-
-const CONFIG_NUMBER_FIELDS = [
-    { key: 'CONCURRENT_CHECKS', id: 'cfg-concurrent-checks', label: '检测并发', help: '前端批量检测并发数。', placeholder: '32' },
-    { key: 'BACKEND_CONCURRENT_CHECKS', id: 'cfg-backend-concurrent', label: '后端检测并发', help: '维护、补货预检及域名状态检测；1–6，独立于前端并发。', placeholder: '4' },
-    { key: 'CHECK_TIMEOUT', id: 'cfg-check-timeout', label: '检测超时(ms)', help: '单个检测接口请求超时；保留纯超时淘汰慢 IP 的策略。', placeholder: '3000' },
-    { key: 'REMOTE_LOAD_TIMEOUT', id: 'cfg-remote-timeout', label: '远程加载超时(ms)', help: '远程 TXT URL 加载。', placeholder: '5000' },
-    { key: 'DOH_TIMEOUT', id: 'cfg-doh-timeout', label: 'DoH超时(ms)', help: 'DNS over HTTPS 查询。', placeholder: '5000' },
-    { key: 'DEFAULT_MIN_ACTIVE', id: 'cfg-default-min-active', label: '默认活跃数', help: '新增管理域名默认值。', placeholder: '3' },
-    { key: 'MAX_TRASH_SIZE', id: 'cfg-max-trash-size', label: '垃圾桶上限', help: '超过后保留最新条目。', placeholder: '1000' }
-];
-
-const CONFIG_TOGGLE_FIELDS = [
-    { key: 'scheduledEnabled', id: 'cfg-scheduled-enabled', label: '自动维护', fallback: true, env: 'SCHEDULED_ENABLED' },
-    { key: 'tgEnabled', id: 'cfg-tg-enabled', label: 'TG通知', fallback: true, env: 'TG_ENABLED' }
-];
-
-const CONFIG_TEXT_KEYS = CONFIG_TEXT_FIELDS.map(({ key }) => key);
-
-const ENV_STRING_CONFIG_FIELDS = [
-    ['apiKey', 'CF_KEY'],
-    ['zoneId', 'CF_ZONEID'],
-    ['authKey', 'AUTH_KEY'],
-    ['tgToken', 'TG_TOKEN'],
-    ['tgId', 'TG_ID'],
-    ['checkApi', 'CHECK_API'],
-    ['checkApiBackup', 'CHECK_API_BACKUP'],
-    ['dohApi', 'DOH_API']
-];
-
-// ==================== 默认配置（环境变量未设置时使用） ====================
-const DEFAULT_CONFIG = {
-    // 目标维护域名的Cloudflare 配置
-    apiKey: '',              // CF_KEY: Cloudflare API Token
-    zoneId: '',              // CF_ZONEID: Cloudflare Zone ID
-    zones: [],               // app_config.zones: 多套基础域名 + CF 凭据
-
-    // 目标维护域名的配置
-    targets: [],             // app_config.targets: 配置中心保存的维护目标
-
-    // Telegram 通知配置
-    tgToken: '',             // TG_TOKEN: Telegram Bot Token
-    tgId: '',                // TG_ID: Telegram Chat ID
-
-    // 检测 API 配置
-    checkApi: '',  // CHECK_API: ProxyIP 检测接口
-    checkApiBackup: 'https://checkapi.dvb.kdns.fr/?candidate=',      // CHECK_API_BACKUP: 备用检测接口
-
-    // DNS 配置
-    dohApi: 'https://cloudflare-dns.com/dns-query',  // DOH_API: DNS over HTTPS 接口
-    // 访问控制配置
-    authKey: '',             // AUTH_KEY: 面板访问密钥
-    scheduledEnabled: true,   // SCHEDULED_ENABLED: 定时维护开关
-    tgEnabled: true,          // TG_ENABLED: Telegram 通知开关
-    settings: GLOBAL_SETTINGS,
-
-    // 运行时配置（非环境变量）
-    projectUrl: ''           // 项目URL（自动获取）
-};
-// ==================== 默认配置结束 ====================
-
-function normalizeRuntimeSettings(raw = {}) {
-    const settings = { ...GLOBAL_SETTINGS };
-    for (const [key, defaults] of Object.entries(SETTING_LIMITS)) {
-        const fallback = GLOBAL_SETTINGS[key];
-        const parsed = parseInt(raw?.[key] ?? fallback, 10);
-        const value = Number.isFinite(parsed) ? parsed : fallback;
-        settings[key] = Math.min(defaults.max, Math.max(defaults.min, value));
-    }
-    return settings;
+// app/src/domain/pool-entry.ts
+function parsePoolText(text3) {
+  if (!text3) return [];
+  return text3.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((raw) => ({ raw, entry: parsePoolEntry(raw) }));
 }
-
-function getRuntimeSettings(config = {}) {
-    return normalizeRuntimeSettings(config.settings || GLOBAL_SETTINGS);
+__name(parsePoolText, "parsePoolText");
+function serializePoolText(lines) {
+  return lines.map((line) => line.raw).join("\n");
 }
-
-function safeJSONParse(str, defaultValue = null) {
-    try { return str ? JSON.parse(str) : defaultValue; }
-    catch { return defaultValue; }
-}
-
-const parsePoolList = raw => (raw || '').split('\n').filter(l => l.trim());
-
-const parseTXTContent = content => content ? content.replace(/^"|"$/g, '').split(',').map(ip => ip.trim()).filter(Boolean) : [];
-
-const extractIPKey = line => {
-    if (!line) return '';
-    const main = line.split('#')[0].trim();
-    return main.split(',')[0].trim();
-};
-
-function parseAddr(addr, defaultPort = '443') {
-    const value = extractIPKey(addr || '');
-    if (!value) return { host: '', port: defaultPort, address: '' };
-    // host is DNS content (bare IPv6); address is check/pool format with port.
-    if (value.startsWith('[')) {
-        const end = value.indexOf(']');
-        const host = end >= 0 ? value.slice(1, end) : value.replace(/^\[/, '');
-        const portMatch = value.match(/\]:(\d+)$/);
-        const port = portMatch ? portMatch[1] : defaultPort;
-        return { host, port, address: formatAddr(host, port) };
-    }
-    const parts = value.split(':');
-    if (parts.length === 2) {
-        const port = parts[1] || defaultPort;
-        return { host: parts[0], port, address: `${parts[0]}:${port}` };
-    }
-    if (parts.length > 2) {
-        return { host: value, port: defaultPort, address: formatAddr(value, defaultPort) };
-    }
-    return { host: value, port: defaultPort, address: `${value}:${defaultPort}` };
-}
-
-function extractHostFromAddr(addr) {
-    return parseAddr(addr).host;
-}
-
-function extractPortFromAddr(addr, defaultPort = '443') {
-    return parseAddr(addr, defaultPort).port;
-}
-
-function hasExplicitPort(addr) {
-    const value = extractIPKey(addr || '');
-    if (!value) return false;
-    if (value.startsWith('[')) return /\]:(\d+)$/.test(value);
-    const parts = value.split(':');
-    return parts.length === 2 && parts[1] !== '';
-}
-
-function isIPv6Address(ip) {
-    const value = String(ip || '').replace(/^\[/, '').replace(/\]$/, '');
-    return value.includes(':');
-}
-
-function getDNSRecordTypeForIP(ip) {
-    return isIPv6Address(ip) ? 'AAAA' : 'A';
-}
-
-function formatAddr(ip, port = '443') {
-    const cleanIP = String(ip || '').replace(/^\[/, '').replace(/\]$/, '');
-    return isIPv6Address(cleanIP) ? `[${cleanIP}]:${port}` : `${cleanIP}:${port}`;
-}
-
-function splitComment(line) {
-    if (!line) return { main: '', comment: '' };
-    const idx = line.indexOf('#');
-    if (idx >= 0) return { main: line.substring(0, idx).trim(), comment: ` ${line.substring(idx).trim()}` };
-    return { main: line.trim(), comment: '' };
-}
-
+__name(serializePoolText, "serializePoolText");
 function parsePoolEntry(line) {
-    const raw = String(line || '').trim();
-    if (!raw) return null;
-    const beforeComment = raw.split('#')[0].trim();
-    const fields = beforeComment.split(',').map(item => item.trim());
-    const address = fields[0] || '';
-    if (!address) return null;
-    return {
-        address,
-        asn: fields[1] || null,
-        country: fields[2] || null,
-        stack: fields[3] || null
-    };
-}
-
-function formatPoolAsn(asn) {
-    const values = String(asn || '')
-        .split(/[\/,\s]+/)
-        .map(item => item.trim())
-        .filter(item => item && !isUnknownMetaValue(item));
-    if (!values.length) return 'null';
-    return values.map(item => item.toUpperCase().startsWith('AS') ? item.toUpperCase() : `AS${item}`).join('/');
-}
-
-function formatPoolStack(stack) {
-    const normalized = normalizeStackFilter(stack);
-    return ['v4', 'v6', 'v4/v6'].includes(normalized) ? normalized : 'null';
-}
-
-function extractPoolComment(line) {
-    return splitComment(line).comment;
-}
-
-function buildPoolEntryFromCheckResult(addr, result, previousEntry = null) {
-    const parsed = parseAddr(addr);
-    const prevMeta = previousEntry ? parsePoolEntry(previousEntry) : null;
-
-    const nextAsn = !isUnknownMetaValue(result?.asn) ? formatPoolAsn(result?.asn)
-        : (prevMeta && !isUnknownMetaValue(prevMeta.asn) ? formatPoolAsn(prevMeta.asn) : 'null');
-    const nextCountry = !isUnknownMetaValue(result?.country) ? result.country
-        : (prevMeta && !isUnknownMetaValue(prevMeta.country) ? prevMeta.country : 'null');
-    const nextStack = !isUnknownMetaValue(result?.stack) ? formatPoolStack(result?.stack)
-        : (prevMeta && !isUnknownMetaValue(prevMeta.stack) ? formatPoolStack(prevMeta.stack) : 'null');
-
-    const base = [
-        parsed.address || normalizeCheckAddr(addr),
-        nextAsn,
-        nextCountry,
-        nextStack
-    ].join(',');
-    return base + (previousEntry ? extractPoolComment(previousEntry) : '');
-}
-
-function mergePoolEntryLines(oldLine, newLine) {
-    const oldMeta = parsePoolEntry(oldLine);
-    const newMeta = parsePoolEntry(newLine);
-    if (!oldMeta) return newLine;
-    if (!newMeta) return oldLine;
-    const pick = (newVal, oldVal) => !isUnknownMetaValue(newVal) ? newVal : (!isUnknownMetaValue(oldVal) ? oldVal : 'null');
-    const base = [
-        newMeta.address,
-        pick(newMeta.asn, oldMeta.asn),
-        pick(newMeta.country, oldMeta.country),
-        pick(newMeta.stack, oldMeta.stack)
-    ].join(',');
-    return base + (extractPoolComment(newLine) || extractPoolComment(oldLine));
-}
-
-function normalizeStackFilter(value) {
-    const text = String(value || '').trim().toLowerCase().replace(/_/g, '-');
-    if (!text) return 'v4/v6';
-    if (['v4', 'ipv4', 'ipv4-only', 'only-ipv4'].includes(text)) return 'v4';
-    if (['v6', 'ipv6', 'ipv6-only', 'only-ipv6'].includes(text)) return 'v6';
-    if (['v4/v6', 'v6/v4', 'dual', 'dual-stack', 'both', 'all', 'ipv4-ipv6'].includes(text)) return 'v4/v6';
-    return text.replace('-', '_');
-}
-
-const POOL_DEFAULT_KEY = 'ip_pool_default';
-const POOL_TRASH_KEY = 'ip_pool_trash';
-const POOL_NAMES_KEY = 'ip_pool_names';
-const POOL_ORDER_KEY = 'ip_pool_order';
-const DOMAIN_POOL_MAPPING_KEY = 'domain_pool_mapping';
-const DOMAIN_POOL_ORDER_KEY = 'domain_pool_order';
-const NUMBERED_POOL_KEY_RE = /^ip_pool_(\d{3})$/;
-function getPoolFixedName(poolKey) {
-    if (poolKey === POOL_DEFAULT_KEY) return '默认池';
-    if (poolKey === POOL_TRASH_KEY) return '🗑️ 垃圾桶';
-    const numbered = NUMBERED_POOL_KEY_RE.exec(poolKey || '');
-    if (numbered) return `池 ${numbered[1]}`;
-    return String(poolKey || '');
-}
-function getPoolDisplayName(poolKey, poolNames = {}) {
-    return poolNames?.[poolKey] || getPoolFixedName(poolKey);
-}
-const formatPoolNumber = value => String(value).padStart(3, '0');
-const getNumberedPoolKey = value => `ip_pool_${formatPoolNumber(value)}`;
-const isUserPoolKey = key => key === POOL_DEFAULT_KEY || NUMBERED_POOL_KEY_RE.test(key || '');
-const isPoolDataKey = key => isUserPoolKey(key) || key === POOL_TRASH_KEY;
-const isWritablePoolKey = key => isUserPoolKey(key) || key === POOL_TRASH_KEY;
-
-function comparePoolKeys(a, b) {
-    const order = key => key === POOL_DEFAULT_KEY ? 0 : (key === POOL_TRASH_KEY ? 1 : 2);
-    const oa = order(a);
-    const ob = order(b);
-    if (oa !== ob) return oa - ob;
-    const na = NUMBERED_POOL_KEY_RE.exec(a || '');
-    const nb = NUMBERED_POOL_KEY_RE.exec(b || '');
-    if (na && nb) return Number(na[1]) - Number(nb[1]);
-    if (na) return -1;
-    if (nb) return 1;
-    return String(a || '').localeCompare(String(b || ''), 'zh-CN', { numeric: true });
-}
-
-async function readPoolDisplayNames(env) {
-    const names = safeJSONParse(await env.IP_DATA.get(POOL_NAMES_KEY), {});
-    return names && typeof names === 'object' && !Array.isArray(names) ? names : {};
-}
-
-async function writePoolDisplayNames(env, names) {
-    await env.IP_DATA.put(POOL_NAMES_KEY, JSON.stringify(names || {}));
-}
-
-async function readPoolOrder(env) {
-    const order = safeJSONParse(await env.IP_DATA.get(POOL_ORDER_KEY), null);
-    return Array.isArray(order) ? order : null;
-}
-
-async function writePoolOrder(env, order) {
-    await env.IP_DATA.put(POOL_ORDER_KEY, JSON.stringify(order || []));
-}
-async function readDomainPoolOrder(env) {
-    const order = safeJSONParse(await env.IP_DATA.get(DOMAIN_POOL_ORDER_KEY), null);
-    return Array.isArray(order) ? order : null;
-}
-
-async function writeDomainPoolOrder(env, order) {
-    await env.IP_DATA.put(DOMAIN_POOL_ORDER_KEY, JSON.stringify(order || []));
-}
-
-function normalizeDomainPoolOrder(order, actualTargets) {
-    const targets = [...new Set((actualTargets || []).filter(Boolean))];
-    const savedOrder = Array.isArray(order) ? order : targets;
-    const actualSet = new Set(targets);
-    const normalized = [];
-    for (const targetKey of savedOrder) {
-        if (actualSet.has(targetKey) && !normalized.includes(targetKey)) normalized.push(targetKey);
-    }
-    for (const targetKey of targets) {
-        if (!normalized.includes(targetKey)) normalized.push(targetKey);
-    }
-    return normalized;
-}
-
-async function getConfiguredTargetKeys(env) {
-    try {
-        const rawConfig = safeJSONParse(await env.IP_DATA.get(APP_CONFIG_KEY), {});
-        const config = normalizeSavedConfig(rawConfig);
-        return config.targets.map(getTargetDuplicateKey).filter(Boolean);
-    } catch {
-        return [];
-    }
-}
-function normalizePoolOrder(order, actualPools) {
-    const pools = [...new Set(actualPools.filter(isPoolDataKey))];
-    const fallback = [...pools].sort(comparePoolKeys);
-    const savedOrder = Array.isArray(order) ? order : fallback;
-
-    const actualSet = new Set(pools);
-    const normalized = [];
-    for (const poolKey of savedOrder) {
-        if (actualSet.has(poolKey) && !normalized.includes(poolKey)) normalized.push(poolKey);
-    }
-    for (const poolKey of fallback) {
-        if (!normalized.includes(poolKey)) normalized.push(poolKey);
-    }
-
-    const userPools = normalized.filter(poolKey => ![POOL_DEFAULT_KEY, POOL_TRASH_KEY].includes(poolKey));
-    return [
-        ...(actualSet.has(POOL_DEFAULT_KEY) ? [POOL_DEFAULT_KEY] : []),
-        ...userPools,
-        ...(actualSet.has(POOL_TRASH_KEY) ? [POOL_TRASH_KEY] : [])
-    ];
-}
-
-async function readDomainPoolMapping(env) {
-    const mapping = safeJSONParse(await env.IP_DATA.get(DOMAIN_POOL_MAPPING_KEY), {});
-    return mapping && typeof mapping === 'object' && !Array.isArray(mapping) ? mapping : {};
-}
-
-async function listPoolKeys(env) {
-    await ensurePoolDefaults(env);
-    const allKeys = await env.IP_DATA.list();
-    const pools = allKeys.keys.map(k => k.name).filter(isPoolDataKey);
-    if (!pools.includes(POOL_DEFAULT_KEY)) pools.push(POOL_DEFAULT_KEY);
-    if (!pools.includes(POOL_TRASH_KEY)) pools.push(POOL_TRASH_KEY);
-    return normalizePoolOrder(await readPoolOrder(env), pools);
-}
-
-async function ensurePoolDefaults(env) {
-    if (await env.IP_DATA.get(POOL_DEFAULT_KEY) === null) await env.IP_DATA.put(POOL_DEFAULT_KEY, '');
-    if (await env.IP_DATA.get(POOL_TRASH_KEY) === null) await env.IP_DATA.put(POOL_TRASH_KEY, '');
-}
-
-async function getPoolState(env) {
-    await ensurePoolDefaults(env);
-    const [mapping, pools, poolNames, targetKeys, savedDomainOrder] = await Promise.all([
-        readDomainPoolMapping(env),
-        listPoolKeys(env),
-        readPoolDisplayNames(env),
-        getConfiguredTargetKeys(env),
-        readDomainPoolOrder(env)
-    ]);
-    return {
-        mapping,
-        pools,
-        poolNames,
-        domainPoolOrder: normalizeDomainPoolOrder(savedDomainOrder, targetKeys)
-    };
-}
-
-function poolListToMap(pool) {
-    const map = new Map();
-    parsePoolList(pool).forEach(line => {
-        const key = extractIPKey(line);
-        if (key) map.set(key, line);
-    });
-    return map;
-}
-
-const formatLogMessage = msg => `[${new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })}] ${msg}`;
-
-const JSON_CONTENT_TYPE = 'application/json; charset=UTF-8';
-const CF_ERROR_MSG = 'CF配置错误或API调用失败';
-
-// ==================== Response helpers / Auth ====================
-
-function jsonResponse(data, status = 200, extraHeaders = undefined) {
-    const headers = new Headers({ 'Content-Type': JSON_CONTENT_TYPE });
-    if (extraHeaders) {
-        const h = extraHeaders instanceof Headers ? extraHeaders : new Headers(extraHeaders);
-        h.forEach((v, k) => headers.set(k, v));
-    }
-    return new Response(JSON.stringify(data), { status, headers });
-}
-
-const badRequest = data => jsonResponse(data, 400);
-const serverError = data => jsonResponse(data, 500);
-const readJsonBody = async req => { try { return await req.json(); } catch { return null; } };
-const hasKVBinding = env => Boolean(env?.IP_DATA && typeof env.IP_DATA.get === 'function' && typeof env.IP_DATA.put === 'function');
-const badJsonBody = () => badRequest({ success: false, error: '请求体不是有效JSON' });
-
-const withJsonBody = handler => async (url, request, env, config) => {
-    const body = await readJsonBody(request);
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        return badJsonBody();
-    }
-    return handler(body, url, env, config, request);
-};
-
-function parseCookieHeader(cookieHeader) {
-    const out = {};
-    if (!cookieHeader) return out;
-    cookieHeader.split(';').forEach(part => {
-        const idx = part.indexOf('=');
-        if (idx === -1) return;
-        const k = part.slice(0, idx).trim();
-        const v = part.slice(idx + 1).trim();
-        if (k) { try { out[k] = decodeURIComponent(v); } catch { out[k] = v; } }
-    });
-    return out;
-}
-
-function getAuthCandidateFromRequest(request, url) {
-    const authHeader = request.headers.get('Authorization') ?? '';
-    const bearer = authHeader.toLowerCase().startsWith('bearer ')
-        ? authHeader.slice(7).trim()
-        : '';
-    const xAuth = (request.headers.get('X-Auth-Key') ?? '').trim();
-    const qKey = (url.searchParams.get('key') ?? '').trim();
-    const cookies = parseCookieHeader(request.headers.get('Cookie') ?? '');
-    const cKey = (cookies.ddns_auth ?? '').trim();
-    return { bearer, xAuth, qKey, cKey };
-}
-
-function checkRequestAuth(request, url, config) {
-    const requiredKey = (config.authKey || '').trim();
-    if (!requiredKey) {
-        return { enabled: false, ok: true, shouldSetCookie: false };
-    }
-
-    const { bearer, xAuth, qKey, cKey } = getAuthCandidateFromRequest(request, url);
-    const ok = bearer === requiredKey || xAuth === requiredKey || qKey === requiredKey || cKey === requiredKey;
-    const shouldSetCookie = ok && qKey === requiredKey && cKey !== requiredKey;
-    return { enabled: true, ok, shouldSetCookie };
-}
-
-function unauthorizedResponse(url) {
-    const isApi = url.pathname.startsWith('/api/');
-    if (isApi) {
-        return jsonResponse({
-            success: false,
-            error: '未授权',
-            message: '需要提供 AUTH_KEY'
-        }, 401);
-    }
-    const html = renderLoginHTML(url);
-    return new Response(html, { status: 401, headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
-}
-
-// ==================== Worker entry ====================
-
-export default {
-    async fetch(request, env, ctx) {
-        const requestStart = Date.now();
-        const url = new URL(request.url);
-        const kvReady = hasKVBinding(env);
-        const config = kvReady ? await createConfig(env, request) : createEnvConfig(env, request);
-
-        const buildAuthCookie = () => `ddns_auth=${encodeURIComponent((config.authKey || '').trim())}; Path=/; HttpOnly; Secure; SameSite=Lax`;
-
-        // 可选鉴权：不配置 AUTH_KEY 时跳过
-        const auth = checkRequestAuth(request, url, config);
-        if (auth.enabled && !auth.ok && url.pathname !== '/favicon.ico') {
-            return unauthorizedResponse(url);
-        }
-
-        if (url.pathname === '/') {
-            const html = renderHTML(config, { kvReady });
-            console.log(`📄 首页请求处理耗时: ${Date.now() - requestStart}ms`);
-            const headers = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
-            // 首页不缓存（含动态配置），但允许浏览器在后退时使用缓存
-            headers.set('Cache-Control', 'no-store');
-            if (auth.shouldSetCookie) {
-                headers.set('Set-Cookie', buildAuthCookie());
-            }
-            return new Response(html, { headers });
-        }
-
-        if (url.pathname === '/favicon.ico') {
-            return new Response(null, { status: 204 });
-        }
-
-        try {
-            if (url.pathname.startsWith('/api/') && !kvReady) {
-                return serverError({
-                    success: false,
-                    error: 'KV 未绑定',
-                    message: '请在 Worker Settings > Bindings 中绑定 KV Namespace，变量名必须为 IP_DATA。'
-                });
-            }
-            const apiStart = Date.now();
-            const response = await handleAPIRequest(url, request, env, config);
-            console.log(`🔧 API请求 ${url.pathname} 处理耗时: ${Date.now() - apiStart}ms`);
-
-            // 添加性能头信息
-            const headers = new Headers(response.headers);
-            headers.set('X-Processing-Time', `${Date.now() - requestStart}ms`);
-            if (url.pathname.startsWith('/api/') && !headers.has('Content-Type')) {
-                headers.set('Content-Type', 'application/json; charset=UTF-8');
-            }
-            // API 响应不缓存，确保数据实时性
-            if (url.pathname.startsWith('/api/')) {
-                headers.set('Cache-Control', 'no-store');
-            }
-            if (auth.shouldSetCookie) {
-                headers.set('Set-Cookie', buildAuthCookie());
-            }
-
-            return new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers
-            });
-        } catch (e) {
-            console.error(`❌ 请求处理失败 ${url.pathname}:`, e);
-            return serverError({
-                error: '内部服务器错误',
-                message: '请稍后重试'
-            });
-        }
-    },
-
-    async scheduled(event, env, ctx) {
-        console.log('⏰ 定时任务开始执行');
-        const startTime = Date.now();
-
-        try {
-            if (!hasKVBinding(env)) {
-                console.error('❌ KV 未绑定：请绑定变量名为 IP_DATA 的 KV Namespace，定时维护已跳过');
-                return;
-            }
-            const config = await createConfig(env);
-            if (!config.scheduledEnabled) {
-                console.log('⏸️ 定时维护已关闭，跳过执行');
-                return;
-            }
-            ctx.waitUntil((async () => {
-                await maintainAllDomains(env, false, config);
-                console.log(`✅ 定时任务完成，总耗时: ${Date.now() - startTime}ms`);
-            })());
-        } catch (e) {
-            console.error('❌ 定时任务失败:', e);
-        }
-    }
-};
-
-// ==================== API routes ====================
-
-const withUrlEnv = handler => (url, request, env) => handler(url, env);
-const withUrlConfig = handler => (url, request, env, config) => handler(url, config);
-const withUrlEnvConfig = handler => (url, request, env, config) => handler(url, env, config);
-const withEnv = handler => (url, request, env) => handler(env);
-const withConfig = handler => (url, request, env, config) => handler(config);
-const withJsonEnv = handler => withJsonBody((body, url, env) => handler(body, env));
-const withJsonConfig = handler => withJsonBody((body, url, env, config) => handler(body, config));
-const withJsonEnvConfig = handler => withJsonBody((body, url, env, config) => handler(body, env, config));
-
-const GET_API_ROUTES = {
-    '/api/get-pool': withUrlEnv(handleGetPool),
-    '/api/current-status': withUrlConfig(handleCurrentStatus),
-    '/api/lookup-domain': withUrlConfig(handleLookupDomain),
-    '/api/check-ip': withUrlConfig(handleCheckIP),
-    '/api/get-domain-pool-mapping': withEnv(handleGetDomainPoolMapping),
-    '/api/get-config': withConfig(handleGetConfig)
-};
-
-const POST_API_ROUTES = {
-    '/api/save-pool': withJsonEnv(handleSavePool),
-    '/api/save-pool-order': withJsonEnv(handleSavePoolOrder),
-    '/api/load-remote-url': withJsonConfig(handleLoadRemoteUrl),
-    '/api/delete-record': withUrlConfig(handleDeleteRecord),
-    '/api/add-a-record': withJsonConfig(handleAddARecord),
-    '/api/maintain': withUrlEnvConfig(handleMaintain),
-    '/api/save-domain-pool-mapping': withJsonEnv(handleSaveDomainPoolMapping),
-    '/api/save-domain-pool-order': withJsonEnvConfig(handleSaveDomainPoolOrder),
-    '/api/create-pool': withJsonEnv(handleCreatePool),
-    '/api/rename-pool': withJsonEnv(handleRenamePool),
-    '/api/delete-pool': withUrlEnv(handleDeletePool),
-    '/api/clear-trash': withEnv(handleClearTrash),
-    '/api/restore-from-trash': withJsonEnv(handleRestoreFromTrash),
-    '/api/save-config': withJsonEnv(handleSaveConfig)
-};
-
-const API_ROUTES = {
-    ...GET_API_ROUTES,
-    ...POST_API_ROUTES
-};
-
-// ==================== API handlers ====================
-
-const POST_ONLY_ROUTES = new Set(Object.keys(POST_API_ROUTES));
-
-async function handleAPIRequest(url, request, env, config) {
-    if (POST_ONLY_ROUTES.has(url.pathname) && request.method !== 'POST') {
-        return new Response('Method Not Allowed', { status: 405 });
-    }
-    const handler = API_ROUTES[url.pathname];
-    return handler ? await handler(url, request, env, config) : new Response('Not Found', { status: 404 });
-}
-
-async function handleGetPool(url, env) {
-    await ensurePoolDefaults(env);
-    const poolKey = url.searchParams.get('poolKey') || POOL_DEFAULT_KEY;
-    const onlyCount = url.searchParams.get('onlyCount') === 'true';
-    if (!isWritablePoolKey(poolKey)) {
-        return badRequest({ success: false, error: '无效的池名称' });
-    }
-
-    const pool = await env.IP_DATA.get(poolKey) || '';
-    const count = pool.trim() ? pool.trim().split('\n').length : 0;
-
-    if (onlyCount) {
-        return jsonResponse({ count });
-    }
-    return jsonResponse({ pool, count });
-}
-
-async function handleSavePoolOrder(body, env) {
-    await ensurePoolDefaults(env);
-    const order = body.order;
-    if (!Array.isArray(order)) {
-        return badRequest({ success: false, error: '排序数据格式无效' });
-    }
-
-    const actualPools = await listPoolKeys(env);
-    const actualSet = new Set(actualPools);
-    const submitted = [...new Set(order)];
-    if (submitted.length !== actualPools.length || submitted.some(poolKey => !actualSet.has(poolKey))) {
-        return badRequest({ success: false, error: '池列表已变化，请刷新后重试' });
-    }
-
-    const normalized = normalizePoolOrder(submitted, actualPools);
-    await writePoolOrder(env, normalized);
-    return jsonResponse({ success: true, ...(await getPoolState(env)) });
-}
-
-async function handleSavePool(body, env) {
-    await ensurePoolDefaults(env);
-    const poolKey = body.poolKey || POOL_DEFAULT_KEY;
-    const mode = body.mode || 'append'; // append: 追加, replace: 覆盖, remove: 删除
-    if (!isWritablePoolKey(poolKey)) {
-        return badRequest({ success: false, error: '无效的池名称' });
-    }
-    const newIPs = cleanIPList(body.pool || '');
-
-    if (!newIPs && !['remove', 'replace'].includes(mode)) {
-        return badRequest({ success: false, error: '没有有效IP' });
-    }
-
-    const existingMap = poolListToMap(await env.IP_DATA.get(poolKey) || '');
-
-    const existingCount = existingMap.size;
-    let responseData;
-
-    if (mode === 'replace') {
-        // 覆盖模式：清空现有，只保留新IP
-        existingMap.clear();
-        poolListToMap(newIPs).forEach((line, key) => existingMap.set(key, line));
-
-        responseData = {
-            success: true,
-            count: existingMap.size,
-            replaced: existingCount,
-            message: `已覆盖，原有 ${existingCount} 个IP，现有 ${existingMap.size} 个IP`
-        };
-    } else if (mode === 'remove') {
-        // 删除模式：从池中删除指定IP
-        const toRemove = new Set();
-        parsePoolList(newIPs || body.pool || '').forEach(line => {
-            const key = extractIPKey(line);
-            if (key) toRemove.add(key);
-        });
-
-        let removed = 0;
-        for (const key of toRemove) {
-            if (existingMap.has(key)) {
-                existingMap.delete(key);
-                removed++;
-            }
-        }
-
-        responseData = {
-            success: true,
-            count: existingMap.size,
-            removed,
-            message: `已删除 ${removed} 个IP，剩余 ${existingMap.size} 个IP`
-        };
-    } else {
-        // 追加模式：同址条目字段级合并（新行已知字段优先，不抹掉已有元数据）
-        poolListToMap(newIPs).forEach((line, key) => {
-            existingMap.set(key, existingMap.has(key) ? mergePoolEntryLines(existingMap.get(key), line) : line);
-        });
-
-        responseData = {
-            success: true,
-            count: existingMap.size,
-            added: existingMap.size - existingCount
-        };
-    }
-
-    const finalPool = Array.from(existingMap.values()).join('\n');
-    await env.IP_DATA.put(poolKey, finalPool);
-
-    return jsonResponse(responseData);
-}
-
-async function handleLoadRemoteUrl(body, config) {
-    const url = body.url;
-    if (!url) {
-        return badRequest({ success: false, error: '缺少URL' });
-    }
-    const ips = await loadFromRemoteUrl(url, config);
-    return jsonResponse({
-        success: true,
-        ips,
-        count: ips ? ips.split('\n').length : 0
-    });
-}
-
-async function handleCurrentStatus(url, config) {
-    const targetIndex = parseInt(url.searchParams.get('target') || '0');
-    const target = config.targets[targetIndex];
-    if (!target) {
-        return badRequest({ error: '无效的目标' });
-    }
-    const status = await getDomainStatus(target, config);
-    return jsonResponse(status);
-}
-
-async function handleLookupDomain(url, config) {
-    const input = url.searchParams.get('domain');
-    if (!input) return badRequest({ error: '缺少domain参数' });
-
-    if (input.startsWith('txt@')) {
-        const domain = input.substring(4);
-        const txtData = await resolveTXTRecord(domain, config);
-        return jsonResponse({
-            type: 'TXT',
-            domain,
-            ips: txtData.ips,
-            raw: txtData.raw
-        });
-    }
-
-    const { domain, port } = parseDomainPort(input);
-    const records = await resolveDomainRecords(domain, config);
-    const ips = records.map(record => record.ip);
-    return jsonResponse({
-        type: 'ADDRESS',
-        ips,
-        records,
-        port,
-        domain
-    });
-}
-
-async function handleCheckIP(url, config) {
-    const target = url.searchParams.get('ip');
-    if (!target) return badRequest({ error: '缺少ip参数' });
-    const phase = url.searchParams.get('phase') || 'full';
-    if (!['full', 'primary', 'backup'].includes(phase)) return badRequest({ error: '无效检测阶段' });
-    const res = await checkProxyIP(target, config, { phase });
-    return jsonResponse(res);
-}
-
-async function handleDeleteRecord(url, config) {
-    const id = url.searchParams.get('id');
-    if (!id) return badRequest({ error: '缺少id参数' });
-    const ip = url.searchParams.get('ip');
-    const isTxt = url.searchParams.get('isTxt') === 'true';
-    const targetIndex = parseInt(url.searchParams.get('target') || '0', 10);
-    const cfConfig = getTargetCFConfig(config, config.targets[targetIndex] || null);
-
-    if (isTxt && ip) {
-        const record = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records/${id}`);
-        if (!record) return badRequest({ success: false, error: '获取记录失败' });
-
-        const remaining = parseTXTContent(record.content).filter(item => item !== ip);
-        const ok = remaining.length === 0
-            ? await deleteDNSRecord(cfConfig, id)
-            : await upsertTXTRecord(cfConfig, record.name, id, remaining);
-        return ok
-            ? jsonResponse({ success: true })
-            : jsonResponse({ success: false, error: 'CF API 更新失败' });
-    }
-
-    return await deleteDNSRecord(cfConfig, id)
-        ? jsonResponse({ success: true })
-        : jsonResponse({ success: false, error: 'CF API 删除失败' });
-}
-
-async function handleAddARecord(body, config) {
-    const ip = body.ip;
-    const targetIndex = body.targetIndex || 0;
-    const target = config.targets[targetIndex];
-    const cfConfig = getTargetCFConfig(config, target);
-
-    if (!ip || !target) {
-        return badRequest({ success: false, error: '参数错误' });
-    }
-
-    const addr = target.mode === 'TXT' ? normalizeCheckAddr(ip) : parseAddr(ip, target.port).address;
-
-    // TXT模式：追加到TXT记录
-    if (target.mode === 'TXT') {
-        const records = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=TXT`);
-        if (records === null) {
-            return jsonResponse({ success: false, error: CF_ERROR_MSG });
-        }
-
-        const record = records?.[0] || null;
-        const currentIPs = record ? parseTXTContent(record.content) : [];
-        if (currentIPs.includes(addr)) {
-            return jsonResponse({ success: false, error: 'IP已存在于TXT记录' });
-        }
-
-        currentIPs.push(addr);
-        if (!await upsertTXTRecord(cfConfig, target.domain, record?.id, currentIPs)) {
-            return jsonResponse({ success: false, error: 'CF API 保存TXT记录失败' });
-        }
-
-        return jsonResponse({
-            success: true,
-            mode: 'TXT'
-        });
-    }
-
-    // 地址记录模式
-    const added = await addAddressRecord(cfConfig, target.domain, extractHostFromAddr(addr));
-
-    return jsonResponse({
-        success: added.ok,
-        mode: added.type
-    });
-}
-
-async function handleMaintain(url, env, config) {
-    const isManual = url.searchParams.get('manual') === 'true';
-    const res = await maintainAllDomains(env, isManual, config);
-
-    // 将日志包含在响应中
-    return jsonResponse({
-        ...res,
-        // 确保所有日志都返回给前端
-        allLogs: res.reports.flatMap(r => [
-            ...(r.logs || []),
-            ...(r.txtLogs || [])
-        ])
-    });
-}
-
-async function handleGetDomainPoolMapping(env) {
-    return jsonResponse(await getPoolState(env));
-}
-
-async function handleSaveDomainPoolMapping(body, env) {
-    await ensurePoolDefaults(env);
-    const mapping = body.mapping && typeof body.mapping === 'object' && !Array.isArray(body.mapping)
-        ? Object.fromEntries(Object.entries(body.mapping)
-            .filter(([, poolKey]) => isUserPoolKey(poolKey)))
-        : {};
-    await env.IP_DATA.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(mapping));
-    return jsonResponse({ success: true, ...(await getPoolState(env)) });
-}
-
-async function handleSaveDomainPoolOrder(body, env, config) {
-    await ensurePoolDefaults(env);
-    if (!Array.isArray(body.order)) {
-        return badRequest({ success: false, error: '排序数据格式无效' });
-    }
-
-    const actualTargets = (config.targets || []).map(getTargetDuplicateKey).filter(Boolean);
-    const actualSet = new Set(actualTargets);
-    const submitted = [...new Set(body.order)];
-    if (submitted.length !== actualTargets.length || submitted.some(targetKey => !actualSet.has(targetKey))) {
-        return badRequest({ success: false, error: '管理域名列表已变化，请刷新后重试' });
-    }
-
-    const normalized = normalizeDomainPoolOrder(submitted, actualTargets);
-    await writeDomainPoolOrder(env, normalized);
-    return jsonResponse({ success: true, ...(await getPoolState(env)) });
-}
-
-async function handleCreatePool(body, env) {
-    await ensurePoolDefaults(env);
-    const displayName = String(body.displayName || '').trim();
-
-    if (!displayName) {
-        return badRequest({ success: false, error: '请输入池显示名称' });
-    }
-
-    const pools = await listPoolKeys(env);
-    let nextIndex = 1;
-    for (const key of pools) {
-        const match = NUMBERED_POOL_KEY_RE.exec(key);
-        if (match) nextIndex = Math.max(nextIndex, Number(match[1]) + 1);
-    }
-
-    let poolKey = getNumberedPoolKey(nextIndex);
-    while (await env.IP_DATA.get(poolKey) !== null) {
-        nextIndex++;
-        poolKey = getNumberedPoolKey(nextIndex);
-    }
-
-    await env.IP_DATA.put(poolKey, '');
-    const poolOrder = await readPoolOrder(env);
-    if (poolOrder) {
-        poolOrder.push(poolKey);
-        await writePoolOrder(env, normalizePoolOrder(poolOrder, [...pools, poolKey]));
-    }
-    const poolNames = await readPoolDisplayNames(env);
-    poolNames[poolKey] = displayName;
-    await writePoolDisplayNames(env, poolNames);
-    return jsonResponse({ success: true, poolKey, displayName, ...(await getPoolState(env)) });
-}
-
-async function handleRenamePool(body, env) {
-    await ensurePoolDefaults(env);
-    const poolKey = body.poolKey || POOL_DEFAULT_KEY;
-    const displayName = String(body.displayName || '').trim();
-    if (!isUserPoolKey(poolKey)) {
-        return badRequest({ success: false, error: '池名称无效' });
-    }
-    if (!displayName) {
-        return badRequest({ success: false, error: '显示名称不能为空' });
-    }
-
-    const pool = await env.IP_DATA.get(poolKey);
-    if (pool === null && poolKey !== POOL_DEFAULT_KEY) {
-        return badRequest({ success: false, error: '池不存在' });
-    }
-
-    const poolNames = await readPoolDisplayNames(env);
-    const defaultName = getPoolFixedName(poolKey);
-    if (displayName === defaultName) {
-        delete poolNames[poolKey];
-    } else {
-        poolNames[poolKey] = displayName;
-    }
-    await writePoolDisplayNames(env, poolNames);
-    return jsonResponse({ success: true, poolKey, displayName, ...(await getPoolState(env)) });
-}
-
-async function handleDeletePool(url, env) {
-    await ensurePoolDefaults(env);
-    const poolKey = url.searchParams.get('poolKey') || '';
-
-    if (!poolKey) {
-        return badRequest({ success: false, error: '缺少poolKey参数' });
-    }
-
-    if (poolKey === POOL_DEFAULT_KEY || poolKey === POOL_TRASH_KEY || !isUserPoolKey(poolKey)) {
-        return badRequest({ success: false, error: `不能删除${getPoolFixedName(poolKey)}` });
-    }
-
-    const existing = await env.IP_DATA.get(poolKey);
-    if (existing === null) {
-        return badRequest({ success: false, error: '池不存在' });
-    }
-
-    try {
-        await env.IP_DATA.delete(poolKey);
-        const poolOrder = await readPoolOrder(env);
-        if (poolOrder) await writePoolOrder(env, poolOrder.filter(key => key !== poolKey));
-        const poolNames = await readPoolDisplayNames(env);
-        delete poolNames[poolKey];
-        await writePoolDisplayNames(env, poolNames);
-        const mapping = await readDomainPoolMapping(env);
-        let mappingChanged = false;
-        for (const [domain, boundPool] of Object.entries(mapping)) {
-            if (boundPool === poolKey) {
-                mapping[domain] = POOL_DEFAULT_KEY;
-                mappingChanged = true;
-            }
-        }
-        if (mappingChanged) await env.IP_DATA.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(mapping));
-        return jsonResponse({ success: true, ...(await getPoolState(env)) });
-    } catch (e) {
-        console.error('删除池失败:', e);
-        return jsonResponse({ success: false, error: '删除池失败' });
-    }
-}
-
-async function handleClearTrash(env) {
-    await ensurePoolDefaults(env);
-    await env.IP_DATA.put(POOL_TRASH_KEY, '');
-    return jsonResponse({ success: true, message: '垃圾桶已清空' });
-}
-
-async function handleRestoreFromTrash(body, env) {
-    await ensurePoolDefaults(env);
-    const ipsToRestore = body.ips || [];
-    const restoreToSource = body.restoreToSource === true;
-    const targetPool = body.targetPool || POOL_DEFAULT_KEY;
-    if (!Array.isArray(ipsToRestore)) {
-        return badRequest({ success: false, error: 'ips 必须是数组' });
-    }
-    if (!isUserPoolKey(targetPool)) {
-        return badRequest({ success: false, error: '无效的目标池' });
-    }
-
-    if (ipsToRestore.length === 0) {
-        return badRequest({ success: false, error: '没有选择IP' });
-    }
-
-    // 获取垃圾桶
-    let trashList = parsePoolList(await env.IP_DATA.get(POOL_TRASH_KEY));
-
-    let restored = 0;
-    const restoredByPool = {};
-    const poolNames = await readPoolDisplayNames(env);
-
-    // 读取/写入多个池：按需懒加载
-    const poolCache = new Map(); // poolKey -> { list: string[], set: Set<string> }
-    async function loadPool(poolKey) {
-        if (poolCache.has(poolKey)) return poolCache.get(poolKey);
-        const list = parsePoolList(await env.IP_DATA.get(poolKey));
-        const set = new Set(list.map(p => extractIPKey(p)));
-        const obj = { list, set };
-        poolCache.set(poolKey, obj);
-        return obj;
-    }
-
-    // 从垃圾桶条目中提取来源池
-    function pickTargetPoolFromTrashEntry(trashEntry) {
-        if (!restoreToSource) return targetPool;
-        // trashEntry 格式：`${ipAddr} # ${reason} ${timestamp} 来自 ${poolKey}`
-        // 例如：`1.2.3.4:443 # 洗库失效 2024-01-01T00:00:00.000Z 来自 ip_pool_001`
-        const idx = trashEntry.lastIndexOf(' 来自 ');
-        if (idx !== -1) {
-            const sourcePool = trashEntry.slice(idx + 4).trim();
-            // 直接返回来源池名（如 ip_pool_001），不需要通过域名映射
-            if (isPoolDataKey(sourcePool)) {
-                return sourcePool;
-            }
-        }
-        return POOL_DEFAULT_KEY;
-    }
-
-    // 建立垃圾桶索引，避免循环内反复遍历
-    const trashMap = new Map();
-    trashList.forEach(t => trashMap.set(extractIPKey(t), t));
-
-    // 恢复IP
-    for (const ip of ipsToRestore) {
-        const trashEntry = trashMap.get(ip);
-
-        if (trashEntry) {
-            trashMap.delete(ip);
-
-            const toPool = pickTargetPoolFromTrashEntry(trashEntry);
-            const poolObj = await loadPool(toPool);
-            const poolEntry = parsePoolEntry(trashEntry);
-            const restoredEntry = poolEntry
-                ? [poolEntry.address, poolEntry.asn || 'null', poolEntry.country || 'null', formatPoolStack(poolEntry.stack)].join(',')
-                : (parseIPLine(trashEntry) || ip);
-            const restoredKey = extractIPKey(restoredEntry);
-
-            // 添加到目标池（如果不存在）- 保留 IP 池元数据，不携带垃圾桶注释
-            if (restoredKey && !poolObj.set.has(restoredKey)) {
-                poolObj.list.push(restoredEntry);
-                poolObj.set.add(restoredKey);
-                restored++;
-                restoredByPool[toPool] = (restoredByPool[toPool] || 0) + 1;
-            }
-        }
-    }
-
-    // 保存
-    await env.IP_DATA.put(POOL_TRASH_KEY, Array.from(trashMap.values()).join('\n'));
-    for (const [poolKey, poolObj] of poolCache.entries()) {
-        await env.IP_DATA.put(poolKey, poolObj.list.join('\n'));
-    }
-
-    const rawRestoreDisplay = Object.entries(restoredByPool).map(([poolKey, count]) => ({
-        poolKey,
-        name: getPoolDisplayName(poolKey, poolNames),
-        count
-    }));
-    const restoreNameCounts = rawRestoreDisplay.reduce((acc, item) => {
-        acc[item.name] = (acc[item.name] || 0) + 1;
-        return acc;
-    }, {});
-    const restoredByPoolDisplay = rawRestoreDisplay.map(item => ({
-        ...item,
-        label: restoreNameCounts[item.name] > 1 ? `${item.name}（${getPoolFixedName(item.poolKey)}）` : item.name
-    }));
-    const restoreTargetName = getPoolDisplayName(targetPool, poolNames);
-    const restoreSummary = restoredByPoolDisplay
-        .map(item => `${item.label} ${item.count} 个`)
-        .join('，');
-
-    return jsonResponse({
-        success: true,
-        restored,
-        restoredByPool,
-        restoredByPoolDisplay,
-        message: restoreToSource
-            ? `已恢复 ${restored} 个IP到源IP库${restoreSummary ? `（${restoreSummary}）` : ''}`
-            : `已恢复 ${restored} 个IP到 ${restoreTargetName}`
-    });
-}
-
-function getEditableConfig(config) {
-    return {
-        apiKey: config.apiKey || '',
-        zoneId: config.zoneId || '',
-        zones: config.zones || [],
-        targets: config.targets || [],
-        ...Object.fromEntries(CONFIG_TEXT_KEYS.map(key => [key, config[key] || ''])),
-        ...Object.fromEntries(CONFIG_TOGGLE_FIELDS.map(({ key }) => [key, config[key] !== false])),
-        settings: getRuntimeSettings(config)
-    };
-}
-
-// ==================== Config parsing / normalization ====================
-
-async function handleGetConfig(config) {
-    return jsonResponse({ success: true, config: getEditableConfig(config) });
-}
-
-async function handleSaveConfig(body, env) {
-    const rawConfig = body.config && typeof body.config === 'object' ? body.config : body;
-    const normalized = normalizeSavedConfig(rawConfig);
-    const duplicateError = getConfigDuplicateError(normalized);
-    if (duplicateError) {
-        return badRequest({ success: false, error: duplicateError });
-    }
-    await env.IP_DATA.put(APP_CONFIG_KEY, JSON.stringify(normalized));
-
-    const existingDomainOrder = await readDomainPoolOrder(env);
-    if (existingDomainOrder) {
-        await writeDomainPoolOrder(
-            env,
-            normalizeDomainPoolOrder(
-                existingDomainOrder,
-                normalized.targets.map(getTargetDuplicateKey).filter(Boolean)
-            )
-        );
-    }
-
-    return jsonResponse({ success: true, config: normalized });
-}
-
-function normalizeConfigCompareValue(value) {
-    return String(value || '').trim().toLowerCase();
-}
-
-function findDuplicateConfigValue(items, keyFn) {
-    const seen = new Set();
-    for (const item of items || []) {
-        const key = normalizeConfigCompareValue(keyFn(item));
-        if (!key) continue;
-        if (seen.has(key)) return key;
-        seen.add(key);
-    }
-    return '';
-}
-
-function getTargetDuplicateKey(target = {}) {
-    const domain = normalizeConfigCompareValue(target.domain);
-    const mode = normalizeTargetMode(target.mode);
-    return domain ? `${domain}|${mode}` : '';
-}
-
-function getConfigDuplicateError(config = {}) {
-    const duplicateBaseDomain = findDuplicateConfigValue(config.zones, zone => zone.baseDomain);
-    if (duplicateBaseDomain) {
-        return `权限配置存在重复目标维护域名：${duplicateBaseDomain}`;
-    }
-
-    const duplicateTarget = findDuplicateConfigValue(config.targets, getTargetDuplicateKey);
-    if (duplicateTarget) {
-        const [domain, mode] = duplicateTarget.split('|');
-        return `管理域名存在重复项：${domain} / ${mode === 'TXT' ? 'TXT' : 'A/AAAA'}`;
-    }
-
-    return '';
-}
-
-function parseDomainPort(input, defaultPort = '443') {
-    if (!input) return { domain: '', port: defaultPort };
-    input = input.trim();
-    if (input.startsWith('[')) {
-        const end = input.indexOf(']');
-        const domain = end >= 0 ? input.slice(1, end) : input.replace(/^\[/, '');
-        const match = input.match(/\]:(\d+)$/);
-        return { domain, port: match ? match[1] : defaultPort };
-    }
-    const parts = input.split(':');
-    if (parts.length > 2) return { domain: input, port: defaultPort };
-    return {
-        domain: parts[0],
-        port: parts[1] || defaultPort
-    };
-}
-
-function parseBooleanConfig(value, defaultValue = true) {
-    if (value === undefined || value === null || value === '') return defaultValue;
-    if (typeof value === 'boolean') return value;
-    const text = String(value).trim().toLowerCase();
-    if (['1', 'true', 'yes', 'on', 'enabled'].includes(text)) return true;
-    if (['0', 'false', 'no', 'off', 'disabled'].includes(text)) return false;
-    return defaultValue;
-}
-
-function normalizeTargetMode(value) {
-    const text = String(value || 'A').trim().toUpperCase();
-    if (text === 'TXT') return 'TXT';
-    return 'A';
-}
-
-function normalizeListValues(value, normalizer = item => item) {
-    const source = Array.isArray(value) ? value : String(value || '').split(/[,;\uFF0C\s]+/);
-    return [...new Set(source.map(item => normalizer(String(item).trim())).filter(Boolean))];
-}
-
-function normalizeExitFilter(value) {
-    const text = String(value || '').trim().toLowerCase().replace(/_/g, '-');
-    if (!text || ['any', 'all', 'v4/v6', 'v6/v4'].includes(text)) return 'any';
-    if (['v4', 'ipv4', 'ipv4-only', 'only-ipv4'].includes(text)) return 'v4';
-    if (['v6', 'ipv6', 'ipv6-only', 'only-ipv6'].includes(text)) return 'v6';
-    if (['dual', 'dual-stack', 'both'].includes(text)) return 'dual';
-    return 'any';
-}
-
-function normalizeTargetConfig(target, settings = GLOBAL_SETTINGS) {
-    if (!target || typeof target !== 'object') return null;
-    const baseDomain = String(target.baseDomain || '').trim();
-    const prefix = String(target.prefix || '').trim().replace(/^\.+|\.+$/g, '');
-    const domain = String(target.domain || buildManagedDomain(prefix, baseDomain)).trim();
-    if (!domain) return null;
-    const mode = normalizeTargetMode(target.mode);
-    const port = mode === 'TXT' ? 'any' : (String(target.port || '443').trim() || '443');
-    const normalizedSettings = normalizeRuntimeSettings(settings);
-    const parsedMinActive = parseInt(target.minActive ?? normalizedSettings.DEFAULT_MIN_ACTIVE, 10);
-    const minActive = Math.max(0, Number.isFinite(parsedMinActive) ? parsedMinActive : normalizedSettings.DEFAULT_MIN_ACTIVE);
-    const exitFilter = normalizeExitFilter(target.exitFilter);
-    const countries = normalizeListValues(target.countries?.length ? target.countries : target.country, item => item.toUpperCase());
-    const asns = normalizeListValues(target.asns?.length ? target.asns : target.asn, item => normalizeAsnValue(item));
-    const country = countries.join(',');
-    const asn = asns.join(',');
-    const zoneIndex = Number.isInteger(target.zoneIndex) ? target.zoneIndex : (target.zoneIndex === '' || target.zoneIndex === undefined ? null : parseInt(target.zoneIndex, 10));
-    const enabled = target.enabled !== false;
-    return {
-        mode,
-        domain,
-        baseDomain,
-        prefix,
-        zoneIndex: Number.isInteger(zoneIndex) && zoneIndex >= 0 ? zoneIndex : null,
-        port,
-        minActive,
-        exitFilter,
-        country,
-        asn,
-        countries,
-        asns,
-        enabled
-    };
-}
-
-function buildManagedDomain(prefix, baseDomain) {
-    const cleanPrefix = String(prefix || '').trim().replace(/^\.+|\.+$/g, '');
-    const cleanBase = String(baseDomain || '').trim().replace(/^\.+|\.+$/g, '');
-    if (!cleanBase) return '';
-    return cleanPrefix ? `${cleanPrefix}.${cleanBase}` : cleanBase;
-}
-
-
-
-
-function normalizeZoneConfig(zone) {
-    if (!zone || typeof zone !== 'object') return null;
-    const baseDomain = String(zone.baseDomain || zone.domain || '').trim().replace(/^\.+|\.+$/g, '');
-    const zoneId = String(zone.zoneId || '').trim();
-    const apiKey = String(zone.apiKey || '').trim();
-    const label = String(zone.label || zone.name || baseDomain || zoneId || '未命名').trim();
-    if (!baseDomain && !zoneId && !apiKey) return null;
-    return { name: label, baseDomain, zoneId, apiKey, label };
-}
-
-function normalizeSavedConfig(rawConfig = {}) {
-    const settings = normalizeRuntimeSettings(rawConfig.settings || rawConfig);
-    const zones = Array.isArray(rawConfig.zones)
-        ? rawConfig.zones.map(normalizeZoneConfig).filter(Boolean)
-        : [];
-    const targets = Array.isArray(rawConfig.targets)
-        ? rawConfig.targets.map(target => normalizeTargetConfig(target, settings)).filter(Boolean)
-        : [];
-    return {
-        apiKey: String(rawConfig.apiKey || '').trim(),
-        zoneId: String(rawConfig.zoneId || '').trim(),
-        zones,
-        targets,
-        ...Object.fromEntries(CONFIG_TEXT_KEYS.map(key => [key, String(rawConfig[key] || '').trim()])),
-        ...Object.fromEntries(CONFIG_TOGGLE_FIELDS.map(({ key, fallback }) => [key, parseBooleanConfig(rawConfig[key], fallback)])),
-        settings
-    };
-}
-
-async function loadSavedConfig(env) {
-    try {
-        const raw = await env.IP_DATA.get(APP_CONFIG_KEY);
-        if (!raw) return null;
-        const data = safeJSONParse(raw, {});
-        const saved = normalizeSavedConfig(data);
-        // 缺失字段沿用环境默认值；显式保存空检测接口则确实禁用该接口。
-        for (const key of ['checkApi', 'checkApiBackup']) {
-            if (!Object.prototype.hasOwnProperty.call(data, key)) delete saved[key];
-        }
-        return saved;
-    } catch {
-        return null;
-    }
-}
-
-function createEnvConfig(env = {}, request = null) {
-    const config = { ...DEFAULT_CONFIG };
-    config.settings = normalizeRuntimeSettings();
-
-    ENV_STRING_CONFIG_FIELDS.forEach(([key, envKey]) => {
-        config[key] = env[envKey] || DEFAULT_CONFIG[key];
-    });
-    const envBaseDomain = String(env.CF_BASE_DOMAIN || '').trim();
-    config.zones = (config.apiKey || config.zoneId || envBaseDomain)
-        ? [{ baseDomain: envBaseDomain, zoneId: config.zoneId, apiKey: config.apiKey, label: envBaseDomain || '环境变量配置' }]
-        : [];
-    CONFIG_TOGGLE_FIELDS.forEach(({ key, env: envKey }) => {
-        config[key] = parseBooleanConfig(env[envKey], DEFAULT_CONFIG[key]);
-    });
-    if (request) {
-        const url = new URL(request.url);
-        config.projectUrl = `${url.protocol}//${url.host}`;
-    }
-    return config;
-}
-
-async function createConfig(env, request = null) {
-    const config = createEnvConfig(env, request);
-
-    const savedConfig = await loadSavedConfig(env);
-    if (savedConfig) {
-        for (const key of ['apiKey', 'zoneId', ...CONFIG_TEXT_KEYS]) {
-            if (savedConfig[key] || (['checkApi', 'checkApiBackup'].includes(key) &&
-                Object.prototype.hasOwnProperty.call(savedConfig, key))) config[key] = savedConfig[key];
-        }
-        if (savedConfig.zones.length > 0) {
-            config.zones = savedConfig.zones;
-            config.apiKey = savedConfig.zones[0].apiKey || config.apiKey;
-            config.zoneId = savedConfig.zones[0].zoneId || config.zoneId;
-        }
-        CONFIG_TOGGLE_FIELDS.forEach(({ key }) => {
-            config[key] = savedConfig[key];
-        });
-        config.settings = savedConfig.settings;
-        if (savedConfig.targets.length > 0) {
-            config.targets = savedConfig.targets;
-        }
-    }
-
-    return Object.freeze(config);
-}
-
-async function batchAddToTrash(env, entries, config = {}) {
-    if (!entries || entries.length === 0) return;
-    const trashKey = POOL_TRASH_KEY;
-    let trashList = parsePoolList(await env.IP_DATA.get(trashKey));
-    const trashIPSet = new Set(trashList.map(t => extractIPKey(t)));
-    const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-
-    for (const { ipAddr, reason, poolKey } of entries) {
-        const ipKey = extractIPKey(ipAddr);
-        if (ipKey && !trashIPSet.has(ipKey)) {
-            const poolEntry = parsePoolEntry(ipAddr);
-            const cleanEntry = poolEntry
-                ? [poolEntry.address, poolEntry.asn || 'null', poolEntry.country || 'null', formatPoolStack(poolEntry.stack)].join(',')
-                : ipAddr;
-            const trashEntry = `${cleanEntry} # ${reason} ${timestamp}${poolKey ? ' 来自 ' + poolKey : ''}`;
-            trashList.push(trashEntry);
-            trashIPSet.add(ipKey);
-        }
-    }
-
-    const maxTrashSize = getRuntimeSettings(config).MAX_TRASH_SIZE;
-    if (trashList.length > maxTrashSize) {
-        trashList = maxTrashSize > 0 ? trashList.slice(-maxTrashSize) : [];
-    }
-
-    await env.IP_DATA.put(trashKey, trashList.join('\n'));
-}
-
-// ==================== IP parsing / DNS lookup ====================
-
-function parseIPLine(line) {
-    line = line.trim();
-    if (!line || line.startsWith('#')) return null;
-
-    // 分离注释部分
-    const { main: mainPart, comment } = splitComment(line);
-    const fields = mainPart.split(',').map(item => item.trim());
-    if (fields.length > 1) {
-        const normalizedAddress = parseIPLine(fields[0]);
-        if (!normalizedAddress) return null;
-        const metaFields = fields.slice(1, 4).map(item => item || 'null');
-        return [extractIPKey(normalizedAddress), ...metaFields].join(',') + comment;
-    }
-
-    const isValidIP = ip => ip.split('.').every(o => { const n = Number(o); return n >= 0 && n <= 255; });
-    const isValidPort = p => { const n = Number(p); return n >= 1 && n <= 65535; };
-
-    // IPv6 [addr]:PORT
-    let match = mainPart.match(/^\[([0-9a-fA-F:]+)\]:(\d+)$/);
-    if (match && isValidPort(match[2])) return `[${match[1]}]:${match[2]}${comment}`;
-
-    // 纯IPv6（默认443端口）
-    if (/^[0-9a-fA-F:]+$/.test(mainPart) && mainPart.includes(':')) {
-        return `[${mainPart.replace(/^\[/, '').replace(/\]$/, '')}]:443${comment}`;
-    }
-
-    // IP:PORT 格式
-    match = mainPart.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)$/);
-    if (match && isValidIP(match[1]) && isValidPort(match[2])) return `${match[1]}:${match[2]}${comment}`;
-
-    // IP：PORT 格式（中文冒号）
-    match = mainPart.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})：(\d+)$/);
-    if (match && isValidIP(match[1]) && isValidPort(match[2])) return `${match[1]}:${match[2]}${comment}`;
-
-    // IP 空格/Tab PORT
-    const parts = mainPart.split(/\s+/);
-    if (parts.length === 2) {
-        const ip = parts[0].trim();
-        const port = parts[1].trim();
-        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip) && /^\d+$/.test(port) && isValidIP(ip) && isValidPort(port)) {
-            return `${ip}:${port}${comment}`;
-        }
-    }
-
-    // 纯IP（默认443端口）
-    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(mainPart) && isValidIP(mainPart)) {
-        return `${mainPart}:443${comment}`;
-    }
-
-    // 复杂格式
-    const complexMatch = mainPart.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\D+(\d+)/);
-    if (complexMatch && isValidIP(complexMatch[1]) && isValidPort(complexMatch[2])) return `${complexMatch[1]}:${complexMatch[2]}${comment}`;
-
-    return null;
-}
-
-function cleanIPList(text) {
-    if (!text) return '';
-    const map = new Map();
-    const lines = text.split('\n');
-
-    for (let line of lines) {
-        line = line.trim();
-        if (!line || line.startsWith('#')) continue;
-
-        const parsed = parseIPLine(line);
-        if (parsed) {
-            const key = extractIPKey(parsed);
-            map.set(key, parsed);
-        }
-    }
-
-    return Array.from(map.values()).join('\n');
-}
-
-async function loadFromRemoteUrl(url, config = {}) {
-    try {
-        const parsed = new URL(url);
-        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
-        const hostname = parsed.hostname.toLowerCase();
-        if (hostname === 'localhost' ||
-            hostname.startsWith('127.') ||
-            hostname.startsWith('10.') ||
-            hostname.startsWith('192.168.') ||
-            /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-            hostname.startsWith('169.254.') ||   // 链路本地地址 (AWS/GCP 元数据服务等)
-            hostname.startsWith('100.64.') ||    // 运营商级 NAT (RFC 6598)
-            hostname === 'metadata.google.internal' ||
-            hostname === '0.0.0.0' ||
-            hostname === '::1' ||
-            hostname === '[::1]' ||
-            hostname.startsWith('fc00:') ||
-            hostname.startsWith('fe80:') ||
-            hostname.startsWith('[fc00:') ||
-            hostname.startsWith('[fe80:')) return '';
-    } catch { return ''; }
-
-    try {
-        const r = await fetch(url, {
-            signal: AbortSignal.timeout(getRuntimeSettings(config).REMOTE_LOAD_TIMEOUT)
-        });
-        if (r.ok) {
-            const text = await r.text();
-            return cleanIPList(text);
-        }
-    } catch (e) {
-        console.error(`❌ 远程加载失败 ${url}:`, e);
-    }
-    return '';
-}
-
-async function dohQuery(domain, type, config) {
-    const settings = getRuntimeSettings(config);
-    try {
-        const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=${encodeURIComponent(type)}`, {
-            headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(settings.DOH_TIMEOUT)
-        });
-        const d = await r.json();
-        return Array.isArray(d.Answer) ? d.Answer : [];
-    } catch (e) {
-        console.error(`❌ DNS ${type}记录解析失败:`, e);
-        return [];
-    }
-}
-
-async function resolveDomainRecords(domain, config) {
-    const [aRecords, aaaaRecords] = await Promise.all([
-        dohQuery(domain, 'A', config),
-        dohQuery(domain, 'AAAA', config)
-    ]);
-
-    const records = [
-        ...aRecords.filter(a => a.type === 1 && a.data).map(a => ({ type: 'A', ip: a.data })),
-        ...aaaaRecords.filter(a => a.type === 28 && a.data).map(a => ({ type: 'AAAA', ip: a.data }))
-    ];
-
-    const seen = new Set();
-    return records.filter(record => {
-        const key = `${record.type}:${record.ip}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-}
-
-async function resolveTXTRecord(domain, config) {
-    const settings = getRuntimeSettings(config);
-    try {
-        const r = await fetch(`${config.dohApi}?name=${encodeURIComponent(domain)}&type=TXT`, {
-            headers: { 'accept': 'application/dns-json' },
-            signal: AbortSignal.timeout(settings.DOH_TIMEOUT)
-        });
-        const d = await r.json();
-
-        if (!d.Answer?.length) {
-            return { raw: '', ips: [] };
-        }
-
-        // 去掉DNS返回的引号
-        const rawData = d.Answer[0].data;
-        const ips = parseTXTContent(rawData);
-        const raw = rawData.replace(/^"|"$/g, '');
-
-        return { raw, ips };
-    } catch (e) {
-        console.error('❌ DNS TXT记录解析失败:', e);
-        return { raw: '', ips: [] };
-    }
-}
-
-function normalizeTextValue(value) {
-    if (value === undefined || value === null) return '';
-    return String(value).trim();
-}
-
-// ==================== Proxy check normalization ====================
-
-function normalizeNumberValue(value, fallback = '-') {
-    if (value === undefined || value === null || value === '') return fallback;
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    const match = String(value).match(/\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : fallback;
-}
-
-function normalizeAsnValue(value) {
-    const text = normalizeTextValue(value);
-    if (!text) return '';
-    return text.replace(/^AS/i, '');
-}
-
-function normalizeExitInfo(stack, exit, fallbackColo = '') {
-    if (!exit || typeof exit !== 'object') return null;
-    const asn = normalizeAsnValue(exit.asn ?? exit.as ?? exit.asNumber);
-    return {
-        stack,
-        ip: normalizeTextValue(exit.ip ?? exit.address ?? exit.query),
-        ipType: normalizeTextValue(exit.ipType ?? exit.type ?? stack),
-        colo: normalizeTextValue(exit.colo) || fallbackColo,
-        country: normalizeTextValue(exit.country ?? exit.countryCode),
-        city: normalizeTextValue(exit.city),
-        loc: normalizeTextValue(exit.loc ?? exit.location),
-        asn,
-        asOrganization: normalizeTextValue(exit.asOrganization ?? exit.asname ?? exit.org ?? exit.isp)
-    };
-}
-
-function extractCheckExits(data) {
-    const exits = [];
-    if (Array.isArray(data?.exits)) {
-        for (const item of data.exits) {
-            const exit = normalizeExitInfo(item?.stack ?? item?.ipType ?? 'default', item, item?.colo ?? data?.colo);
-            if (exit) exits.push(exit);
-        }
-    }
-
-    const probes = data?.probe_results ?? data?.probeResults ?? data?.probes ?? {};
-    if (probes && typeof probes === 'object') {
-        for (const [stack, probe] of Object.entries(probes)) {
-            const ok = probe?.ok === true || probe?.success === true || probe?.status === 'success';
-            const exit = normalizeExitInfo(stack, probe?.exit ?? probe?.egress ?? probe?.result, data?.colo);
-            if (ok && exit) exits.push(exit);
-        }
-    }
-
-    const directExit = normalizeExitInfo('default', data?.exit ?? data?.egress, data?.colo);
-    if (directExit && !exits.some(item => item.ip === directExit.ip && item.stack === directExit.stack)) {
-        exits.push(directExit);
-    }
-
-    return exits;
-}
-
-function getPreferredExitInfo(exits) {
-    return exits.find(item => item.stack === 'ipv4') ||
-        exits.find(item => item.stack === 'ipv6') ||
-        exits[0] ||
-        null;
-}
-
-function inferCheckStack(data, exits) {
-    const raw = normalizeTextValue(data?.inferred_stack ?? data?.ip_stack ?? data?.stack);
-    if (raw) return normalizeStackFilter(raw);
-
-    const supportsIpv4 = data?.supports_ipv4 === true || exits.some(item => ['ipv4', 'v4'].includes(normalizeTextValue(item.stack).toLowerCase()));
-    const supportsIpv6 = data?.supports_ipv6 === true || exits.some(item => ['ipv6', 'v6'].includes(normalizeTextValue(item.stack).toLowerCase()));
-    if (data?.dual_stack === true || (supportsIpv4 && supportsIpv6)) return 'v4/v6';
-    if (supportsIpv4) return 'v4';
-    if (supportsIpv6) return 'v6';
-    return 'null';
-}
-
-function joinMetaValues(values) {
-    const unique = Array.from(new Set(values.map(value => normalizeTextValue(value)).filter(Boolean)));
-    return unique.length ? unique.join('/') : 'null';
-}
-
-function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
-    if (!data || typeof data !== 'object') {
-        return { success: false, candidate: requestedAddr, proxyIP: '', portRemote: '', responseTime: '-', colo: 'N/A', exits: [], ipInfo: null, asn: 'null', country: 'null', stack: 'null', apiError: Boolean(apiError) };
-    }
-
-    const exits = extractCheckExits(data);
-    const preferredExit = getPreferredExitInfo(exits);
-    const status = normalizeTextValue(data.status).toLowerCase();
-    const explicitFailure = data.success === false || data.ok === false || ['failed', 'failure', 'error'].includes(status);
-    const resultApiError = Boolean(apiError) || data.apiError === true;
-    // 异常标记优先于 success/ok：错误响应若同时带 success:true，也不能进入维护删除/补货判定。
-    const success = !resultApiError && !explicitFailure && (
-        data.success === true || data.ok === true || status === 'success' || exits.length > 0
-    );
-    const stack = inferCheckStack(data, exits);
-    const asn = joinMetaValues(exits.map(item => item.asn));
-    const country = joinMetaValues(exits.map(item => item.country));
-
-    const ipInfo = preferredExit ? {
-        country: preferredExit.country || '未知',
-        countryCode: '',
-        city: preferredExit.city || '',
-        isp: preferredExit.asOrganization || '',
-        asn: preferredExit.asn ? `AS${preferredExit.asn}` : '',
-        asname: preferredExit.asOrganization || ''
-    } : null;
-
-    return {
-        success,
-        candidate: normalizeTextValue(data.candidate) || requestedAddr,
-        proxyIP: normalizeTextValue(data.proxyIP ?? data.proxyIp ?? data.ip) || extractHostFromAddr(requestedAddr),
-        portRemote: normalizeTextValue(data.portRemote ?? data.port ?? data.remotePort) || extractPortFromAddr(requestedAddr),
-        responseTime: normalizeNumberValue(data.responseTime ?? data.latency ?? data.duration ?? data.elapsed ?? data.time),
-        colo: normalizeTextValue(data.colo ?? preferredExit?.colo) || 'N/A',
-        message: normalizeTextValue(data.message ?? data.error),
-        exits,
-        ipInfo,
-        asn,
-        country,
-        stack,
-        supportsIpv4: stack === 'v4' || stack === 'v4/v6',
-        supportsIpv6: stack === 'v6' || stack === 'v4/v6',
-        dualStack: stack === 'v4/v6',
-        // checkProxyIP 返回的是已归一化结果，维护流程会二次归一化；
-        // 不代表该地址被接口判定为失效；data.apiError 用于二次归一化时保留该标记。
-        apiError: resultApiError
-    };
-}
-
-function exitFilterMatchesResult(result, exitFilter = 'any') {
-    const filter = normalizeExitFilter(exitFilter);
-    if (filter === 'any') return true;
-    const stack = normalizeStackFilter(result?.stack);
-    if (filter === 'v4') return stack === 'v4';
-    if (filter === 'v6') return stack === 'v6';
-    if (filter === 'dual') return stack === 'v4/v6';
-    return true;
-}
-
-function targetMetaMatchesResult(result, target) {
-    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
-    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
-    if (countries.length) {
-        const resultCountries = normalizeListValues(result.country, item => item.toUpperCase());
-        if (!countries.some(country => resultCountries.includes(country))) return false;
-    }
-    if (asns.length) {
-        const resultAsns = normalizeListValues(String(result.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
-        if (!asns.some(asn => resultAsns.includes(String(asn).toUpperCase()))) return false;
-    }
-    return true;
-}
-
+  const raw = line.trim();
+  if (!raw || raw.startsWith("#")) return null;
+  const commentIndex = raw.indexOf("#");
+  const main = (commentIndex >= 0 ? raw.slice(0, commentIndex) : raw).trim();
+  const comment = commentIndex >= 0 ? raw.slice(commentIndex).trim() : "";
+  const fields = main.split(",").map((field) => field.trim());
+  const address = fields[0] ?? "";
+  if (!address) return null;
+  return {
+    address,
+    asn: fields[1] || null,
+    country: fields[2] || null,
+    stack: normalizePoolStack(fields[3]),
+    comment
+  };
+}
+__name(parsePoolEntry, "parsePoolEntry");
+function formatPoolEntry(entry) {
+  const address = normalizePoolAddress(entry.address) ?? entry.address.trim();
+  const fields = [
+    address,
+    formatPoolAsn(entry.asn),
+    formatPoolCountry(entry.country),
+    entry.stack ?? "null"
+  ];
+  const comment = normalizeComment(entry.comment);
+  return `${fields.join(",")}${comment}`;
+}
+__name(formatPoolEntry, "formatPoolEntry");
+function normalizePoolAddress(value, defaultPort = 443) {
+  return parseProxyTarget(value, defaultPort)?.authority ?? null;
+}
+__name(normalizePoolAddress, "normalizePoolAddress");
+function parsePoolAddress(entry, defaultPort = 443) {
+  return parseProxyTarget(entry.address, defaultPort);
+}
+__name(parsePoolAddress, "parsePoolAddress");
+function extractPoolAddressKey(value) {
+  return value.split("#", 1)[0]?.split(",")[0]?.trim() ?? "";
+}
+__name(extractPoolAddressKey, "extractPoolAddressKey");
+function canonicalAddressKey(value, defaultPort = 443) {
+  return parseProxyTarget(value, defaultPort)?.key ?? value.trim().toLowerCase();
+}
+__name(canonicalAddressKey, "canonicalAddressKey");
+function poolMetadataFromProbe(result) {
+  if (result.status !== "alive") return {};
+  const exits = result.exits.length > 0 ? result.exits : result.exitIp ? [{ family: result.exitFamily === "dual" ? "unknown" : result.exitFamily, ip: result.exitIp }] : [];
+  const asn = joinMetadata(exits.map((exit) => normalizeAsn(exit.asn)));
+  const country = joinMetadata(exits.map((exit) => normalizeCountry(exit.country)));
+  const stack = inferPoolStack(result.exitFamily, exits.map((exit) => exit.family));
+  return {
+    ...asn ? { asn } : {},
+    ...country ? { country } : {},
+    ...stack ? { stack } : {}
+  };
+}
+__name(poolMetadataFromProbe, "poolMetadataFromProbe");
+function mergePoolMetadata(previous, metadata) {
+  return {
+    address: normalizePoolAddress(previous.address) ?? previous.address,
+    asn: isUnknownMetaValue(metadata.asn) ? previous.asn : formatPoolAsnValue(metadata.asn),
+    country: isUnknownMetaValue(metadata.country) ? normalizeCountry(previous.country) ?? previous.country : normalizeCountry(metadata.country) ?? null,
+    stack: metadata.stack ?? previous.stack,
+    comment: previous.comment
+  };
+}
+__name(mergePoolMetadata, "mergePoolMetadata");
+function updatePoolEntryFromProbe(previous, result) {
+  if (result.status !== "alive") return previous;
+  return mergePoolMetadata(previous, poolMetadataFromProbe(result));
+}
+__name(updatePoolEntryFromProbe, "updatePoolEntryFromProbe");
+function formatPoolAsn(value) {
+  if (isUnknownMetaValue(value)) return "null";
+  return String(value).split(/[\/,\s\uFF0C\uFF1B;]+/).map((item) => item.trim().replace(/^AS/i, "").toUpperCase()).filter(Boolean).map((item) => `AS${item}`).join("/") || "null";
+}
+__name(formatPoolAsn, "formatPoolAsn");
+function normalizeAsn(value) {
+  const text3 = String(value ?? "").trim().replace(/^AS/i, "").toUpperCase();
+  return text3 && !isUnknownMetaValue(text3) ? text3 : void 0;
+}
+__name(normalizeAsn, "normalizeAsn");
+function normalizeCountry(value) {
+  const text3 = String(value ?? "").trim().toUpperCase();
+  return text3 && !isUnknownMetaValue(text3) ? text3 : void 0;
+}
+__name(normalizeCountry, "normalizeCountry");
+function normalizePoolStack(value) {
+  const text3 = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (["v4", "ipv4", "ipv4-only", "only-ipv4"].includes(text3)) return "v4";
+  if (["v6", "ipv6", "ipv6-only", "only-ipv6"].includes(text3)) return "v6";
+  if (["v4/v6", "v6/v4", "dual", "dual-stack", "both", "all", "ipv4-ipv6"].includes(text3)) return "v4/v6";
+  return null;
+}
+__name(normalizePoolStack, "normalizePoolStack");
 function isUnknownMetaValue(value) {
-    const text = String(value ?? '').trim().toLowerCase();
-    return !text || text === 'null' || text === 'unknown' || text === 'n/a' || text === '-' || text === 'asnull' || text === 'asunknown';
+  const text3 = String(value ?? "").trim().toLowerCase();
+  return !text3 || ["null", "unknown", "n/a", "-", "asnull", "asunknown"].includes(text3);
 }
-
-function targetMetaMatchesStoredEntry(entry, target) {
-    const meta = parsePoolEntry(entry);
-    if (!meta) return true;
-    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
-    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
-    if (countries.length && !isUnknownMetaValue(meta.country)) {
-        const storedCountries = normalizeListValues(meta.country, item => item.toUpperCase());
-        if (!countries.some(country => storedCountries.includes(country))) return false;
-    }
-    if (asns.length && !isUnknownMetaValue(meta.asn)) {
-        const storedAsns = normalizeListValues(String(meta.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
-        if (!asns.some(asn => storedAsns.includes(String(asn).toUpperCase()))) return false;
-    }
-    if (normalizeExitFilter(target.exitFilter) !== 'any' && !isUnknownMetaValue(meta.stack)) {
-        if (!exitFilterMatchesResult({ stack: meta.stack }, target.exitFilter)) return false;
-    }
-    return true;
+__name(isUnknownMetaValue, "isUnknownMetaValue");
+function formatPoolAsnValue(value) {
+  const formatted = formatPoolAsn(value);
+  return formatted === "null" ? null : formatted;
 }
-
-function describeMatchFailure(result, target) {
-    const parts = [];
-
-    const countries = target.countries?.length ? target.countries : normalizeListValues(target.country, item => item.toUpperCase());
-    if (countries.length) {
-        const resultCountries = normalizeListValues(result.country, item => item.toUpperCase());
-        const matched = countries.some(country => resultCountries.includes(country));
-        if (!matched) {
-            parts.push(`国家不符(要求${countries.join('/')}，实际${result.country || 'null'})`);
-        }
-    }
-
-    const asns = target.asns?.length ? target.asns : normalizeListValues(target.asn, item => normalizeAsnValue(item));
-    if (asns.length) {
-        const resultAsns = normalizeListValues(String(result.asn || '').replace(/AS/gi, ''), item => item.toUpperCase());
-        const matched = asns.some(asn => resultAsns.includes(String(asn).toUpperCase()));
-        if (!matched) {
-            parts.push(`ASN不符(要求${asns.map(a => 'AS' + a).join('/')}，实际${result.asn || 'null'})`);
-        }
-    }
-
-    const exitFilter = normalizeExitFilter(target.exitFilter);
-    if (exitFilter !== 'any' && !exitFilterMatchesResult(result, exitFilter)) {
-        const filterLabel = { v4: 'IPv4', v6: 'IPv6', dual: '双栈' }[exitFilter] || exitFilter;
-        parts.push(`出口不符(要求${filterLabel}，实际${result.stack || 'null'})`);
-    }
-
-    if (!parts.length) {
-        return '出口/国家/ASN不匹配';
-    }
-    return parts.join('，');
+__name(formatPoolAsnValue, "formatPoolAsnValue");
+function formatPoolCountry(value) {
+  return normalizeCountry(value) ?? "null";
 }
-
-function buildCheckApiUrl(apiUrl, addr) {
-    const encoded = encodeURIComponent(addr);
-    if (apiUrl.includes('{proxyip}')) return apiUrl.replaceAll('{proxyip}', encoded);
-    return `${apiUrl}${encoded}`;
+__name(formatPoolCountry, "formatPoolCountry");
+function normalizeComment(value) {
+  const comment = value.trim();
+  if (!comment) return "";
+  return comment.startsWith("#") ? ` ${comment}` : ` #${comment}`;
 }
-async function mapWithConcurrency(items, limit, mapper) {
-    const source = Array.isArray(items) ? items : [];
-    const results = new Array(source.length);
-    let cursor = 0;
-    const workerCount = Math.min(source.length, Math.max(1, parseInt(limit, 10) || 1));
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-        while (cursor < source.length) {
-            const index = cursor++;
-            results[index] = await mapper(source[index], index);
-        }
-    }));
-    return results;
+__name(normalizeComment, "normalizeComment");
+function joinMetadata(values) {
+  const unique = [...new Set(values.filter((value) => Boolean(value)))];
+  return unique.length ? unique.join("/") : void 0;
 }
-
-// 批量调用检测接口，并统一整理 API 返回的出口、ASN、国家信息
-async function batchCheckIPs(ipList, checkFn, config) {
-    if (!ipList || ipList.length === 0) return [];
-    const checkResults = await mapWithConcurrency(ipList, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS, async addr => {
-        try { return normalizeCheckResult(await checkFn(addr), addr); }
-        catch { return normalizeCheckResult({ success: false }, addr, true); }
-    });
-
-    return checkResults.map((result, i) => ({
-        address: ipList[i],
-        success: result.success,
-        colo: result.colo || 'N/A',
-        time: result.responseTime || '-',
-        exits: result.exits || [],
-        proxyIP: result.proxyIP || extractHostFromAddr(ipList[i]),
-        portRemote: result.portRemote || extractPortFromAddr(ipList[i]),
-        ipInfo: result.ipInfo || null,
-        asn: result.asn || 'null',
-        country: result.country || 'null',
-        stack: result.stack || 'null',
-        apiError: result.apiError || false
-    }));
+__name(joinMetadata, "joinMetadata");
+function inferPoolStack(family, exitFamilies) {
+  const hasIpv4 = family === "ipv4" || family === "dual" || exitFamilies.includes("ipv4");
+  const hasIpv6 = family === "ipv6" || family === "dual" || exitFamilies.includes("ipv6");
+  if (hasIpv4 && hasIpv6) return "v4/v6";
+  if (hasIpv4) return "v4";
+  if (hasIpv6) return "v6";
+  return void 0;
 }
-
-async function getDomainStatus(target, config) {
-    const cfConfig = getTargetCFConfig(config, target);
-    const result = {
-        mode: target.mode,
-        domain: target.domain,
-        port: target.port,
-        aRecords: [],
-        txtRecords: [],
-        error: null
-    };
-
-    if (target.mode === 'A') {
-        const [aRecords, aaaaRecords] = await Promise.all([
-            fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=A`),
-            fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=AAAA`)
-        ]);
-        if (aRecords === null || aaaaRecords === null) {
-            result.error = CF_ERROR_MSG;
-            return result;
-        }
-        const records = [...aRecords, ...aaaaRecords];
-        const ipList = records.map(r => formatAddr(r.content, target.port));
-        const checkResults = await batchCheckIPs(ipList, (addr) => checkProxyIP(addr, config), config);
-
-        result.aRecords = records.map((r, i) => ({
-            id: r.id,
-            recordType: r.type,
-            ip: r.content,
-            port: target.port,
-            address: formatAddr(r.content, target.port),
-            success: checkResults[i].success,
-            colo: checkResults[i].colo,
-            time: checkResults[i].time,
-            exits: checkResults[i].exits,
-            proxyIP: checkResults[i].proxyIP,
-            portRemote: checkResults[i].portRemote,
-            asn: checkResults[i].asn,
-            country: checkResults[i].country,
-            stack: checkResults[i].stack,
-            ipInfo: checkResults[i].ipInfo,
-            apiError: checkResults[i].apiError || false
-        }));
-    }
-
-    if (target.mode === 'TXT') {
-        const records = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=TXT`);
-        if (!records) {
-            result.error = CF_ERROR_MSG;
-            return result;
-        }
-        if (records.length > 0) {
-            const ips = parseTXTContent(records[0].content);
-            const checkResults = await batchCheckIPs(ips, (addr) => checkProxyIP(addr, config), config);
-
-            const txtChecks = checkResults.map(result => ({
-                ip: result.address,
-                address: result.address,
-                success: result.success,
-                colo: result.colo,
-                time: result.time,
-                exits: result.exits,
-                proxyIP: result.proxyIP,
-                portRemote: result.portRemote,
-                asn: result.asn,
-                country: result.country,
-                stack: result.stack,
-                ipInfo: result.ipInfo,
-                apiError: result.apiError || false
-            }));
-
-            result.txtRecords = [{
-                id: records[0].id,
-                ips: txtChecks
-            }];
-        }
-    }
-
-    return result;
+__name(inferPoolStack, "inferPoolStack");
+function mergePoolEntry(previous, next) {
+  const normalizedAddress = normalizePoolAddress(next.address) ?? previous.address;
+  const metadata = {
+    ...!isUnknownMetaValue(next.asn) && next.asn ? { asn: next.asn } : {},
+    ...!isUnknownMetaValue(next.country) && next.country ? { country: next.country } : {},
+    ...next.stack ? { stack: next.stack } : {}
+  };
+  const merged = mergePoolMetadata({ ...previous, address: normalizedAddress }, metadata);
+  return { ...merged, comment: next.comment || previous.comment };
 }
+__name(mergePoolEntry, "mergePoolEntry");
 
-function normalizeCheckAddr(input) {
-    return parseAddr(input || '').address;
+// app/src/contracts/parse.ts
+function parseOk(value) {
+  return { ok: true, value };
 }
-
-// 有效失败优先于接口异常；全部纯超时仍按用户配置的慢 IP 淘汰策略处理。
-// 此函数也嵌入浏览器脚本，保证分阶段批量检测与完整维护检测的判定一致。
-function combineCheckAttempts(attempts) {
-    const success = attempts.find(result => result.success && !result.apiError);
-    if (success) return success;
-    const failures = attempts.filter(result => !result.apiError && result.checkOutcome !== 'timeout');
-    if (failures.length) return failures[failures.length - 1];
-    return attempts.find(result => result.apiError) || attempts[attempts.length - 1];
+__name(parseOk, "parseOk");
+function parseFail(message) {
+  return { ok: false, message };
 }
-
-async function checkProxyIPAttempt(addr, apiUrl, timeout, signal) {
-    const failed = (outcome, message) => ({
-        ...normalizeCheckResult({ success: false, message }, addr, outcome === 'api_error'),
-        checkOutcome: outcome
-    });
-    if (!apiUrl) return failed('api_error', '未配置检测接口');
-    try {
-        const timeoutSignal = AbortSignal.timeout(timeout);
-        const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-        const r = await fetch(buildCheckApiUrl(apiUrl, addr), { signal: requestSignal });
-        if (!r.ok) {
-            if (r.body) await r.body.cancel().catch(() => {});
-            return failed('api_error', `检测接口 HTTP ${r.status}`);
-        }
-        const data = safeJSONParse(await r.text(), null);
-        const status = normalizeTextValue(data?.status).toLowerCase();
-        // 合法 JSON 不等于合法检测结果：避免把 {}、数组或普通错误对象误当死 IP。
-        const recognized = data && typeof data === 'object' && !Array.isArray(data) && (
-            typeof data.success === 'boolean' || typeof data.ok === 'boolean' ||
-            ['success', 'failed', 'failure', 'error'].includes(status) || extractCheckExits(data).length > 0
-        );
-        if (!recognized) return failed('api_error', '检测接口响应格式不正确');
-        const result = normalizeCheckResult(data, addr);
-        return { ...result, checkOutcome: result.apiError ? 'api_error' : (result.success ? 'success' : 'failure') };
-    } catch (err) {
-        // 主动取消预取不等于超时，不能缓存成失效，更不能据此移除记录。
-        if (signal?.aborted) return failed('api_error', '检测已取消');
-        return failed(['TimeoutError', 'AbortError'].includes(err?.name) ? 'timeout' : 'api_error',
-            ['TimeoutError', 'AbortError'].includes(err?.name) ? '检测超时' : '检测接口网络异常');
-    }
+__name(parseFail, "parseFail");
+function isRecord2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-
-/**
- * @param {string} input
- * @param {any} config
- * @param {{ phase?: 'full' | 'primary' | 'backup', signal?: AbortSignal }} [options]
- */
-async function checkProxyIP(input, config, options = {}) {
-    const { phase = 'full', signal } = options;
-    const addr = normalizeCheckAddr(input);
-    const timeout = getRuntimeSettings(config).CHECK_TIMEOUT;
-    const apis = [config.checkApi, config.checkApiBackup].map(api => String(api || '').trim()).filter(Boolean);
-    // 仅配置备用接口时，它作为有效主接口；默认 full 保持原有主、备用串行确认语义。
-    if (phase !== 'full') {
-        const index = phase === 'backup' ? 1 : 0;
-        const result = await checkProxyIPAttempt(addr, apis[index], timeout, signal);
-        return { ...result, recheckRequired: phase === 'primary' && (!result.success || result.apiError) && apis.length > 1 };
-    }
-    const attempts = [];
-    for (const apiUrl of (apis.length ? apis : [''])) {
-        if (signal?.aborted) break;
-        const result = await checkProxyIPAttempt(addr, apiUrl, timeout, signal);
-        attempts.push(result);
-        if (result.success && !result.apiError) return result;
-    }
-    return combineCheckAttempts(attempts) || normalizeCheckResult({ success: false, message: '检测已取消' }, addr, true);
+__name(isRecord2, "isRecord");
+function asRecord(value) {
+  return isRecord2(value) ? value : null;
 }
-
-async function fetchCF(config, path, method = 'GET', body = null) {
-    if (!config.apiKey || !config.zoneId) {
-        console.error('❌ Cloudflare配置不完整:', {
-            apiKey: !!config.apiKey,
-            zoneId: !!config.zoneId
-        });
-        return null;
-    }
-
-    const headers = {
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json'
-    };
-    const init = { method, headers };
-    if (body) init.body = JSON.stringify(body);
-
-    try {
-        const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, init);
-        const d = await r.json();
-
-        if (!d.success) {
-            console.error('❌ Cloudflare API错误:', {
-                path,
-                method,
-                errors: d.errors,
-                messages: d.messages
-            });
-            return null;
-        }
-
-        return d.result;
-    } catch (e) {
-        console.error('❌ Cloudflare API请求失败:', {
-            path,
-            method,
-            error: e.message
-        });
-        return null;
-    }
+__name(asRecord, "asRecord");
+function readTrimmedString(value, min, max) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length >= min && trimmed.length <= max ? trimmed : null;
 }
+__name(readTrimmedString, "readTrimmedString");
 
-// ==================== Maintenance workflow ====================
-
-function getTargetCFConfig(config, target) {
-    const zone = Number.isInteger(target?.zoneIndex) && Array.isArray(config.zones)
-        ? config.zones[target.zoneIndex]
-        : null;
+// app/src/contracts/config.ts
+var PROBE_MODES = ["external-api", "cmliu-check", "socket"];
+var MIN_PROBE_TIMEOUT_MS = 500;
+var MAX_PROBE_TIMEOUT_MS = 3e4;
+var MAX_ENDPOINT_URL_LENGTH = 2048;
+var DEFAULT_SOCKET_PROBE_IPV4_URL = "https://ipv4.090227.xyz/";
+var DEFAULT_SOCKET_PROBE_IPV6_URL = "https://ipv6.090227.xyz/";
+var DEFAULT_SOCKET_READ_LIMIT_BYTES = 65536;
+var MIN_SOCKET_READ_LIMIT_BYTES = 1024;
+var MAX_SOCKET_READ_LIMIT_BYTES = 262144;
+var MAX_SECRET_LENGTH = 512;
+var MAX_ZONE_ID_LENGTH = 64;
+var MAX_ZONES = 20;
+var MAX_TARGETS = 100;
+var MAX_TARGET_PORT = 65535;
+var MAX_MIN_ACTIVE = 100;
+function parseSocketProbeUrl(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" || !url.hostname) return null;
+    const port = url.port ? Number(url.port) : 443;
     return {
-        ...config,
-        apiKey: zone?.apiKey || config.apiKey,
-        zoneId: zone?.zoneId || config.zoneId
+      endpoint: url.hostname,
+      hostHeader: port === 443 ? url.hostname : `${url.hostname}:${port}`,
+      path: `${url.pathname || "/"}${url.search}`
     };
+  } catch {
+    return null;
+  }
 }
-
-async function deleteDNSRecord(cfConfig, id) {
-    return await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records/${id}`, 'DELETE') !== null;
+__name(parseSocketProbeUrl, "parseSocketProbeUrl");
+var SETTINGS_LIMITS = {
+  CONCURRENT_CHECKS: { min: 1, max: 128 },
+  BACKEND_CONCURRENT_CHECKS: { min: 1, max: 6 },
+  CHECK_TIMEOUT: { min: 500, max: 3e4 },
+  REMOTE_LOAD_TIMEOUT: { min: 1e3, max: 6e4 },
+  DOH_TIMEOUT: { min: 1e3, max: 3e4 },
+  DEFAULT_MIN_ACTIVE: { min: 0, max: 100 },
+  MAX_TRASH_SIZE: { min: 0, max: 1e5 }
+};
+var DEFAULT_RUNTIME_SETTINGS = {
+  CONCURRENT_CHECKS: 32,
+  BACKEND_CONCURRENT_CHECKS: 4,
+  CHECK_TIMEOUT: 15e3,
+  REMOTE_LOAD_TIMEOUT: 8e3,
+  DOH_TIMEOUT: 5e3,
+  DEFAULT_MIN_ACTIVE: 3,
+  MAX_TRASH_SIZE: 1e3
+};
+function createDefaultConfig() {
+  return {
+    apiKey: "",
+    zoneId: "",
+    zones: [],
+    targets: [],
+    checkApi: "",
+    checkApiBackup: "https://checkapi.dvb.kdns.fr/?candidate=",
+    dohApi: "https://cloudflare-dns.com/dns-query",
+    authKey: "",
+    tgToken: "",
+    tgId: "",
+    scheduledEnabled: true,
+    tgEnabled: true,
+    settings: { ...DEFAULT_RUNTIME_SETTINGS },
+    projectUrl: "",
+    probeMode: "external-api",
+    socketProbeIpv4Url: DEFAULT_SOCKET_PROBE_IPV4_URL,
+    socketProbeIpv6Url: DEFAULT_SOCKET_PROBE_IPV6_URL,
+    socketReadLimitBytes: DEFAULT_SOCKET_READ_LIMIT_BYTES
+  };
 }
-
-async function upsertTXTRecord(cfConfig, domain, recordId, ips) {
-    const content = `"${ips.join(',')}"`;
-    if (recordId) {
-        return await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records/${recordId}`, 'PUT', {
-            type: 'TXT',
-            name: domain,
-            content,
-            ttl: 60
-        }) !== null;
+__name(createDefaultConfig, "createDefaultConfig");
+function toPublicConfig(config) {
+  return {
+    zones: config.zones.map(({ name, baseDomain, zoneId, label, apiKey }) => ({
+      name,
+      baseDomain,
+      zoneId,
+      label,
+      hasApiKey: apiKey.length > 0
+    })),
+    targets: config.targets,
+    zoneId: config.zoneId,
+    checkApi: config.checkApi,
+    checkApiBackup: config.checkApiBackup,
+    dohApi: config.dohApi,
+    tgId: config.tgId,
+    scheduledEnabled: config.scheduledEnabled,
+    tgEnabled: config.tgEnabled,
+    settings: config.settings,
+    projectUrl: config.projectUrl,
+    probeMode: config.probeMode,
+    socketProbeIpv4Url: config.socketProbeIpv4Url,
+    socketProbeIpv6Url: config.socketProbeIpv6Url,
+    socketReadLimitBytes: config.socketReadLimitBytes,
+    secrets: {
+      apiKey: config.apiKey.length > 0,
+      authKey: config.authKey.length > 0,
+      tgToken: config.tgToken.length > 0
     }
-    return await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records`, 'POST', {
-        type: 'TXT',
-        name: domain,
-        content,
-        ttl: 60
-    }) !== null;
+  };
 }
-
-async function addAddressRecord(cfConfig, domain, ip) {
-    const content = String(ip || '').replace(/^\[/, '').replace(/\]$/, '');
-    const recordType = getDNSRecordTypeForIP(content);
-    const result = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records`, 'POST', {
-        type: recordType,
-        name: domain,
-        content,
-        ttl: 60,
-        proxied: false
-    });
-    return { ok: result !== null, type: recordType };
+__name(toPublicConfig, "toPublicConfig");
+function toProbeConfig(config) {
+  const endpoints = [];
+  if (config.checkApi.trim()) endpoints.push({ name: "primary", urlTemplate: config.checkApi.trim() });
+  if (config.checkApiBackup.trim()) endpoints.push({ name: "backup", urlTemplate: config.checkApiBackup.trim() });
+  return {
+    mode: config.probeMode,
+    endpoints,
+    fallbackToNext: true,
+    timeoutMs: config.settings.CHECK_TIMEOUT,
+    ipv4ProbeUrl: config.socketProbeIpv4Url,
+    ipv6ProbeUrl: config.socketProbeIpv6Url,
+    readLimitBytes: config.socketReadLimitBytes
+  };
 }
+__name(toProbeConfig, "toProbeConfig");
+function parseAppConfig(value, previous) {
+  const record = asRecord(value);
+  if (!record) return parseFail("\u914D\u7F6E\u5FC5\u987B\u662F JSON \u5BF9\u8C61");
+  const base = previous ?? createDefaultConfig();
+  const settings = parseRuntimeSettings(record.settings ?? base.settings);
+  const zones = Array.isArray(record.zones) ? parseZones(record.zones, base.zones) : base.zones;
+  const targets = Array.isArray(record.targets) ? parseTargets(record.targets, settings) : base.targets;
+  const duplicate = findDuplicate(zones, targets);
+  if (duplicate) return parseFail(duplicate);
+  const apiKey = zones[0]?.apiKey || text(record.apiKey, base.apiKey, MAX_SECRET_LENGTH);
+  const zoneId = zones[0]?.zoneId || text(record.zoneId, base.zoneId, MAX_ZONE_ID_LENGTH);
+  const probeMode = PROBE_MODES.includes(record.probeMode) ? record.probeMode : base.probeMode;
+  return parseOk({
+    apiKey,
+    zoneId,
+    zones,
+    targets,
+    checkApi: text(record.checkApi, base.checkApi, MAX_ENDPOINT_URL_LENGTH),
+    checkApiBackup: text(record.checkApiBackup, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH),
+    dohApi: text(record.dohApi, base.dohApi, MAX_ENDPOINT_URL_LENGTH),
+    authKey: text(record.authKey, base.authKey, MAX_SECRET_LENGTH),
+    tgToken: text(record.tgToken, base.tgToken, MAX_SECRET_LENGTH),
+    tgId: text(record.tgId, base.tgId, 64),
+    scheduledEnabled: booleanValue(record.scheduledEnabled, base.scheduledEnabled),
+    tgEnabled: booleanValue(record.tgEnabled, base.tgEnabled),
+    settings,
+    projectUrl: text(record.projectUrl, base.projectUrl, MAX_ENDPOINT_URL_LENGTH),
+    probeMode,
+    socketProbeIpv4Url: probeUrl(record.socketProbeIpv4Url, base.socketProbeIpv4Url),
+    socketProbeIpv6Url: probeUrl(record.socketProbeIpv6Url, base.socketProbeIpv6Url),
+    socketReadLimitBytes: integerValue(
+      record.socketReadLimitBytes,
+      base.socketReadLimitBytes,
+      MIN_SOCKET_READ_LIMIT_BYTES,
+      MAX_SOCKET_READ_LIMIT_BYTES
+    )
+  });
+}
+__name(parseAppConfig, "parseAppConfig");
+function parseRuntimeSettings(value) {
+  const raw = asRecord(value) ?? {};
+  const result = { ...DEFAULT_RUNTIME_SETTINGS };
+  for (const key of Object.keys(SETTINGS_LIMITS)) {
+    const limits = SETTINGS_LIMITS[key];
+    result[key] = integerValue(raw[key], DEFAULT_RUNTIME_SETTINGS[key], limits.min, limits.max);
+  }
+  return result;
+}
+__name(parseRuntimeSettings, "parseRuntimeSettings");
+function parseZones(values, previous) {
+  return values.slice(0, MAX_ZONES).map((value, index) => normalizeZone(value, previous[index])).filter((zone) => zone !== null);
+}
+__name(parseZones, "parseZones");
+function parseTargets(values, settings) {
+  return values.slice(0, MAX_TARGETS).map((item) => normalizeTarget(item, settings)).filter((target) => target !== null);
+}
+__name(parseTargets, "parseTargets");
+function normalizeZone(value, previous) {
+  const record = asRecord(value);
+  if (!record) return null;
+  const baseDomain = text(record.baseDomain, text(record.domain, "", 253), 253).replace(/^\.+|\.+$/g, "");
+  const zoneId = text(record.zoneId, "", MAX_ZONE_ID_LENGTH);
+  const apiKey = text(record.apiKey, "", MAX_SECRET_LENGTH) || previous?.apiKey || "";
+  const label = text(record.label, text(record.name, baseDomain || zoneId || "\u672A\u547D\u540D", 32), 32);
+  if (!baseDomain && !zoneId && !apiKey) return null;
+  return { name: label, baseDomain, zoneId, apiKey, label };
+}
+__name(normalizeZone, "normalizeZone");
+function normalizeTarget(value, settings) {
+  const record = asRecord(value);
+  if (!record) return null;
+  const mode = String(record.mode ?? "A").trim().toUpperCase() === "TXT" ? "TXT" : "A";
+  const prefix = text(record.prefix, "", 63).replace(/^\.+|\.+$/g, "");
+  const baseDomain = text(record.baseDomain, "", 253).replace(/^\.+|\.+$/g, "");
+  const domain = text(record.domain, buildDomain(prefix, baseDomain), 253).replace(/\.$/, "").toLowerCase();
+  if (!domain) return null;
+  const rawPort = record.port === void 0 ? "443" : String(record.port).trim();
+  const portNumber = Number.parseInt(rawPort, 10);
+  const port = mode === "TXT" ? "any" : Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= MAX_TARGET_PORT ? portNumber : 443;
+  const countries = normalizeList(record.countries, record.country, normalizeCountry);
+  const asns = normalizeList(record.asns, record.asn, normalizeAsn);
+  return {
+    mode,
+    domain,
+    baseDomain,
+    prefix,
+    zoneIndex: readZoneIndex(record.zoneIndex),
+    port,
+    minActive: integerValue(record.minActive, settings.DEFAULT_MIN_ACTIVE, 0, MAX_MIN_ACTIVE),
+    exitFilter: normalizeExitFilter(record.exitFilter),
+    country: countries.join(","),
+    asn: asns.join(","),
+    countries,
+    asns,
+    enabled: record.enabled !== false
+  };
+}
+__name(normalizeTarget, "normalizeTarget");
+function normalizeList(primary, fallback, normalizer) {
+  const source = Array.isArray(primary) && primary.length > 0 ? primary : fallback;
+  const values = Array.isArray(source) ? source : String(source ?? "").split(/[,;，；\s]+/);
+  return [...new Set(values.map((item) => normalizer(String(item).trim())).filter((item) => Boolean(item)))];
+}
+__name(normalizeList, "normalizeList");
+function normalizeExitFilter(value) {
+  const textValue = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (!textValue || ["any", "all", "v4/v6", "v6/v4"].includes(textValue)) return "any";
+  if (["v4", "ipv4", "ipv4-only", "only-ipv4"].includes(textValue)) return "v4";
+  if (["v6", "ipv6", "ipv6-only", "only-ipv6"].includes(textValue)) return "v6";
+  if (["dual", "dual-stack", "both"].includes(textValue)) return "dual";
+  return "any";
+}
+__name(normalizeExitFilter, "normalizeExitFilter");
+function findDuplicate(zones, targets) {
+  const zoneKeys = /* @__PURE__ */ new Set();
+  for (const zone of zones) {
+    const key = zone.baseDomain.trim().toLowerCase();
+    if (key && zoneKeys.has(key)) return `\u6743\u9650\u914D\u7F6E\u5B58\u5728\u91CD\u590D\u76EE\u6807\u7EF4\u62A4\u57DF\u540D\uFF1A${key}`;
+    zoneKeys.add(key);
+  }
+  const targetKeys = /* @__PURE__ */ new Set();
+  for (const target of targets) {
+    const key = `${target.domain}|${target.mode}`;
+    if (targetKeys.has(key)) return `\u7BA1\u7406\u57DF\u540D\u5B58\u5728\u91CD\u590D\u9879\uFF1A${target.domain} / ${target.mode === "TXT" ? "TXT" : "A/AAAA"}`;
+    targetKeys.add(key);
+  }
+  return "";
+}
+__name(findDuplicate, "findDuplicate");
+function readZoneIndex(value) {
+  if (value === void 0 || value === null || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+__name(readZoneIndex, "readZoneIndex");
+function buildDomain(prefix, baseDomain) {
+  return prefix ? `${prefix}.${baseDomain}` : baseDomain;
+}
+__name(buildDomain, "buildDomain");
+function text(value, fallback, max) {
+  if (value === void 0) return fallback;
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length <= max ? trimmed : fallback;
+}
+__name(text, "text");
+function integerValue(value, fallback, min, max) {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+__name(integerValue, "integerValue");
+function booleanValue(value, fallback) {
+  if (value === void 0 || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+__name(booleanValue, "booleanValue");
+function probeUrl(value, fallback) {
+  if (value === void 0) return fallback;
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return parseSocketProbeUrl(trimmed) ? trimmed : fallback;
+}
+__name(probeUrl, "probeUrl");
 
-async function getCandidateIPs(env, target, addLog, poolKey) {
-    const pool = await env.IP_DATA.get(poolKey) || '';
-    const poolName = getPoolFixedName(poolKey);
+// app/src/adapters/storage/kv-json.ts
+async function readKvJson(kv, key, cacheTtl) {
+  const raw = await kv.get(key, { type: "text", cacheTtl });
+  if (raw === null) return { status: "missing" };
+  if (!raw.trim()) return { status: "invalid", message: "KV \u5185\u5BB9\u4E3A\u7A7A" };
+  try {
+    return { status: "loaded", value: JSON.parse(raw) };
+  } catch {
+    return { status: "invalid", message: "KV \u5185\u5BB9\u4E0D\u662F\u6709\u6548 JSON" };
+  }
+}
+__name(readKvJson, "readKvJson");
+async function readKvStringRecord(kv, key) {
+  const raw = await kv.get(key, { type: "json" }).catch(() => null);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const record = {};
+  for (const [field, value] of Object.entries(raw)) {
+    if (typeof value === "string" && value.trim()) record[field] = value.trim();
+  }
+  return record;
+}
+__name(readKvStringRecord, "readKvStringRecord");
 
-    if (!pool) {
-        addLog(`⚠️ ${poolName} 为空`);
-        return [];
+// app/src/adapters/storage/kv-config-repository.ts
+var CONFIG_KEY = "app_config";
+var KvConfigRepository = class {
+  constructor(kv, options = {}) {
+    this.kv = kv;
+    this.key = options.key ?? CONFIG_KEY;
+    this.cacheTtl = options.cacheTtl ?? 60;
+  }
+  kv;
+  static {
+    __name(this, "KvConfigRepository");
+  }
+  key;
+  cacheTtl;
+  async load(previous) {
+    const raw = await readKvJson(this.kv, this.key, this.cacheTtl);
+    if (raw.status === "missing") return { status: "missing", source: "kv" };
+    if (raw.status === "invalid") return { status: "invalid", source: "kv", message: raw.message };
+    const parsed = parseAppConfig(raw.value, previous);
+    if (!parsed.ok) return { status: "invalid", source: "kv", message: parsed.message };
+    return { status: "loaded", source: "kv", config: parsed.value };
+  }
+  async save(config) {
+    const parsed = parseAppConfig(config);
+    if (!parsed.ok) throw new Error(parsed.message);
+    await this.kv.put(this.key, JSON.stringify(parsed.value));
+  }
+};
+
+// app/src/contracts/pool.ts
+var POOL_KEY_PREFIX = "ip_pool_";
+var DEFAULT_POOL_KEY = "ip_pool_default";
+var TRASH_POOL_KEY = "ip_pool_trash";
+var POOL_NAMES_KEY = "ip_pool_names";
+var POOL_ORDER_KEY = "ip_pool_order";
+var DOMAIN_POOL_MAPPING_KEY = "domain_pool_mapping";
+var DOMAIN_POOL_ORDER_KEY = "domain_pool_order";
+var NUMBERED_POOL_KEY_RE = /^ip_pool_(\d{3})$/;
+var MAX_POOL_DISPLAY_NAME_LENGTH = 40;
+var MAX_POOL_RESTORE_ITEMS = 1e3;
+function isUserPoolKey(value) {
+  return value === DEFAULT_POOL_KEY || NUMBERED_POOL_KEY_RE.test(value);
+}
+__name(isUserPoolKey, "isUserPoolKey");
+function isPoolDataKey(value) {
+  return isUserPoolKey(value) || value === TRASH_POOL_KEY;
+}
+__name(isPoolDataKey, "isPoolDataKey");
+function formatPoolNumber(value) {
+  return String(value).padStart(3, "0");
+}
+__name(formatPoolNumber, "formatPoolNumber");
+function getNumberedPoolKey(value) {
+  return `${POOL_KEY_PREFIX}${formatPoolNumber(value)}`;
+}
+__name(getNumberedPoolKey, "getNumberedPoolKey");
+function getPoolFixedName(poolKey) {
+  if (poolKey === DEFAULT_POOL_KEY) return "\u9ED8\u8BA4\u6C60";
+  if (poolKey === TRASH_POOL_KEY) return "\u5783\u573E\u6876";
+  const numbered = NUMBERED_POOL_KEY_RE.exec(poolKey);
+  return numbered ? `\u6C60 ${numbered[1]}` : poolKey;
+}
+__name(getPoolFixedName, "getPoolFixedName");
+
+// app/src/domain/domain-binding.ts
+function bindingKey(target) {
+  return `${normalizeBindingDomain(target.domain)}|${target.mode}`;
+}
+__name(bindingKey, "bindingKey");
+function normalizeBindingKey(key) {
+  const [domain, ...rest] = String(key ?? "").split("|");
+  const normalizedDomain = normalizeBindingDomain(domain ?? "");
+  if (!normalizedDomain) return "";
+  const mode = rest.join("|").trim().toUpperCase();
+  return mode === "A" || mode === "TXT" ? `${normalizedDomain}|${mode}` : normalizedDomain;
+}
+__name(normalizeBindingKey, "normalizeBindingKey");
+function resolvePoolKey(mapping, target) {
+  const key = bindingKey(target);
+  const mapped = mapping[key] ?? mapping[key.toLowerCase()] ?? mapping[key.slice(0, key.indexOf("|"))];
+  return mapped && isUserPoolKey(mapped) ? mapped : DEFAULT_POOL_KEY;
+}
+__name(resolvePoolKey, "resolvePoolKey");
+function sortByBindingOrder(items, order) {
+  if (order.length === 0) return items;
+  const rank = new Map(order.map((key, index) => [key, index]));
+  return [...items].sort((left, right) => (rank.get(left.key) ?? order.length) - (rank.get(right.key) ?? order.length));
+}
+__name(sortByBindingOrder, "sortByBindingOrder");
+function normalizeBindingDomain(domain) {
+  return String(domain ?? "").trim().replace(/\.$/, "").toLowerCase();
+}
+__name(normalizeBindingDomain, "normalizeBindingDomain");
+
+// app/src/adapters/storage/kv-domain-binding-repository.ts
+var KvDomainBindingRepository = class {
+  constructor(kv) {
+    this.kv = kv;
+  }
+  kv;
+  static {
+    __name(this, "KvDomainBindingRepository");
+  }
+  async read() {
+    return await readKvStringRecord(this.kv, DOMAIN_POOL_MAPPING_KEY);
+  }
+  async write(mapping) {
+    const sanitized = {};
+    for (const [rawKey, rawPoolKey] of Object.entries(mapping)) {
+      const key = normalizeBindingKey(rawKey);
+      const poolKey = rawPoolKey.trim();
+      if (key && isUserPoolKey(poolKey)) sanitized[key] = poolKey;
     }
-
-    let candidates = parsePoolList(pool);
-
-    // TXT模式不过滤端口，地址记录模式才过滤。
-    // 无需排除与DNS同址的条目：buildCandidate 拦截已在 activeItems 的地址，checkCache 让重复检测零成本。
-    if (target.mode === 'A') {
-        candidates = candidates.filter(l => {
-            const ipPort = extractIPKey(l);
-            return extractPortFromAddr(ipPort) === target.port && targetMetaMatchesStoredEntry(l, target);
-        });
-    } else {
-        candidates = candidates.filter(l => targetMetaMatchesStoredEntry(l, target));
-    }
-
-    addLog(`📦 使用 ${poolName}: ${candidates.length} 个候选IP`);
-    return candidates;
+    await this.kv.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(sanitized));
+  }
+  async readOrder() {
+    const raw = await this.kv.get(DOMAIN_POOL_ORDER_KEY, { type: "json" }).catch(() => null);
+    return toBindingOrder(raw);
+  }
+  async writeOrder(order) {
+    await this.kv.put(DOMAIN_POOL_ORDER_KEY, JSON.stringify(toBindingOrder(order)));
+  }
+};
+function toBindingOrder(value) {
+  if (!Array.isArray(value)) return [];
+  const order = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = normalizeBindingKey(item);
+    if (key && !order.includes(key)) order.push(key);
+  }
+  return order;
 }
+__name(toBindingOrder, "toBindingOrder");
 
-async function checkCurrentItems(currentItems, checkFn, config) {
-    return mapWithConcurrency(currentItems, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS, async item => {
-        let result;
-        try { result = normalizeCheckResult(await checkFn(item.addr), item.addr); }
-        catch { result = normalizeCheckResult({ success: false }, item.addr, true); }
-        return { item, result };
-    });
+// app/src/domain/managed-target.ts
+function normalizeManagedTarget(input) {
+  const mode = String(input.mode ?? "A").trim().toUpperCase() === "TXT" ? "TXT" : "A";
+  const domain = String(input.domain ?? "").trim().replace(/\.$/, "").toLowerCase();
+  if (!domain) return null;
+  const parsedPort = Number.parseInt(String(input.port ?? 443), 10);
+  const port = mode === "TXT" ? null : Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? parsedPort : 443;
+  const parsedMinActive = Number.parseInt(String(input.minActive ?? 1), 10);
+  return {
+    mode,
+    domain,
+    port,
+    minActive: Number.isFinite(parsedMinActive) ? Math.max(0, parsedMinActive) : 1,
+    exitFilter: normalizeExitFilter2(input.exitFilter),
+    countries: normalizeList2(input.countries, normalizeCountry),
+    asns: normalizeList2(input.asns, normalizeAsn)
+  };
 }
-
-function appendCheckDetail(report, item, result) {
-    report.checkDetails.push({
-        ip: item.addr,
-        status: result.apiError ? '⚠️ 检测异常' : (result.success ? '✅ 活跃' : '❌ 失效'),
-        colo: result.colo || 'N/A',
-        time: result.responseTime || '-',
-        country: result.country || 'null',
-        asn: result.asn || 'null'
-    });
+__name(normalizeManagedTarget, "normalizeManagedTarget");
+function normalizeExitFilter2(value) {
+  const text3 = String(value ?? "").trim().toLowerCase().replace(/_/g, "-");
+  if (!text3 || ["any", "all", "v4/v6", "v6/v4"].includes(text3)) return "any";
+  if (["v4", "ipv4", "ipv4-only", "only-ipv4"].includes(text3)) return "v4";
+  if (["v6", "ipv6", "ipv6-only", "only-ipv6"].includes(text3)) return "v6";
+  if (["dual", "dual-stack", "both"].includes(text3)) return "dual";
+  return "any";
 }
-function removePoolEntry(poolList, ipAddr) {
-    const before = poolList.length;
-    const entry = poolList.find(p => extractIPKey(p) === ipAddr) || '';
-    const next = poolList.filter(p => extractIPKey(p) !== ipAddr);
-    return { list: next, removed: before !== next.length, entry };
+__name(normalizeExitFilter2, "normalizeExitFilter");
+function probeMatchesTarget(result, target) {
+  if (result.status !== "alive") return false;
+  if (!exitFilterMatches(result.exitFamily, target.exitFilter)) return false;
+  if (target.countries.length && !intersects(target.countries, splitMetadata(result.exits.map((exit) => exit.country)))) return false;
+  if (target.asns.length && !intersects(target.asns, splitMetadata(result.exits.map((exit) => exit.asn)).map((asn) => normalizeAsn(asn) ?? ""))) return false;
+  return true;
 }
-
-async function savePoolAndTrash(env, poolKey, poolList, poolModified, trashBatch, config = {}) {
-    if (trashBatch.length > 0) await batchAddToTrash(env, trashBatch, config);
-    if (poolModified) await env.IP_DATA.put(poolKey, poolList.join('\n'));
+__name(probeMatchesTarget, "probeMatchesTarget");
+function storedEntryMatchesTarget(entry, target) {
+  if (target.countries.length && !isUnknownMetaValue(entry.country)) {
+    if (!intersects(target.countries, splitMetadata([entry.country]))) return false;
+  }
+  if (target.asns.length && !isUnknownMetaValue(entry.asn)) {
+    if (!intersects(target.asns, splitMetadata([entry.asn]).map((asn) => normalizeAsn(asn) ?? ""))) return false;
+  }
+  if (target.exitFilter !== "any" && !isUnknownMetaValue(entry.stack)) {
+    if (!exitFilterMatches(entry.stack ?? "unknown", target.exitFilter)) return false;
+  }
+  return true;
 }
-
-function sameAddressSet(a, b) {
-    if (a.length !== b.length) return false;
-    const set = new Set(a);
-    return b.every(item => set.has(item));
+__name(storedEntryMatchesTarget, "storedEntryMatchesTarget");
+function selectCandidateEntries(entries, target, excludedAddresses) {
+  return entries.filter((entry) => {
+    const address = parseProxyTarget(entry.address);
+    if (!address) return false;
+    if (target.mode === "A" && (!target.port || address.port !== target.port)) return false;
+    if (!storedEntryMatchesTarget(entry, target)) return false;
+    return !excludedAddresses.has(address.key);
+  });
 }
-
-function getTargetFilterSummary(target) {
-    return [target.country ? `国家:${target.country}` : '', target.asn ? `ASN:${target.asn}` : ''].filter(Boolean).join(', ') || '无';
+__name(selectCandidateEntries, "selectCandidateEntries");
+function activeValueForEntry(entry, target) {
+  const parsed = parseProxyTarget(entry.address);
+  if (!parsed) return entry.address;
+  return target.mode === "A" ? parsed.host : parsed.authority;
 }
-
-function checkResultMatchesTarget(result, target) {
-    return result.success && exitFilterMatchesResult(result, target.exitFilter) && targetMetaMatchesResult(result, target);
+__name(activeValueForEntry, "activeValueForEntry");
+function normalizeList2(value, normalizer) {
+  const source = Array.isArray(value) ? value : String(value ?? "").split(/[,;，；\s]+/);
+  return [...new Set(source.map((item) => normalizer(String(item).trim())).filter((item) => Boolean(item)))];
 }
-
-function appendMaintenanceIPReport(list, ip, result, extra = {}) {
-    list.push({
-        ip,
-        ...extra,
-        colo: result.colo || 'N/A',
-        time: result.responseTime || '-',
-        country: result.country || 'null',
-        asn: result.asn || 'null'
-    });
+__name(normalizeList2, "normalizeList");
+function exitFilterMatches(family, filter) {
+  if (filter === "any") return true;
+  if (filter === "v4") return family === "v4" || family === "ipv4";
+  if (filter === "v6") return family === "v6" || family === "ipv6";
+  return family === "v4/v6" || family === "dual";
 }
-
-// 实测成功即校准：用实测值重建条目（未知字段回落旧值、保留 #备注），有变化才写回
-function refreshPoolEntryMetadata(poolList, ipPort, result) {
-    if (!result.success) return { poolList, modified: false };
-    const existing = poolList.find(line => extractIPKey(line) === ipPort);
-    if (!existing) return { poolList, modified: false };
-    const refreshed = buildPoolEntryFromCheckResult(ipPort, result, existing);
-    if (refreshed === existing) return { poolList, modified: false };
-    return {
-        poolList: poolList.map(line => extractIPKey(line) === ipPort ? refreshed : line),
-        modified: true
-    };
+__name(exitFilterMatches, "exitFilterMatches");
+function splitMetadata(values) {
+  return values.flatMap((value) => String(value ?? "").split(/[\/,;，；\s]+/).map((item) => item.trim()).filter(Boolean));
 }
-
-// 只并发做无副作用的检测；调用方逐个提交 DNS/KV 变更，补够即取消剩余预取。
-async function* precheckCandidates(items, limit, buildCandidate, checkFn, activeItems) {
-    const controller = new AbortController();
-    const pending = new Map();
-    const seen = new Set();
-    let cursor = 0;
-    const fill = () => {
-        while (cursor < items.length && pending.size < limit) {
-            const index = cursor++;
-            const item = items[index];
-            const candidate = buildCandidate(item, activeItems);
-            if (!candidate || seen.has(candidate.addr)) continue;
-            seen.add(candidate.addr);
-            const task = Promise.resolve().then(() => checkFn(candidate.addr, { signal: controller.signal }))
-                .then(result => ({ index, item, result: normalizeCheckResult(result, candidate.addr) }))
-                .catch(() => ({ index, item, result: normalizeCheckResult({ success: false }, candidate.addr, true) }));
-            pending.set(index, task);
-        }
-    };
-    try {
-        fill();
-        while (pending.size) {
-            const completed = await Promise.race(pending.values());
-            pending.delete(completed.index);
-            yield completed;
-            fill();
-        }
-    } finally {
-        controller.abort();
-        await Promise.allSettled(pending.values());
-    }
+__name(splitMetadata, "splitMetadata");
+function intersects(required, actual) {
+  const actualSet = new Set(actual.map((item) => item.toUpperCase()));
+  return required.some((item) => actualSet.has(item.toUpperCase()));
 }
+__name(intersects, "intersects");
 
-async function runMaintenanceCore({
-    env,
-    target,
-    addLog,
-    report,
-    poolKey,
-    checkFn,
-    config,
-    currentItems,
-    getCurrentActiveValue,
-    onRemoveCurrent = null,
-    formatCurrentRemovedLog,
-    buildCandidate,
-    addCandidate = null
-}) {
-    let poolList = parsePoolList(await env.IP_DATA.get(poolKey));
-    let poolModified = false;
-    const trashBatch = [];
-    const activeItems = [];
-    report.poolKeyUsed = poolKey;
-
-    for (const { item, result } of await checkCurrentItems(currentItems, checkFn, config)) {
-        appendCheckDetail(report, item, result);
-        if (checkResultMatchesTarget(result, target)) {
-            activeItems.push(getCurrentActiveValue(item, result));
-            const hit = refreshPoolEntryMetadata(poolList, item.addr, result);
-            poolList = hit.poolList;
-            poolModified = poolModified || hit.modified;
-            addLog(`  ✅ ${item.addr} - ${result.colo} (${result.responseTime}ms)`);
-            continue;
-        }
-
-        if (result.apiError) {
-            report.apiErrorCount = (report.apiErrorCount || 0) + 1;
-            activeItems.push(getCurrentActiveValue(item, result));
-            addLog(`  ⚠️ ${item.addr} - 检测接口异常，保留现有记录（未删除）`);
-            continue;
-        }
-
-        const reason = result.success ? describeMatchFailure(result, target) : '检测失效';
-        appendMaintenanceIPReport(report.removed, item.addr, result, { reason });
-        if (onRemoveCurrent) await onRemoveCurrent(item, result);
-
-        if (result.success) {
-            // 存活但不符合筛选（如标签错误）：同步校准池内标签，避免下轮按错标签重复误选
-            const hit = refreshPoolEntryMetadata(poolList, item.addr, result);
-            poolList = hit.poolList;
-            poolModified = poolModified || hit.modified;
-        } else {
-            const removed = removePoolEntry(poolList, item.addr);
-            poolList = removed.list;
-            if (removed.removed) {
-                report.poolRemoved++;
-                poolModified = true;
-            }
-            trashBatch.push({ ipAddr: removed.entry || item.addr, reason: '维护失效', poolKey });
-        }
-
-        addLog(formatCurrentRemovedLog
-            ? formatCurrentRemovedLog(item, result)
-            : (result.success ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已移除` : `  ❌ ${item.addr} - 失效已移除，已放入垃圾桶`));
-    }
-
-    report.beforeActive = activeItems.length;
-
-    if (activeItems.length < target.minActive) {
-        addLog(`需补充: ${target.minActive - activeItems.length} 个`);
-        const candidates = await getCandidateIPs(env, target, addLog, poolKey);
-
-        const prechecks = precheckCandidates(candidates, getRuntimeSettings(config).BACKEND_CONCURRENT_CHECKS,
-            buildCandidate, checkFn, activeItems);
-        for await (const { item, result } of prechecks) {
-            if (activeItems.length >= target.minActive) break;
-
-            // 预取期间 activeItems 可能变化，提交前再次排除当前已生效的地址。
-            const candidate = buildCandidate(item, activeItems);
-            if (!candidate) continue;
-            if (!checkResultMatchesTarget(result, target)) {
-                if (result.apiError) {
-                    report.apiErrorCount = (report.apiErrorCount || 0) + 1;
-                    addLog(`  ⚠️ ${candidate.addr} - 检测接口异常，跳过`);
-                } else if (result.success) {
-                    const refreshed = refreshPoolEntryMetadata(poolList, candidate.addr, result);
-                    poolList = refreshed.poolList;
-                    poolModified = poolModified || refreshed.modified;
-                    addLog(`  ⏭️ ${candidate.addr} - ${describeMatchFailure(result, target)}`);
-                } else {
-                    const removed = removePoolEntry(poolList, candidate.addr);
-                    poolList = removed.list;
-                    if (removed.removed) {
-                        report.poolRemoved++;
-                        poolModified = true;
-                        trashBatch.push({ ipAddr: removed.entry || candidate.addr, reason: '维护失效', poolKey });
-                        addLog(`  ⏭️ ${candidate.addr} - 检测失败，已从${getPoolFixedName(poolKey)}移除并放入垃圾桶`);
-                    } else {
-                        // 同址条目本轮已作为当前记录处理过（候选读的是维护前的池快照）
-                        addLog(`  ⏭️ ${candidate.addr} - 检测失败，跳过`);
-                    }
-                }
-                continue;
-            }
-
-            const addResult = addCandidate ? await addCandidate(candidate, result) : { ok: true, activeValue: candidate.activeValue };
-            if (!addResult?.ok) {
-                if (addResult?.log) addLog(addResult.log);
-                continue;
-            }
-
-            activeItems.push(addResult.activeValue ?? candidate.activeValue ?? candidate.addr);
-            appendMaintenanceIPReport(report.added, candidate.addr, result);
-
-            const refreshed = refreshPoolEntryMetadata(poolList, candidate.addr, result);
-            poolList = refreshed.poolList;
-            poolModified = poolModified || refreshed.modified;
-            addLog(`  ✅ ${candidate.addr} - ${result.colo} (${result.responseTime}ms)`);
-            if (activeItems.length >= target.minActive) break;
-        }
-
-        if (activeItems.length < target.minActive) {
-            report.poolExhausted = true;
-            const apiErrNote = report.apiErrorCount ? `（检测接口异常 ${report.apiErrorCount} 次，部分记录/候选可能未被正确判定）` : '';
-            addLog(`⚠️ ${getPoolFixedName(poolKey)} 库存不足，无法达到最小活跃数 ${target.minActive}${apiErrNote}`);
-        }
-    }
-
-    return { activeItems, poolList, poolModified, trashBatch };
-}
-
-async function finalizeMaintenanceCore(env, poolKey, report, state, config) {
-    await savePoolAndTrash(env, poolKey, state.poolList, state.poolModified, state.trashBatch, config);
-    report.poolAfterCount = state.poolList.length;
-    report.afterActive = state.activeItems.length;
-}
-
-async function maintainARecords(env, target, addLog, report, poolKey, checkFn, config) {
-    addLog(`📋 维护地址记录(A/AAAA): ${target.domain}:${target.port} (最小活跃数: ${target.minActive}, 筛选: ${getTargetFilterSummary(target)})`);
-    const cfConfig = getTargetCFConfig(config, target);
-
-    const [aRecords, aaaaRecords] = await Promise.all([
-        fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=A`),
-        fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=AAAA`)
+// app/src/adapters/storage/kv-maintenance-source.ts
+var KvMaintenanceSource = class {
+  constructor(kv) {
+    this.kv = kv;
+  }
+  kv;
+  static {
+    __name(this, "KvMaintenanceSource");
+  }
+  async load() {
+    const [configResult, poolMapping, poolNames] = await Promise.all([
+      readKvJson(this.kv, CONFIG_KEY, 60),
+      readKvStringRecord(this.kv, DOMAIN_POOL_MAPPING_KEY),
+      readKvStringRecord(this.kv, POOL_NAMES_KEY)
     ]);
-
-    if (aRecords === null || aaaaRecords === null) {
-        addLog(`❌ 无法获取A/AAAA记录 - 请检查CF配置`);
-        report.configError = true;
-        return;
-    }
-
-    const records = [...aRecords, ...aaaaRecords];
-    addLog(`当前地址记录: A ${aRecords.length} 条 / AAAA ${aaaaRecords.length} 条`);
-
-    const currentItems = records.map(({ id, content, type }) => ({
-        id,
-        type,
-        addr: formatAddr(content, target.port),
-        host: content
-    }));
-
-    const state = await runMaintenanceCore({
-        env,
-        target,
-        addLog,
-        report,
-        poolKey,
-        checkFn,
-        config,
-        currentItems,
-        getCurrentActiveValue: item => item.host,
-        onRemoveCurrent: item => deleteDNSRecord(cfConfig, item.id),
-        formatCurrentRemovedLog: (item, result) => result.success
-            ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已删除`
-            : `  ❌ ${item.addr} - 失效已删除，已放入垃圾桶`,
-        buildCandidate: (item, activeItems) => {
-            const ipPort = extractIPKey(item);
-            const parsed = parseAddr(ipPort, target.port);
-            if (!ipPort || parsed.port !== target.port || activeItems.includes(parsed.host)) return null;
-            return { addr: ipPort, activeValue: parsed.host, host: parsed.host };
-        },
-        addCandidate: async candidate => {
-            const added = await addAddressRecord(cfConfig, target.domain, candidate.host);
-            return added.ok
-                ? { ok: true, activeValue: candidate.host }
-                : { ok: false, log: `  ⚠️ 添加${added.type}记录失败: ${candidate.host}` };
-        }
-    });
-
-    await finalizeMaintenanceCore(env, poolKey, report, state, config);
-}
-
-async function maintainTXTRecords(env, target, addLog, report, poolKey, checkFn, config) {
-    addLog(`📝 维护TXT: ${target.domain} (最小活跃数: ${target.minActive}, 筛选: ${getTargetFilterSummary(target)})`);
-    const cfConfig = getTargetCFConfig(config, target);
-
-    const records = await fetchCF(cfConfig, `/zones/${cfConfig.zoneId}/dns_records?name=${target.domain}&type=TXT`);
-    if (records === null) {
-        addLog(`❌ 无法获取TXT记录 - 请检查CF配置`);
-        report.configError = true;
-        return;
-    }
-
-    const record = records?.[0] || null;
-    const originalIPs = record ? parseTXTContent(record.content) : [];
-    addLog(`当前TXT: ${originalIPs.length} 个IP`);
-
-    const currentItems = originalIPs.map(addr => ({ addr, ip: addr }));
-    const state = await runMaintenanceCore({
-        env,
-        target,
-        addLog,
-        report,
-        poolKey,
-        checkFn,
-        config,
-        currentItems,
-        getCurrentActiveValue: item => item.addr,
-        formatCurrentRemovedLog: (item, result) => result.success
-            ? `  ❌ ${item.addr} - ${describeMatchFailure(result, target)}，已从TXT移除`
-            : `  ❌ ${item.addr} - 失效，已从TXT移除并放入垃圾桶`,
-        buildCandidate: (item, activeItems) => {
-            const ipPort = extractIPKey(item);
-            if (!ipPort || activeItems.includes(ipPort)) return null;
-            return { addr: ipPort, activeValue: ipPort };
-        }
-    });
-
-    const validIPs = state.activeItems;
-    const changed = !sameAddressSet(validIPs, originalIPs);
-    if (changed) {
-        if (validIPs.length === 0 && record?.id) {
-            const ok = await deleteDNSRecord(cfConfig, record.id);
-            addLog(ok ? `📝 TXT记录已删除（所有IP失效）` : `⚠️ TXT记录删除失败`);
-        } else if (validIPs.length > 0) {
-            const ok = await upsertTXTRecord(cfConfig, target.domain, record?.id, validIPs);
-            addLog(ok ? (record?.id ? `📝 TXT已更新` : `📝 TXT已创建`) : `⚠️ TXT保存失败`);
-        }
-        report.txtUpdated = true;
-    }
-
-    await finalizeMaintenanceCore(env, poolKey, report, state, config);
-}
-async function maintainAllDomains(env, isManual = false, config) {
-    const allReports = [];
-    const startTime = Date.now();
-
-    const poolStats = new Map();
-    const poolNames = await readPoolDisplayNames(env);
-    await ensurePoolDefaults(env);
-    const domainPoolMapping = await readDomainPoolMapping(env);
-
-    // 单次维护任务内缓存 proxyip 检测结果，减少重复外部请求（不改变结果，仅减少请求次数）
-    const checkCache = new Map();
-    /**
-     * @param {string} addr
-     * @param {{ phase?: 'full' | 'primary' | 'backup', signal?: AbortSignal }} [options]
-     */
-    const checkProxyIPCached = async (addr, options = {}) => {
-        const key = (addr || '').trim();
-        if (!key) return normalizeCheckResult({ success: false }, key);
-        if (checkCache.has(key)) {
-            const cached = checkCache.get(key);
-            return cached && typeof cached.then === 'function' ? await cached : cached;
-        }
-        const p = checkProxyIP(key, config, options);
-        checkCache.set(key, p);
-        const res = await p;
-        // 被取消的预取不能污染后续域名的本轮缓存。
-        if (options.signal?.aborted) checkCache.delete(key);
-        else checkCache.set(key, res);
-        return res;
-    };
-
-    const poolKeys = await listPoolKeys(env);
-    const poolSettled = await Promise.allSettled(
-        poolKeys.map(async poolKey => {
-            const raw = await env.IP_DATA.get(poolKey) || '';
-            return [poolKey, parsePoolList(raw).length];
-        })
-    );
-    const poolEntries = poolSettled
-        .map(r => r.status === 'fulfilled' ? r.value : null)
-        .filter(e => e !== null);
-    poolEntries.forEach(([name, count]) => poolStats.set(name, { before: count, after: count }));
-
-    for (let i = 0; i < config.targets.length; i++) {
-        const target = config.targets[i];
-        if (target.enabled === false) {
-            console.log(formatLogMessage(`⏸️ 跳过维护: ${target.domain} 已关闭`));
-            continue;
-        }
-        const { domain, mode, port, minActive } = target;
-
-        const report = {
-            target,
-            domain,
-            mode,
-            port,
-            minActive,
-            beforeActive: 0,
-            afterActive: 0,
-            added: [],
-            removed: [],
-            poolRemoved: 0,
-            poolExhausted: false,
-            apiErrorCount: 0,
-            poolKeyUsed: '',
-            poolDisplayName: '',
-            configError: false,
-            checkDetails: [],
-            logs: []
-        };
-
-        const addLog = (m) => {
-            const formattedMsg = formatLogMessage(m);
-            report.logs.push(formattedMsg);
-            console.log(formattedMsg);
-        };
-
-        addLog(`🚀 开始维护: ${target.domain}`);
-        const targetPoolKey = getTargetDuplicateKey(target);
-        const targetDomain = String(target.domain || '').trim().toLowerCase();
-        const mappedPoolKey = domainPoolMapping?.[targetPoolKey] ?? domainPoolMapping?.[targetDomain] ?? domainPoolMapping?.[target.domain] ?? POOL_DEFAULT_KEY;
-        const poolKey = isUserPoolKey(mappedPoolKey) ? mappedPoolKey : POOL_DEFAULT_KEY;
-        report.poolKeyUsed = poolKey;
-        report.poolDisplayName = getPoolDisplayName(poolKey, poolNames);
-
-        if (target.mode === 'A') {
-            await maintainARecords(env, target, addLog, report, poolKey, checkProxyIPCached, config);
-        } else if (target.mode === 'TXT') {
-            await maintainTXTRecords(env, target, addLog, report, poolKey, checkProxyIPCached, config);
-        }
-
-        addLog(`✅ 完成: ${report.afterActive}/${target.minActive}`);
-        allReports.push(report);
-    }
-
-    // 更新池统计（无需再次遍历 KV 读取：直接使用维护过程中已知的最终池长度）
-    for (const r of allReports) {
-        if (r && r.poolKeyUsed && typeof r.poolAfterCount === 'number' && poolStats.has(r.poolKeyUsed)) {
-            poolStats.get(r.poolKeyUsed).after = r.poolAfterCount;
-        }
-    }
-
-    // 重新读取垃圾桶的实际数量（维护过程中 batchAddToTrash 直接写入 KV，不经过 report）
-    if (poolStats.has(POOL_TRASH_KEY)) {
-        const trashRaw = await env.IP_DATA.get(POOL_TRASH_KEY) || '';
-        poolStats.get(POOL_TRASH_KEY).after = parsePoolList(trashRaw).length;
-    }
-
-    // 1. 检查是否有IP变化（删除或新增）
-    const hasIPChanges = allReports.some(r => r.added.length > 0 || r.removed.length > 0);
-
-    // 2. 检查是否有配置错误
-    const hasConfigError = allReports.some(r => r.configError);
-
-    // 3. 检查是否有域名活跃数不足且无法补充IP
-    // 注：poolExhausted 表示候选IP不足（包括池枯竭、端口不匹配等情况）
-    const hasInsufficientActive = allReports.some(r =>
-        r.afterActive < r.minActive && r.poolExhausted
-    );
-
-    // 4. 检查是否有检测接口异常（超时/网络错误/无法解析），与"IP真实失效"区分开来
-    const hasApiError = allReports.some(r => (r.apiErrorCount || 0) > 0);
-
-    // 通知条件：手动执行 OR IP变化 OR 活跃数不足 OR 配置错误 OR 检测接口异常
-    const shouldNotify = isManual || hasIPChanges || hasInsufficientActive || hasConfigError || hasApiError;
-
-    let tgResult = { sent: false, reason: 'no_need' };
-    if (shouldNotify && config.tgEnabled !== false) {
-        tgResult = await sendTG(allReports, poolStats, isManual, { ...config, poolNames });
-    } else if (shouldNotify) {
-        tgResult = { sent: false, reason: 'disabled', message: 'TG通知已关闭' };
-    }
-
-    console.log(`✅ 维护任务完成，总耗时: ${Date.now() - startTime}ms，处理域名: ${config.targets.length}个`);
-
+    if (configResult.status === "invalid") throw new Error(`\u914D\u7F6E\u65E0\u6CD5\u8BFB\u53D6\uFF1A${configResult.message}`);
+    const record = asRecord2(configResult.status === "loaded" ? configResult.value : null);
     return {
-        success: true,
-        reports: allReports,
-        poolStats: Object.fromEntries(poolStats),
-        notified: tgResult.sent,
-        tgStatus: tgResult,
-        processingTime: Date.now() - startTime
+      zones: toArray(record?.zones).map(normalizeZone2).filter(isPresent),
+      targets: toArray(record?.targets).map(normalizeTarget2).filter(isPresent),
+      poolMapping,
+      poolNames
     };
+  }
+};
+function normalizeZone2(value) {
+  const record = asRecord2(value);
+  if (!record) return null;
+  const baseDomain = text2(record.baseDomain) || text2(record.domain);
+  const zoneId = text2(record.zoneId);
+  const apiToken = text2(record.apiKey);
+  if (!baseDomain && !zoneId && !apiToken) return null;
+  return { zoneId, apiToken };
 }
-
-function formatReportMeta(item = {}) {
-    const parts = [];
-    if (item.colo && item.colo !== 'N/A') parts.push(item.colo);
-    if (item.time && item.time !== '-') parts.push(`${item.time}ms`);
-    const countries = String(item.country || '').split(/[\/,\uFF0C\s]+/).filter(v => !isUnknownMetaValue(v));
-    const asns = String(item.asn || '').split(/[\/,\uFF0C\s]+/)
-        .filter(v => !isUnknownMetaValue(v))
-        .map(v => v.toUpperCase().startsWith('AS') ? v.toUpperCase() : 'AS' + v);
-    if (countries.length) parts.push([...new Set(countries)].join('/'));
-    if (asns.length) parts.push([...new Set(asns)].join('/'));
-    return parts.length ? parts.join(' · ') : '无详情';
+__name(normalizeZone2, "normalizeZone");
+function normalizeTarget2(value) {
+  const record = asRecord2(value);
+  if (!record) return null;
+  const domain = text2(record.domain) || buildDomain2(text2(record.prefix), text2(record.baseDomain));
+  const target = normalizeManagedTarget({
+    domain,
+    mode: text2(record.mode),
+    port: scalar(record.port),
+    minActive: scalar(record.minActive),
+    exitFilter: text2(record.exitFilter),
+    countries: preferList(record.countries, record.country),
+    asns: preferList(record.asns, record.asn)
+  });
+  if (!target) return null;
+  return { target, zoneIndex: readZoneIndex2(record.zoneIndex), enabled: record.enabled !== false };
 }
-
-function formatIPChanges(report) {
-    const { added = [], removed = [], port, minActive = 0, afterActive = 0, poolExhausted, apiErrorCount } = report;
-    let msg = '';
-    if (added.length > 0) {
-        msg += `📈 新增 ${added.length} 个IP\n`;
-        added.forEach(item => {
-            const displayIP = hasExplicitPort(item.ip) ? item.ip : parseAddr(item.ip, port || '443').address;
-            msg += `   ✅ <code>${displayIP}</code>\n`;
-            msg += `      ${formatReportMeta(item)}\n`;
-        });
-    }
-    if (removed.length > 0) {
-        msg += `📉 移除 ${removed.length} 个IP\n`;
-        removed.forEach(item => {
-            msg += `   ❌ <code>${item.ip}</code>\n`;
-            msg += `      ${formatReportMeta(item)}\n`;
-            msg += `      原因: ${item.reason}\n`;
-        });
-    }
-    if (added.length === 0 && removed.length === 0) {
-        msg += `✨ 所有IP正常，无变化\n`;
-    }
-    const reachedTarget = afterActive >= minActive;
-    msg += `${reachedTarget ? '✅' : '❌'} 完成: ${afterActive}/${minActive}\n`;
-    if (!reachedTarget && poolExhausted) {
-        msg += `⚠️ 候选IP不足，未能补满最小活跃数\n`;
-    }
-    if (apiErrorCount) {
-        msg += `⚠️ 检测接口异常 ${apiErrorCount} 次，部分IP状态未能判定（未做删除/替换）\n`;
-    }
-    return msg;
+__name(normalizeTarget2, "normalizeTarget");
+function buildDomain2(prefix, baseDomain) {
+  const cleanPrefix = prefix.replace(/^\.+|\.+$/g, "");
+  const cleanBase = baseDomain.replace(/^\.+|\.+$/g, "");
+  if (!cleanBase) return "";
+  return cleanPrefix ? `${cleanPrefix}.${cleanBase}` : cleanBase;
 }
+__name(buildDomain2, "buildDomain");
+function readZoneIndex2(value) {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+__name(readZoneIndex2, "readZoneIndex");
+function preferList(primary, fallback) {
+  if (Array.isArray(primary) && primary.length > 0) return primary.map((item) => String(item));
+  const primaryText = text2(primary);
+  if (primaryText) return primaryText;
+  return text2(fallback) || void 0;
+}
+__name(preferList, "preferList");
+function toArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+__name(toArray, "toArray");
+function text2(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+__name(text2, "text");
+function scalar(value) {
+  return typeof value === "string" || typeof value === "number" ? value : void 0;
+}
+__name(scalar, "scalar");
+function asRecord2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+__name(asRecord2, "asRecord");
+function isPresent(value) {
+  return value !== null;
+}
+__name(isPresent, "isPresent");
 
-async function sendTG(reports, poolStats, isManual, config) {
-    if (!config.tgToken || !config.tgId) {
-        console.log('📱 TG未配置，跳过通知');
-        return { sent: false, reason: 'not_configured', message: 'TG未配置' };
+// app/src/util/concurrency.ts
+async function mapWithConcurrency(items, limit, task) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      const item = items[index];
+      if (item !== void 0) results[index] = await task(item, index);
     }
+  });
+  await Promise.all(workers);
+  return results;
+}
+__name(mapWithConcurrency, "mapWithConcurrency");
 
-    const modeLabel = { 'A': 'A/AAAA', 'TXT': 'TXT' };
-    const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const poolNames = config.poolNames || {};
-
-    let msg = isManual ? `🔧 <b>DDNS 手动维护报告</b>\n` : `⚙️ <b>DDNS 自动维护报告</b>\n`;
-    msg += `━━━━━━━━━━━━━━━━━━\n⏰ ${timestamp}\n\n`;
-
-    const hasConfigError = reports.some(r => r.configError);
-    if (hasConfigError) {
-        msg += `⚠️ <b>警告: 检测到配置错误</b>\n请检查 CF_KEY, CF_ZONEID 是否正确配置\n\n`;
-    }
-
-    const totalApiErrors = reports.reduce((sum, r) => sum + (r.apiErrorCount || 0), 0);
-    if (totalApiErrors > 0) {
-        msg += `⚠️ <b>警告: 检测接口异常 ${totalApiErrors} 次</b>\n部分IP本轮未能判定真实状态，已跳过处理（未删除/未替换），请检查 CHECK_API / CHECK_API_BACKUP 是否可用\n\n`;
-    }
-
-    reports.forEach((report, index) => {
-        if (index > 0) msg += `\n`;
-        msg += `━━ <code>${report.domain}</code> ━━\n`;
-        msg += `${modeLabel[report.mode]}`;
-        if (report.mode === 'A') msg += ` · 端口 ${report.port}`;
-        msg += ` · 最小活跃数 ${report.minActive}\n`;
-        msg += `📦 使用池: <b>${report.poolDisplayName || getPoolDisplayName(report.poolKeyUsed, poolNames)}</b>\n\n`;
-
-        if (report.configError) {
-            msg += `❌ <b>配置错误，无法获取记录</b>\n`;
-            return;
-        }
-
-        // 检测详情
-        if (report.checkDetails && report.checkDetails.length > 0) {
-            report.checkDetails.forEach(d => {
-                const icon = d.status.includes('✅') ? '✅' : (d.status.includes('⚠️') ? '⚠️' : '❌');
-                msg += `${icon} <code>${d.ip}</code>\n   ${formatReportMeta(d)}\n`;
-            });
-            msg += `\n`;
-        }
-
-        if (report.mode === 'A' || report.mode === 'TXT') {
-            msg += formatIPChanges(report);
-        }
+// app/src/adapters/storage/kv-pool-catalog.ts
+var KvPoolCatalog = class {
+  constructor(kv) {
+    this.kv = kv;
+  }
+  kv;
+  static {
+    __name(this, "KvPoolCatalog");
+  }
+  async list() {
+    const [names, order, keys] = await Promise.all([
+      this.readNames(),
+      this.readOrder(),
+      this.listPoolKeys()
+    ]);
+    const normalizedOrder = normalizeOrder(order, keys);
+    const summaries = await mapWithConcurrency(normalizedOrder, 4, async (key) => {
+      const content = await this.read(key);
+      return {
+        key,
+        name: names[key] ?? getPoolFixedName(key),
+        count: parsePoolText(content).filter((line) => line.entry !== null).length
+      };
     });
-
-    msg += `\n━━━━━━━━━━━━━━━━━━\n`;
-    msg += `📦 <b>IP池库存统计</b>\n`;
-
-    for (const [poolKey, stats] of poolStats) {
-        const displayName = getPoolDisplayName(poolKey, poolNames);
-        msg += `\n<b>${displayName}</b>\n`;
-        msg += `   维护前: ${stats.before} 个\n`;
-        msg += `   维护后: ${stats.after} 个\n`;
-
-        const change = stats.after - stats.before;
-        if (change !== 0) {
-            const changeSymbol = change > 0 ? '📈' : '📉';
-            msg += `   ${changeSymbol} 变化: ${change > 0 ? '+' : ''}${change}\n`;
-        }
-
-        if (poolKey === POOL_TRASH_KEY) {
-            continue;
-        }
-
-        if (stats.after === 0 && stats.before > 0) {
-            msg += `   ⚠️ <b>警告：${displayName}已枯竭！</b>\n`;
-        } else if (stats.after < 10) {
-            msg += `   ⚠️ 库存较低\n`;
-        }
+    return summaries;
+  }
+  async read(poolKey) {
+    return await this.kv.get(poolKey, { type: "text" }) ?? "";
+  }
+  async write(poolKey, content) {
+    await this.kv.put(poolKey, content);
+  }
+  async create(displayName) {
+    const [keys, names, savedOrder] = await Promise.all([
+      this.listPoolKeys(),
+      this.readNames(),
+      this.readOrder()
+    ]);
+    let nextIndex = 1;
+    for (const key of keys) {
+      const match = NUMBERED_POOL_KEY_RE.exec(key);
+      if (match) nextIndex = Math.max(nextIndex, Number(match[1]) + 1);
     }
-
-    if (isManual && config.projectUrl) {
-        msg += `\n🔗 <a href="${config.projectUrl}">打开管理面板</a>\n`;
+    if (nextIndex > 999) throw new Error("\u7F16\u53F7 IP \u6C60\u6570\u91CF\u5DF2\u8FBE\u4E0A\u9650");
+    const poolKey = getNumberedPoolKey(nextIndex);
+    await this.kv.put(poolKey, "");
+    if (displayName !== getPoolFixedName(poolKey)) {
+      await this.writeNames({ ...names, [poolKey]: displayName });
     }
+    if (savedOrder) await this.writeOrder(normalizeOrder([...savedOrder, poolKey], [...keys, poolKey]));
+    return { key: poolKey, name: displayName, count: 0 };
+  }
+  async rename(poolKey, displayName) {
+    const names = await this.readNames();
+    if (displayName === getPoolFixedName(poolKey)) delete names[poolKey];
+    else names[poolKey] = displayName;
+    await this.writeNames(names);
+  }
+  async exists(poolKey) {
+    if (poolKey === DEFAULT_POOL_KEY || poolKey === TRASH_POOL_KEY) return true;
+    return await this.kv.get(poolKey, { type: "text" }) !== null;
+  }
+  async remove(poolKey) {
+    await this.kv.delete(poolKey);
+    const [savedOrder, names, mapping] = await Promise.all([
+      this.readOrder(),
+      this.readNames(),
+      this.readMapping()
+    ]);
+    if (savedOrder?.includes(poolKey)) {
+      await this.writeOrder(savedOrder.filter((key) => key !== poolKey));
+    }
+    if (Object.hasOwn(names, poolKey)) {
+      delete names[poolKey];
+      await this.writeNames(names);
+    }
+    let mappingChanged = false;
+    for (const [domain, boundPool] of Object.entries(mapping)) {
+      if (boundPool === poolKey) {
+        mapping[domain] = DEFAULT_POOL_KEY;
+        mappingChanged = true;
+      }
+    }
+    if (mappingChanged) await this.kv.put(DOMAIN_POOL_MAPPING_KEY, JSON.stringify(mapping));
+  }
+  async saveOrder(order) {
+    const keys = await this.listPoolKeys();
+    await this.writeOrder(normalizeOrder(order, keys));
+  }
+  async readNames() {
+    return await readKvStringRecord(this.kv, POOL_NAMES_KEY);
+  }
+  async readOrder() {
+    const raw = await this.kv.get(POOL_ORDER_KEY, { type: "json" }).catch(() => null);
+    return Array.isArray(raw) ? raw.filter((value) => typeof value === "string") : null;
+  }
+  async readMapping() {
+    return await readKvStringRecord(this.kv, DOMAIN_POOL_MAPPING_KEY);
+  }
+  async writeNames(names) {
+    await this.kv.put(POOL_NAMES_KEY, JSON.stringify(names));
+  }
+  async writeOrder(order) {
+    await this.kv.put(POOL_ORDER_KEY, JSON.stringify(order));
+  }
+  async listPoolKeys() {
+    const keys = /* @__PURE__ */ new Set([DEFAULT_POOL_KEY, TRASH_POOL_KEY]);
+    let cursor;
+    do {
+      const page = await this.kv.list({ prefix: POOL_KEY_PREFIX, ...cursor ? { cursor } : {} });
+      for (const key of page.keys) if (isPoolDataKey(key.name)) keys.add(key.name);
+      cursor = page.list_complete ? void 0 : page.cursor;
+    } while (cursor);
+    return [...keys];
+  }
+};
+function normalizeOrder(saved, actualKeys) {
+  const actual = [...new Set(actualKeys.filter(isPoolDataKey))];
+  const actualSet = new Set(actual);
+  const fallback = [...actual].sort(comparePoolKeys);
+  const normalized = [];
+  for (const key of saved ?? fallback) {
+    if (actualSet.has(key) && !normalized.includes(key)) normalized.push(key);
+  }
+  for (const key of fallback) if (!normalized.includes(key)) normalized.push(key);
+  const middle = normalized.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY);
+  return [
+    ...actualSet.has(DEFAULT_POOL_KEY) ? [DEFAULT_POOL_KEY] : [],
+    ...middle,
+    ...actualSet.has(TRASH_POOL_KEY) ? [TRASH_POOL_KEY] : []
+  ];
+}
+__name(normalizeOrder, "normalizeOrder");
+function comparePoolKeys(left, right) {
+  const rank = /* @__PURE__ */ __name((key) => key === DEFAULT_POOL_KEY ? 0 : key === TRASH_POOL_KEY ? 2 : 1, "rank");
+  const difference = rank(left) - rank(right);
+  if (difference !== 0) return difference;
+  const leftNumber = NUMBERED_POOL_KEY_RE.exec(left);
+  const rightNumber = NUMBERED_POOL_KEY_RE.exec(right);
+  if (leftNumber && rightNumber) return Number(leftNumber[1]) - Number(rightNumber[1]);
+  return left.localeCompare(right, "zh-CN", { numeric: true });
+}
+__name(comparePoolKeys, "comparePoolKeys");
 
+// app/src/util/time.ts
+function formatBeijingTimestamp(date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+__name(formatBeijingTimestamp, "formatBeijingTimestamp");
+
+// app/src/adapters/storage/kv-pool-repository.ts
+var KvPoolRepository = class {
+  constructor(kv, options = {}) {
+    this.kv = kv;
+    this.trashKey = options.trashKey ?? TRASH_POOL_KEY;
+    this.maxTrashSize = options.maxTrashSize ?? 1e3;
+    this.now = options.now ?? (() => /* @__PURE__ */ new Date());
+  }
+  kv;
+  static {
+    __name(this, "KvPoolRepository");
+  }
+  trashKey;
+  maxTrashSize;
+  now;
+  async load(poolKey) {
+    return await this.kv.get(poolKey, { type: "text" }) ?? "";
+  }
+  async save(poolKey, content) {
+    await this.kv.put(poolKey, content);
+  }
+  async addToTrash(entries) {
+    if (entries.length === 0) return;
+    const existing = (await this.load(this.trashKey)).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const seen = new Set(existing.map(extractPoolAddressKey).map(canonicalAddressKey));
+    const timestamp = formatBeijingTimestamp(this.now());
+    for (const item of entries) {
+      const key = canonicalAddressKey(extractPoolAddressKey(item.entryLine));
+      if (!key || seen.has(key)) continue;
+      const parsed = parsePoolEntry(item.entryLine);
+      const cleanEntry = parsed ? formatPoolEntry({ ...parsed, comment: "" }) : item.entryLine.trim();
+      if (!cleanEntry) continue;
+      existing.push(`${cleanEntry} # ${item.reason} ${timestamp}${item.poolKey ? ` \u6765\u81EA ${item.poolKey}` : ""}`);
+      seen.add(key);
+    }
+    const limited = this.maxTrashSize > 0 ? existing.slice(-this.maxTrashSize) : [];
+    await this.kv.put(this.trashKey, limited.join("\n"));
+  }
+};
+
+// app/src/application/check-pool.ts
+var MAX_BATCH_TARGETS = 200;
+var CheckPoolText = class {
+  constructor(checkProxy, concurrency = 8) {
+    this.checkProxy = checkProxy;
+    this.concurrency = Math.max(1, Math.min(16, concurrency));
+  }
+  checkProxy;
+  static {
+    __name(this, "CheckPoolText");
+  }
+  concurrency;
+  async execute(text3, context = {}) {
+    const { entries, invalid } = collectEntries(text3);
+    const items = await mapWithConcurrency(entries, this.concurrency, async (entry) => {
+      const target = parseProxyTarget(entry.address) ?? parseProxyTarget(entry.address, 443);
+      const address = target?.authority ?? entry.address;
+      const result = await this.checkProxy.execute(address, context);
+      return { address, entry: updatePoolEntryFromProbe(entry, result), result };
+    });
+    return {
+      total: items.length,
+      alive: items.filter((item) => item.result.status === "alive").length,
+      dead: items.filter((item) => item.result.status === "dead").length,
+      unknown: items.filter((item) => item.result.status === "unknown").length,
+      invalid,
+      items
+    };
+  }
+};
+function collectEntries(text3) {
+  const entries = [];
+  const invalid = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of parsePoolText(text3)) {
+    if (!line.raw.trim()) continue;
+    if (!line.entry) {
+      invalid.push(line.raw.trim());
+      continue;
+    }
+    if (entries.length >= MAX_BATCH_TARGETS) break;
+    const target = parseProxyTarget(line.entry.address);
+    if (!target) {
+      invalid.push(line.entry.address);
+      continue;
+    }
+    if (seen.has(target.key)) continue;
+    seen.add(target.key);
+    entries.push(line.entry);
+  }
+  return { entries, invalid };
+}
+__name(collectEntries, "collectEntries");
+
+// app/src/domain/probe-result.ts
+function alive(target, details = {}) {
+  return withOptionalDetails({ status: "alive", target, exitFamily: details.exitFamily ?? "unknown" }, details);
+}
+__name(alive, "alive");
+function dead(target, details = {}) {
+  return withOptionalDetails({ status: "dead", target, exitFamily: "unknown" }, details);
+}
+__name(dead, "dead");
+function unknown(target, code, message, details = {}) {
+  return withOptionalDetails({ status: "unknown", target, exitFamily: "unknown", code, message }, details);
+}
+__name(unknown, "unknown");
+var NON_PROBE_ERROR_CODES = /* @__PURE__ */ new Set(["NOT_PROBED", "INVALID_DNS_VALUE"]);
+function isProbeErrorResult(result) {
+  return result.status === "unknown" && !NON_PROBE_ERROR_CODES.has(result.code ?? "");
+}
+__name(isProbeErrorResult, "isProbeErrorResult");
+function exitFamilyFromIp(ip) {
+  if (!ip) return "unknown";
+  if (looksLikeIpv4(ip)) return "ipv4";
+  if (ip.includes(":")) return "ipv6";
+  return "unknown";
+}
+__name(exitFamilyFromIp, "exitFamilyFromIp");
+function withOptionalDetails(base, details) {
+  return {
+    ...base,
+    exits: details.exits ? [...details.exits] : [],
+    ...details.endpoint ? { endpoint: details.endpoint } : {},
+    ...details.exitIp ? { exitIp: details.exitIp } : {},
+    ...typeof details.latencyMs === "number" ? { latencyMs: details.latencyMs } : {},
+    ...details.code ? { code: details.code } : {},
+    ...details.message ? { message: details.message } : {}
+  };
+}
+__name(withOptionalDetails, "withOptionalDetails");
+function looksLikeIpv4(value) {
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return false;
+  return value.split(".").every((part) => Number(part) <= 255);
+}
+__name(looksLikeIpv4, "looksLikeIpv4");
+
+// app/src/application/check-proxy.ts
+var CheckProxy = class {
+  constructor(probeAdapter) {
+    this.probeAdapter = probeAdapter;
+  }
+  probeAdapter;
+  static {
+    __name(this, "CheckProxy");
+  }
+  async execute(input, context = {}) {
+    const target = parseProxyTarget(input);
+    if (!target) {
+      return unknown(null, "INVALID_TARGET", "\u8BF7\u8F93\u5165\u6709\u6548\u7684 IP\u3001\u57DF\u540D\u548C\u53EF\u9009\u7AEF\u53E3");
+    }
+    return this.probeAdapter.probe(target, context);
+  }
+};
+
+// app/src/application/config-service.ts
+var ConfigService = class {
+  constructor(options) {
+    this.options = options;
+  }
+  options;
+  static {
+    __name(this, "ConfigService");
+  }
+  async resolve() {
+    const result = this.options.repository ? await loadSafely(() => this.options.repository.load(this.options.envConfig)) : missing();
+    if (result.status === "loaded") return { config: result.config, source: "kv" };
+    return {
+      config: this.options.envConfig,
+      source: "env",
+      ...result.status === "invalid" ? { notice: `KV \u914D\u7F6E\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u5DF2\u4F7F\u7528\u73AF\u5883\u53D8\u91CF\uFF1A${result.message}` } : {}
+    };
+  }
+  async save(config) {
+    if (!this.options.repository) throw new Error("config repository is not configured");
+    await this.options.repository.save(config);
+  }
+};
+function missing() {
+  return { status: "missing", source: "kv" };
+}
+__name(missing, "missing");
+async function loadSafely(load) {
+  try {
+    return await load();
+  } catch (error) {
+    return {
+      status: "invalid",
+      source: "kv",
+      message: error instanceof Error ? error.message : "\u8BFB\u53D6\u914D\u7F6E\u5931\u8D25"
+    };
+  }
+}
+__name(loadSafely, "loadSafely");
+
+// app/src/application/domain-bindings.ts
+var DomainBindingsInputError = class extends Error {
+  static {
+    __name(this, "DomainBindingsInputError");
+  }
+  constructor(message) {
+    super(message);
+    this.name = "DomainBindingsInputError";
+  }
+};
+var DomainBindings = class {
+  constructor(source, repository) {
+    this.source = source;
+    this.repository = repository;
+  }
+  source;
+  repository;
+  static {
+    __name(this, "DomainBindings");
+  }
+  async list() {
+    const data = await this.source.load();
+    const mapping = data.poolMapping;
+    const items = data.targets.map(({ target, enabled }) => {
+      const poolKey = resolvePoolKey(mapping, target);
+      return {
+        key: bindingKey(target),
+        domain: target.domain,
+        mode: target.mode,
+        poolKey,
+        poolName: data.poolNames[poolKey] || getPoolFixedName(poolKey),
+        enabled
+      };
+    });
+    return { items: sortByBindingOrder(items, await this.repository.readOrder()) };
+  }
+  async save(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new DomainBindingsInputError("\u7ED1\u5B9A\u6570\u636E\u683C\u5F0F\u65E0\u6548");
+    }
+    const allowed = new Set((await this.source.load()).targets.map(({ target }) => bindingKey(target)));
+    const mapping = { ...await this.repository.read() };
+    for (const [rawKey, rawPoolKey] of Object.entries(value)) {
+      const key = normalizeBindingKey(rawKey);
+      if (!key || !allowed.has(key)) continue;
+      const poolKey = typeof rawPoolKey === "string" ? rawPoolKey.trim() : "";
+      if (!isUserPoolKey(poolKey)) throw new DomainBindingsInputError(`IP \u6C60 key \u65E0\u6548\uFF1A${key}`);
+      mapping[key] = poolKey;
+    }
+    await this.repository.write(mapping);
+  }
+  /** 整体保存显示顺序：提交的 key 必须与实际目标集合一致，避免面板拿旧列表覆盖。 */
+  async saveOrder(value) {
+    if (!Array.isArray(value)) throw new DomainBindingsInputError("\u6392\u5E8F\u6570\u636E\u683C\u5F0F\u65E0\u6548");
+    const actual = (await this.source.load()).targets.map(({ target }) => bindingKey(target));
+    const actualSet = new Set(actual);
+    const submitted = [...new Set(value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean))];
+    if (submitted.length !== actualSet.size || submitted.some((key) => !actualSet.has(key))) {
+      throw new DomainBindingsInputError("\u7BA1\u7406\u57DF\u540D\u5217\u8868\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    }
+    await this.repository.writeOrder(submitted);
+  }
+};
+
+// app/src/domain/maintenance.ts
+function decideCurrentResult(result, target) {
+  if (result.status === "unknown") return "keep-unknown";
+  if (result.status === "dead") return "remove-dead";
+  return probeMatchesTarget(result, target) ? "active" : "remove-mismatch";
+}
+__name(decideCurrentResult, "decideCurrentResult");
+function buildMaintenancePlan(input) {
+  const originalPoolText = input.poolText;
+  let poolLines = parsePoolText(originalPoolText);
+  const trash = [];
+  const current = input.current.map((item) => ({
+    item,
+    decision: decideCurrentResult(item.result, input.target)
+  }));
+  const retained = current.filter(({ decision }) => decision === "active" || decision === "keep-unknown");
+  const additions = [];
+  let activeCount = current.filter(({ decision }) => decision === "active").length;
+  const updatePoolMetadata = /* @__PURE__ */ __name((address, result) => {
+    if (result.status !== "alive") return;
+    const key = canonicalAddressKey(address);
+    poolLines = poolLines.map((line) => refreshLine(line, key, result));
+  }, "updatePoolMetadata");
+  const removePoolEntry = /* @__PURE__ */ __name((address, reason, alwaysTrash) => {
+    const key = canonicalAddressKey(address);
+    let matched = false;
+    const next = [];
+    for (const line of poolLines) {
+      if (line.entry && canonicalAddressKey(line.entry.address) === key) {
+        if (!matched) trash.push({ entryLine: line.raw, reason });
+        matched = true;
+        continue;
+      }
+      next.push(line);
+    }
+    poolLines = next;
+    if (!matched && alwaysTrash) trash.push({ entryLine: address, reason });
+  }, "removePoolEntry");
+  for (const { item, decision } of current) {
+    if (decision === "active") {
+      updatePoolMetadata(item.address, item.result);
+    } else if (decision === "remove-mismatch") {
+      updatePoolMetadata(item.address, item.result);
+    } else if (decision === "remove-dead") {
+      removePoolEntry(item.address, "\u7EF4\u62A4\u5931\u6548", true);
+    }
+  }
+  for (const candidate of input.candidates) {
+    if (activeCount >= input.target.minActive) break;
+    if (candidate.result.status === "alive" && probeMatchesTarget(candidate.result, input.target)) {
+      additions.push(candidate);
+      activeCount += 1;
+      updatePoolMetadata(candidate.address, candidate.result);
+      continue;
+    }
+    if (candidate.result.status === "alive") {
+      updatePoolMetadata(candidate.address, candidate.result);
+      continue;
+    }
+    if (candidate.result.status === "dead") {
+      removePoolEntry(candidate.address, "\u7EF4\u62A4\u5931\u6548", false);
+    }
+  }
+  const retainedValues = uniqueNonEmpty(retained.map(({ item }) => item.value));
+  const dnsValues = uniqueNonEmpty([...retainedValues, ...additions.map((candidate) => candidate.value)]);
+  const nextPoolText = serializePoolText(poolLines);
+  return {
+    target: input.target,
+    current,
+    additions,
+    retainedValues,
+    dnsValues,
+    nextPoolText,
+    poolChanged: nextPoolText !== originalPoolText,
+    trash,
+    activeCount,
+    exhausted: activeCount < input.target.minActive
+  };
+}
+__name(buildMaintenancePlan, "buildMaintenancePlan");
+function refreshLine(line, addressKey, result) {
+  if (!line.entry || canonicalAddressKey(line.entry.address) !== addressKey) return line;
+  const refreshed = updatePoolEntryFromProbe(line.entry, result);
+  const raw = formatPoolEntry(refreshed);
+  return raw === line.raw ? line : { raw, entry: refreshed };
+}
+__name(refreshLine, "refreshLine");
+function uniqueNonEmpty(values) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+__name(uniqueNonEmpty, "uniqueNonEmpty");
+
+// app/src/application/maintain-managed-target.ts
+var MaintainManagedTarget = class {
+  constructor(dependencies) {
+    this.dependencies = dependencies;
+    this.concurrency = Math.max(1, Math.min(8, dependencies.concurrency ?? 4));
+  }
+  dependencies;
+  static {
+    __name(this, "MaintainManagedTarget");
+  }
+  concurrency;
+  async execute(command) {
+    const poolText = await this.dependencies.pools.load(command.poolKey);
+    const current = await this.probeCurrentRecords(command);
+    const currentDecisions = current.map((item) => ({
+      item,
+      decision: decideCurrentResult(item.result, command.target)
+    }));
+    const excludedAddresses = new Set(
+      currentDecisions.filter(({ decision }) => decision !== "remove-dead" && decision !== "remove-mismatch").map(({ item }) => canonicalAddressKey(item.address))
+    );
+    const activeCount = currentDecisions.filter(({ decision }) => decision === "active").length;
+    const candidates = selectCandidateEntries(
+      parsePoolEntries(poolText),
+      command.target,
+      excludedAddresses
+    );
+    const probedCandidates = await this.probeCandidatesUntilTarget(command.target, candidates, activeCount);
+    const plan = buildMaintenancePlan({ target: command.target, current, candidates: probedCandidates, poolText });
+    const probeErrors = current.filter((item) => isProbeErrorResult(item.result)).length + probedCandidates.filter((item) => isProbeErrorResult(item.result)).length;
+    const errors = [];
+    const dnsResult = await this.applyDnsChanges(command, plan, errors);
+    if (plan.poolChanged) {
+      try {
+        await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
+      } catch {
+        errors.push("\u4FDD\u5B58 IP \u6C60\u5931\u8D25");
+      }
+    }
+    if (plan.trash.length > 0) {
+      try {
+        await this.dependencies.pools.addToTrash(
+          plan.trash.map((item) => ({ ...item, poolKey: command.poolKey }))
+        );
+      } catch {
+        errors.push("\u5199\u5165\u5783\u573E\u6876\u5931\u8D25");
+      }
+    }
+    return {
+      target: command.target,
+      poolKey: command.poolKey,
+      plan,
+      deleted: dnsResult.deleted,
+      added: dnsResult.added,
+      dnsUpdated: dnsResult.updated,
+      probeErrors,
+      errors
+    };
+  }
+  async probeCurrentRecords(command) {
+    if (command.target.mode === "A") {
+      const records2 = await this.dependencies.dns.listAddressRecords(command.zone, command.target.domain);
+      const items2 = records2.map((record2) => currentItemFromAddressRecord(record2, command.target)).filter(isPresent2);
+      return await mapWithConcurrency(items2, this.concurrency, async (item) => ({
+        ...item,
+        result: await probeSafely(this.dependencies.probe, item, command.target)
+      }));
+    }
+    const records = await this.dependencies.dns.listTxtRecords(command.zone, command.target.domain);
+    const record = records[0];
+    if (!record) return [];
+    const items = parseTxtAddresses(record.content).map((address) => currentItemFromTxtAddress(record, address, command.target)).filter(isPresent2);
+    return await mapWithConcurrency(items, this.concurrency, async (item) => ({
+      ...item,
+      result: await probeSafely(this.dependencies.probe, item, command.target)
+    }));
+  }
+  async probeCandidatesUntilTarget(target, candidates, currentActiveCount) {
+    const results = [];
+    let activeCount = currentActiveCount;
+    for (const entry of candidates) {
+      if (activeCount >= target.minActive) break;
+      const parsed = parseProxyTarget(entry.address, target.port ?? 443);
+      if (!parsed) continue;
+      const address = target.mode === "A" && target.port ? formatProxyAuthority(parsed.host, target.port) : parsed.authority;
+      const item = {
+        entry,
+        address,
+        value: activeValueForEntry(entry, target)
+      };
+      const result = await probeSafely(this.dependencies.probe, item, target);
+      results.push({ ...item, result });
+      if (result.status === "alive" && resultMatchesTarget(result, target)) activeCount += 1;
+    }
+    return results;
+  }
+  async applyDnsChanges(command, plan, errors) {
+    if (command.target.mode === "A") {
+      let deleted = 0;
+      let added = 0;
+      for (const { item, decision } of plan.current) {
+        if (decision !== "remove-dead" && decision !== "remove-mismatch" || !item.recordId) continue;
+        try {
+          await this.dependencies.dns.deleteRecord(command.zone, item.recordId);
+          deleted += 1;
+        } catch {
+          errors.push(`\u5220\u9664 DNS \u8BB0\u5F55\u5931\u8D25: ${item.value}`);
+        }
+      }
+      for (const candidate of plan.additions) {
+        try {
+          await this.dependencies.dns.addAddressRecord(
+            command.zone,
+            command.target.domain,
+            candidate.value,
+            dnsRecordTypeForHost(candidate.value)
+          );
+          added += 1;
+        } catch {
+          errors.push(`\u6DFB\u52A0 DNS \u8BB0\u5F55\u5931\u8D25: ${candidate.value}`);
+        }
+      }
+      return { deleted, added, updated: deleted > 0 || added > 0 };
+    }
+    const original = uniqueValues(plan.current.map(({ item }) => item.value));
+    if (sameValues(original, plan.dnsValues)) return { deleted: 0, added: 0, updated: false };
     try {
-        const response = await fetch(`https://api.telegram.org/bot${config.tgToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: config.tgId,
-                text: msg,
-                parse_mode: 'HTML',
-                disable_web_page_preview: true
-            })
+      if (plan.dnsValues.length === 0) {
+        const recordId2 = plan.current.find(({ item }) => item.recordId)?.item.recordId;
+        if (recordId2) await this.dependencies.dns.deleteRecord(command.zone, recordId2);
+        return { deleted: recordId2 ? 1 : 0, added: 0, updated: Boolean(recordId2) };
+      }
+      const recordId = plan.current.find(({ item }) => item.recordId)?.item.recordId ?? null;
+      await this.dependencies.dns.upsertTxtRecord(command.zone, command.target.domain, recordId, plan.dnsValues);
+      return { deleted: 0, added: 0, updated: true };
+    } catch {
+      errors.push("\u66F4\u65B0 TXT \u8BB0\u5F55\u5931\u8D25");
+      return { deleted: 0, added: 0, updated: false };
+    }
+  }
+};
+function currentItemFromAddressRecord(record, target) {
+  const parsed = parseProxyTarget(record.content, target.port ?? 443);
+  const expectedFamily = record.type === "AAAA" ? "ipv6" : "ipv4";
+  if (!parsed || parsed.family !== expectedFamily) return invalidDnsItem(record, record.content);
+  return {
+    recordId: record.id,
+    address: target.port ? formatProxyAuthority(parsed.host, target.port) : parsed.authority,
+    value: parsed.host,
+    result: unknown(null, "NOT_PROBED", "\u7B49\u5F85\u68C0\u6D4B")
+  };
+}
+__name(currentItemFromAddressRecord, "currentItemFromAddressRecord");
+function currentItemFromTxtAddress(record, address, target) {
+  const parsed = parseProxyTarget(address, target.port ?? 443);
+  if (!parsed) return invalidDnsItem(record, address);
+  return {
+    recordId: record.id,
+    address: parsed.authority,
+    value: parsed.authority,
+    result: unknown(null, "NOT_PROBED", "\u7B49\u5F85\u68C0\u6D4B")
+  };
+}
+__name(currentItemFromTxtAddress, "currentItemFromTxtAddress");
+function invalidDnsItem(record, value) {
+  return {
+    recordId: record.id,
+    address: value,
+    value,
+    result: unknown(null, "INVALID_DNS_VALUE", "DNS \u8BB0\u5F55\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790")
+  };
+}
+__name(invalidDnsItem, "invalidDnsItem");
+async function probeSafely(probe, item, target) {
+  const parsed = parseProxyTarget(item.address, target.port ?? 443);
+  if (!parsed) return unknown(null, "INVALID_DNS_VALUE", "DNS \u8BB0\u5F55\u5185\u5BB9\u65E0\u6CD5\u89E3\u6790");
+  try {
+    return await probe.probe(parsed);
+  } catch {
+    return unknown(parsed, "PROBE_ERROR", "\u68C0\u6D4B\u6267\u884C\u5F02\u5E38");
+  }
+}
+__name(probeSafely, "probeSafely");
+function resultMatchesTarget(result, target) {
+  return decideCurrentResult(result, target) === "active";
+}
+__name(resultMatchesTarget, "resultMatchesTarget");
+function parsePoolEntries(text3) {
+  return parsePoolText(text3).map((line) => line.entry).filter((entry) => Boolean(entry));
+}
+__name(parsePoolEntries, "parsePoolEntries");
+function sameValues(left, right) {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((value) => rightSet.has(value));
+}
+__name(sameValues, "sameValues");
+function uniqueValues(values) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+__name(uniqueValues, "uniqueValues");
+function isPresent2(value) {
+  return value !== null;
+}
+__name(isPresent2, "isPresent");
+
+// app/src/application/maintain-managed-targets.ts
+var MaintainManagedTargets = class {
+  constructor(dependencies) {
+    this.dependencies = dependencies;
+  }
+  dependencies;
+  static {
+    __name(this, "MaintainManagedTargets");
+  }
+  async execute(data, fallbackZone) {
+    const results = [];
+    for (const config of data.targets) {
+      if (!config.enabled) continue;
+      const zone = resolveZone(data.zones, config, fallbackZone);
+      const poolKey = resolvePoolKey(data.poolMapping, config.target);
+      const poolName = data.poolNames[poolKey] || getPoolFixedName(poolKey);
+      try {
+        const report = await this.dependencies.maintainer.execute({ target: config.target, zone, poolKey });
+        results.push({ target: config.target, zone, poolKey, poolName, report, error: null });
+      } catch (error) {
+        results.push({
+          target: config.target,
+          zone,
+          poolKey,
+          poolName,
+          report: null,
+          error: error instanceof Error ? error.message : "\u7EF4\u62A4\u6267\u884C\u5931\u8D25"
         });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error('❌ TG配置错误，发送失败。请检查TG_TOKEN和TG_ID是否正确:', errorData);
-            return {
-                sent: false,
-                reason: 'config_error',
-                message: 'TG配置错误，请检查TG_TOKEN和TG_ID',
-                detail: errorData.description || '未知错误'
-            };
-        } else {
-            console.log('✅ TG通知发送成功');
-            return { sent: true, reason: 'success', message: 'TG通知发送成功' };
-        }
-    } catch (e) {
-        console.error('❌ TG发送失败，网络错误:', e.message);
-        return {
-            sent: false,
-            reason: 'network_error',
-            message: 'TG发送失败，网络错误',
-            detail: e.message
-        };
+      }
     }
+    return summarize(results);
+  }
+};
+function shouldNotifyMaintenance(run, isManual) {
+  return isManual || run.changed || run.insufficient || run.errors.length > 0 || run.probeErrors > 0;
 }
-
-// ==================== UI rendering ====================
-
-function escapeHTML(str) {
-    return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+__name(shouldNotifyMaintenance, "shouldNotifyMaintenance");
+function resolveZone(zones, config, fallback) {
+  const indexed = config.zoneIndex === null ? void 0 : zones[config.zoneIndex];
+  return {
+    apiToken: indexed?.apiToken || fallback.apiToken,
+    zoneId: indexed?.zoneId || fallback.zoneId
+  };
 }
-
-function renderLoginStyles() {
-    return `
-  <style>
-    *{box-sizing:border-box}
-    body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f}
-    .login{width:100%;max-width:380px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
-    h1{font-size:22px;line-height:1.2;margin:0 0 8px;font-weight:750}
-    p{margin:0 0 22px;color:#6b7280;font-size:13px;line-height:1.55}
-    label{display:block;margin-bottom:8px;font-size:13px;font-weight:700;color:#374151}
-    input{width:100%;height:44px;border:1px solid #d8dce3;border-radius:12px;padding:0 13px;font:inherit;outline:none;background:#f9fafb}
-    input:focus{background:#fff;border-color:#007aff;box-shadow:0 0 0 4px rgba(0,122,255,.12)}
-    button{width:100%;height:44px;margin-top:14px;border:0;border-radius:12px;background:#007aff;color:#fff;font-weight:750;font:inherit;cursor:pointer}
-    button:hover{background:#0068d9}
-    .hint{margin-top:14px;text-align:center;color:#9ca3af;font-size:12px}
-  </style>
-`;
+__name(resolveZone, "resolveZone");
+function summarize(results) {
+  const errors = [];
+  let changed = false;
+  let insufficient = false;
+  let probeErrors = 0;
+  for (const result of results) {
+    const domain = result.target.domain;
+    if (result.error) errors.push(`${domain}: ${result.error}`);
+    if (!result.report) continue;
+    changed ||= result.report.dnsUpdated;
+    insufficient ||= result.report.plan.exhausted;
+    probeErrors += result.report.probeErrors;
+    for (const error of result.report.errors) errors.push(`${domain}: ${error}`);
+  }
+  return { results, changed, insufficient, errors, probeErrors };
 }
+__name(summarize, "summarize");
 
-function renderLoginHTML(url) {
-    const cleanUrl = new URL(url.href);
-    cleanUrl.searchParams.delete('key');
-    const nextPath = `${cleanUrl.pathname || '/'}${cleanUrl.search}`;
-    return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DDNS Pro - 登录</title>
-  ${renderLoginStyles()}
-</head>
-<body>
-  <form class="login" method="GET" action="${escapeHTML(nextPath || '/')}">
-    <h1>DDNS Pro</h1>
-    <p>该面板已开启访问保护，输入访问密钥后会保持登录状态。</p>
-    <label for="key">访问密钥</label>
-    <input id="key" name="key" type="password" autocomplete="current-password" autofocus required />
-    <button type="submit">进入面板</button>
-    <div class="hint">未配置 AUTH_KEY 时会直接进入面板</div>
-  </form>
-</body>
-</html>`;
+// app/src/application/pool-service.ts
+var MAX_POOL_CONTENT_LENGTH = 512e3;
+var PoolInputError = class extends Error {
+  static {
+    __name(this, "PoolInputError");
+  }
+  constructor(message) {
+    super(message);
+    this.name = "PoolInputError";
+  }
+};
+var PoolService = class {
+  constructor(catalog) {
+    this.catalog = catalog;
+  }
+  catalog;
+  static {
+    __name(this, "PoolService");
+  }
+  async list() {
+    return await this.catalog.list();
+  }
+  async read(poolKey) {
+    return await this.catalog.read(requirePoolKey(poolKey));
+  }
+  async save(poolKey, content, modeValue) {
+    const key = requirePoolKey(poolKey);
+    const mode = parseSaveMode(modeValue);
+    const incoming = poolEntryMap(normalizeContent(content));
+    const existing = poolEntryMap(await this.catalog.read(key));
+    const existingCount = existing.size;
+    let added = 0;
+    let removed = 0;
+    let replaced = 0;
+    if (mode === "append") {
+      if (incoming.size === 0) throw new PoolInputError("\u6CA1\u6709\u6709\u6548 IP");
+      for (const [addressKey, entry] of incoming) {
+        const previous = existing.get(addressKey);
+        existing.set(addressKey, previous ? mergePoolEntry(previous, entry) : entry);
+      }
+      added = existing.size - existingCount;
+    } else if (mode === "remove") {
+      for (const addressKey of incoming.keys()) {
+        if (existing.delete(addressKey)) removed += 1;
+      }
+    } else {
+      replaced = existingCount;
+      added = incoming.size;
+      existing.clear();
+      for (const [addressKey, entry] of incoming) existing.set(addressKey, entry);
+    }
+    await this.catalog.write(key, serializeEntries(existing));
+    return { ok: true, mode, count: existing.size, added, removed, replaced };
+  }
+  async create(displayNameValue) {
+    return await this.catalog.create(normalizeDisplayName(displayNameValue));
+  }
+  async rename(poolKey, displayNameValue) {
+    const key = requireUserPoolKey(poolKey);
+    const displayName = normalizeDisplayName(displayNameValue);
+    if (!await this.catalog.exists(key)) throw new PoolInputError("\u6C60\u4E0D\u5B58\u5728");
+    await this.catalog.rename(key, displayName);
+  }
+  async remove(poolKey) {
+    const key = requirePoolKey(poolKey);
+    if (!NUMBERED_POOL_KEY_RE.test(key)) throw new PoolInputError("\u53EA\u80FD\u5220\u9664\u7F16\u53F7 IP \u6C60");
+    if (!await this.catalog.exists(key)) throw new PoolInputError("\u6C60\u4E0D\u5B58\u5728");
+    await this.catalog.remove(key);
+  }
+  async saveOrder(orderValue) {
+    if (!Array.isArray(orderValue) || orderValue.some((key) => typeof key !== "string")) {
+      throw new PoolInputError("\u6392\u5E8F\u6570\u636E\u683C\u5F0F\u65E0\u6548");
+    }
+    const actual = await this.list();
+    const actualKeys = actual.map((pool) => pool.key);
+    const actualSet = new Set(actualKeys);
+    const submitted = [...new Set(orderValue.map((key) => key.trim()).filter(Boolean))];
+    if (submitted.length !== actualKeys.length || submitted.some((key) => !actualSet.has(key))) {
+      throw new PoolInputError("\u6C60\u5217\u8868\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    }
+    await this.catalog.saveOrder(normalizePoolOrder(submitted, actualKeys));
+  }
+  async clearTrash() {
+    await this.catalog.write(TRASH_POOL_KEY, "");
+  }
+  async restoreTrash(addressesValue, restoreToSourceValue, targetPoolValue) {
+    if (!Array.isArray(addressesValue) || addressesValue.some((value) => typeof value !== "string")) {
+      throw new PoolInputError("addresses \u5FC5\u987B\u662F\u6570\u7EC4");
+    }
+    if (addressesValue.length === 0) throw new PoolInputError("\u6CA1\u6709\u9009\u62E9 IP");
+    if (addressesValue.length > MAX_POOL_RESTORE_ITEMS) throw new PoolInputError("\u4E00\u6B21\u6062\u590D\u7684 IP \u6570\u91CF\u8FC7\u591A");
+    const requested = [...new Set(addressesValue.map((value) => canonicalAddressKey(value)).filter(Boolean))];
+    if (requested.length === 0) throw new PoolInputError("\u6CA1\u6709\u6709\u6548 IP");
+    const restoreToSource = restoreToSourceValue === true;
+    const fallbackPool = restoreToSource ? DEFAULT_POOL_KEY : requireUserPoolKey(targetPoolValue ?? DEFAULT_POOL_KEY);
+    const trash = poolLineMap(await this.catalog.read(TRASH_POOL_KEY));
+    const targetPools = /* @__PURE__ */ new Map();
+    const restoredByPool = {};
+    let restored = 0;
+    let trashChanged = false;
+    for (const addressKey of requested) {
+      const trashItem = trash.get(addressKey);
+      if (!trashItem) continue;
+      trash.delete(addressKey);
+      trashChanged = true;
+      const targetPool = restoreToSource ? await this.resolveSourcePool(trashItem.raw, fallbackPool) : fallbackPool;
+      let targetEntries = targetPools.get(targetPool);
+      if (!targetEntries) {
+        targetEntries = poolEntryMap(await this.catalog.read(targetPool));
+        targetPools.set(targetPool, targetEntries);
+      }
+      if (targetEntries.has(addressKey)) continue;
+      targetEntries.set(addressKey, { ...trashItem.entry, comment: "" });
+      restored += 1;
+      restoredByPool[targetPool] = (restoredByPool[targetPool] ?? 0) + 1;
+    }
+    if (trashChanged) await this.catalog.write(TRASH_POOL_KEY, serializeEntries(lineEntriesToEntries(trash)));
+    for (const [poolKey, entries] of targetPools) {
+      if ((restoredByPool[poolKey] ?? 0) > 0) await this.catalog.write(poolKey, serializeEntries(entries));
+    }
+    return { ok: true, restored, restoredByPool };
+  }
+  async resolveSourcePool(trashLine, fallbackPool) {
+    const marker = " \u6765\u81EA ";
+    const markerIndex = trashLine.lastIndexOf(marker);
+    if (markerIndex < 0) return fallbackPool;
+    const candidate = trashLine.slice(markerIndex + marker.length).trim();
+    if (!isUserPoolKey(candidate)) return fallbackPool;
+    return candidate === DEFAULT_POOL_KEY || await this.catalog.exists(candidate) ? candidate : fallbackPool;
+  }
+};
+function requirePoolKey(value) {
+  const key = typeof value === "string" ? value.trim() : "";
+  if (!isPoolDataKey(key)) throw new PoolInputError("IP \u6C60\u6807\u8BC6\u65E0\u6548");
+  return key;
 }
-
-function renderAppStyles() {
-    return `
-    <style>
-        :root {
-            --primary: #007aff;
-            --success: #34c759;
-            --warning: #ff9500;
-            --danger: #ff3b30;
-            --bg: #f5f5f7;
-            --card: #fff;
-            --text: #1d1d1f;
-            --secondary: #86868b;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            margin: 0;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-        button, input, select, textarea { font-family: inherit; font-size: inherit; line-height: inherit; margin: 0; }
-        table { border-collapse: collapse; }
-        /* ── Bootstrap replacement: Grid ── */
-        .container { width: 100%; max-width: 1140px; margin: 0 auto; padding: 0 12px; }
-        .row { display: flex; flex-wrap: wrap; margin: 0 -6px; }
-        .row > * { padding: 0 6px; }
-        .row.g-2 { margin: 0 -4px; }
-        .row.g-2 > * { padding: 4px; }
-        .col-6 { flex: 0 0 50%; max-width: 50%; }
-        .col-lg-5, .col-lg-7 { flex: 0 0 100%; max-width: 100%; }
-        @media (min-width: 992px) {
-            .col-lg-5, .col-lg-7 { flex: 0 0 50%; max-width: 50%; }
-        }
-        /* ── Bootstrap replacement: Forms ── */
-        .form-control, .form-select { display: block; width: 100%; font-size: 1rem; line-height: 1.5; color: #212529; background-clip: padding-box; appearance: none; }
-        .form-control-sm { font-size: .875rem; padding: .25rem .5rem; }
-        .form-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .75rem center; background-size: 16px 12px; padding-right: 2.25rem; }
-        .form-select-sm { font-size: .875rem; padding: .25rem 2rem .25rem .5rem; }
-        .input-group { display: flex; flex-wrap: wrap; align-items: stretch; width: 100%; }
-        .input-group > .form-control { flex: 1 1 auto; width: 1%; min-width: 0; position: relative; }
-        .input-group > .btn { position: relative; z-index: 2; }
-        .input-group > :not(:first-child) { border-top-left-radius: 0 !important; border-bottom-left-radius: 0 !important; }
-        .input-group > :not(:last-child) { border-top-right-radius: 0 !important; border-bottom-right-radius: 0 !important; }
-        .input-group-sm > .form-control, .input-group-sm > .btn { font-size: .875rem; padding: .25rem .5rem; }
-        [hidden] { display: none !important; }
-        textarea.form-control { min-height: calc(1.5em + .75rem + 2px); }
-        /* ── Bootstrap replacement: Buttons ── */
-        .btn { display: inline-block; text-align: center; vertical-align: middle; cursor: pointer; user-select: none; line-height: 1.5; font-size: 1rem; background: transparent; border: 1px solid transparent; color: inherit; text-decoration: none; }
-        .btn-sm { font-size: .875rem; padding: .25rem .5rem; border-radius: .25rem; }
-        .btn-primary { background: var(--primary); color: #fff; border: 1px solid var(--primary); }
-        .btn-success { background: var(--success); color: #fff; border: 1px solid var(--success); }
-        .btn-danger { background: var(--danger); color: #fff; border: 1px solid var(--danger); }
-        .btn-info { background: #0dcaf0; color: #000; border: 1px solid #0dcaf0; }
-        .btn-dark { background: #212529; color: #fff; border: 1px solid #212529; }
-        .btn-outline-primary { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
-        .btn-outline-primary:hover { background: var(--primary); color: #fff; }
-        .btn-outline-secondary { background: transparent; color: #6c757d; border: 1px solid #6c757d; }
-        .btn-outline-secondary:hover { background: #6c757d; color: #fff; }
-        .btn-outline-success { background: transparent; color: var(--success); border: 1px solid var(--success); }
-        .btn-outline-success:hover { background: var(--success); color: #fff; }
-        .btn-outline-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-        .btn-outline-danger:hover { background: var(--danger); color: #fff; }
-        /* ── Bootstrap replacement: Tables ── */
-        .table { width: 100%; margin-bottom: 1rem; vertical-align: top; border-color: #dee2e6; }
-        .table > :not(caption) > * > * { padding: .5rem; }
-        .table-sm > :not(caption) > * > * { padding: .25rem; }
-        .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        /* ── Bootstrap replacement: Badge / Progress ── */
-        .progress { display: flex; height: 1rem; overflow: hidden; font-size: .75rem; background-color: #e9ecef; border-radius: .375rem; }
-        .progress-bar { display: flex; flex-direction: column; justify-content: center; overflow: hidden; color: #fff; text-align: center; white-space: nowrap; transition: width .6s ease; }
-        /* ── Bootstrap replacement: Utilities - Spacing ── */
-        .m-0 { margin: 0 !important; }
-        .mb-0 { margin-bottom: 0 !important; }
-        .mb-2 { margin-bottom: .5rem !important; }
-        .mb-3 { margin-bottom: 1rem !important; }
-        .mt-2 { margin-top: .5rem !important; }
-        .mt-auto { margin-top: auto !important; }
-        .p-3 { padding: 1rem !important; }
-        .p-4 { padding: 1.5rem !important; }
-        .pb-5 { padding-bottom: 3rem !important; }
-        /* ── Bootstrap replacement: Utilities - Flex ── */
-        .d-flex { display: flex !important; }
-        .flex-wrap { flex-wrap: wrap !important; }
-        .flex-grow-1 { flex-grow: 1 !important; }
-        .gap-1 { gap: .25rem !important; }
-        .gap-2 { gap: .5rem !important; }
-        .align-items-center { align-items: center !important; }
-        .justify-content-between { justify-content: space-between !important; }
-        /* ── Bootstrap replacement: Utilities - Text ── */
-        .text-white { color: #fff !important; }
-        .text-center { text-align: center !important; }
-        .text-secondary { color: var(--secondary) !important; }
-        .text-danger { color: var(--danger) !important; }
-        .text-decoration-none { text-decoration: none !important; }
-        .fw-bold { font-weight: 700 !important; }
-        .small, small { font-size: .875em; }
-        /* ── Bootstrap replacement: Utilities - Size ── */
-        .w-100 { width: 100% !important; }
-        h6 { margin-top: 0; margin-bottom: .5rem; font-size: 1rem; font-weight: 500; }
-        .hero {
-            padding: 28px 0 16px;
-            position: relative;
-        }
-        .hero h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--secondary);
-            margin-bottom: 10px;
-        }
-        .hero-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 8px;
-            flex-wrap: wrap;
-        }
-        .guide-toggle {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            border-radius: 999px;
-            border: 1px solid #d0d3da;
-            background: #ffffff;
-            color: #6b7280;
-            font-size: 16px;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .guide-toggle:hover {
-            background: #f3f4f6;
-            color: #111827;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-        }
-        .usage-guide {
-            background: #ffffff;
-            border-radius: 12px;
-            padding: 10px 14px;
-            margin-top: 10px;
-            border: 1px solid #e5e7eb;
-            font-size: 12px;
-            color: #4b5563;
-        }
-        .usage-guide ol {
-            padding-left: 18px;
-            margin: 0;
-        }
-        .usage-guide li {
-            margin-bottom: 4px;
-        }
-        .github-corner {
-            position: fixed;
-            top: 0;
-            right: 0;
-            z-index: 9999;
-        }
-        .github-corner svg {
-            fill: #86868b;
-            color: #fff;
-            width: 60px;
-            height: 60px;
-            transition: fill 0.3s;
-        }
-        .github-corner:hover svg {
-            fill: #667eea;
-        }
-        .github-corner .octo-arm {
-            transform-origin: 130px 106px;
-        }
-        .github-corner:hover .octo-arm {
-            animation: octocat-wave 560ms ease-in-out;
-        }
-        @keyframes octocat-wave {
-            0%, 100% { transform: rotate(0); }
-            20%, 60% { transform: rotate(-25deg); }
-            40%, 80% { transform: rotate(10deg); }
-        }
-        @media (max-width: 768px) {
-            .github-corner svg {
-                width: 50px;
-                height: 50px;
-            }
-            .hero h1 {
-                font-size: 1.2rem;
-            }
-        }
-        .domain-selector {
-            max-width: 560px;
-            margin-top: 12px;
-        }
-        .target-summary {
-            display: inline-flex;
-            width: fit-content;
-            max-width: 100%;
-            position: relative;
-            min-height: 76px;
-            padding: 18px 58px 14px 18px;
-            align-items: center;
-            border: 1px solid #e5e5e7;
-            border-radius: 16px;
-            background: rgba(255,255,255,0.9);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-            text-align: left;
-            cursor: pointer;
-            overflow: hidden;
-        }
-        #current-target-summary-content {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 4px 10px;
-            min-width: 0;
-        }
-        .target-summary-domain {
-            display: block;
-            flex: 1 1 auto;
-            order: 1;
-            min-width: 0;
-            max-width: min(58vw, 390px);
-            color: #1d1d1f;
-            font-size: 1.08rem;
-            font-weight: 800;
-            line-height: 1.3;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .target-summary-meta {
-            display: block;
-            flex-basis: 100%;
-            order: 3;
-            margin-top: 0;
-            color: #6b7280;
-            font-size: .82rem;
-            font-weight: 600;
-        }
-        .target-summary .record-badge {
-            position: absolute;
-            top: 8px;
-            right: 10px;
-            margin-left: 0;
-        }
-        .target-select-overlay {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0;
-            cursor: pointer;
-        }
-        @media (max-width: 768px) {
-            .target-summary {
-                min-height: 68px;
-                width: 100%;
-                padding: 16px 52px 12px 12px;
-            }
-            .target-summary-domain {
-                max-width: calc(100vw - 156px);
-                font-size: 1rem;
-            }
-            .target-summary-meta {
-                font-size: .76rem;
-            }
-        }
-        .card {
-            border: none;
-            border-radius: 20px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
-            background: var(--card);
-            margin-bottom: 24px;
-        }
-        .console {
-            background: #1c1c1e;
-            color: #32d74b;
-            height: 380px;
-            overflow-y: auto;
-            font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
-            padding: 20px;
-            border-radius: 16px;
-            font-size: 13px;
-            line-height: 1.6;
-        }
-        .console::-webkit-scrollbar {
-            width: 8px;
-        }
-        .console::-webkit-scrollbar-thumb {
-            background: #3a3a3c;
-            border-radius: 4px;
-        }
-        @media (max-width: 768px) {
-            .console {
-                height: 250px;
-                font-size: 11px;
-                padding: 12px;
-            }
-        }
-        .table th {
-            border: none;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            color: var(--secondary);
-            padding: 15px;
-        }
-        .table td {
-            border-top: 1px solid #f2f2f2;
-            padding: 15px;
-            vertical-align: middle;
-        }
-        @media (max-width: 768px) {
-            .table th, .table td {
-                padding: 8px 4px;
-                font-size: 11px;
-            }
-            .table {
-                font-size: 12px;
-            }
-        }
-        .btn {
-            border-radius: 12px;
-            font-weight: 600;
-            padding: 10px 20px;
-            transition: all 0.2s;
-            border: none;
-        }
-        .btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        @media (max-width: 768px) {
-            .btn {
-                padding: 8px 12px;
-                font-size: 13px;
-            }
-            .btn-sm {
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-        }
-        .form-control, .form-select {
-            border-radius: 12px;
-            background: #f5f5f7;
-            border: 1px solid transparent;
-            padding: 12px 16px;
-        }
-        .form-control:focus, .form-select:focus {
-            background: #fff;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(0,122,255,0.1);
-        }
-        /* 固定高度滚动区域 */
-        .scroll-box {
-            max-height: 200px;
-            overflow-y: auto;
-            border-radius: 12px;
-        }
-        .scroll-box::-webkit-scrollbar {
-            width: 6px;
-        }
-        .scroll-box::-webkit-scrollbar-thumb {
-            background: #d1d1d6;
-            border-radius: 3px;
-        }
-        .config-info {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 11px;
-            color: var(--secondary);
-            background: #f5f5f7;
-            padding: 4px 10px;
-            border-radius: 8px;
-        }
-        .toolbar-row {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) repeat(3, auto);
-            gap: 8px;
-            align-items: center;
-        }
-        .toolbar-row .btn {
-            white-space: nowrap;
-        }
-        .primary-actions {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-            gap: 8px;
-            align-items: stretch;
-        }
-        .primary-actions .btn {
-            border-radius: 10px;
-        }
-        .kv-alert {
-            margin-top: 12px;
-            padding: 12px 14px;
-            border: 1px solid #fecaca;
-            background: #fff1f2;
-            color: #991b1b;
-            border-radius: 10px;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-        }
-        .config-grid .span-2 {
-            grid-column: 1 / -1;
-        }
-        .field {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            min-width: 0;
-        }
-        .field > span {
-            font-size: 13px;
-            font-weight: 700;
-            color: #1d1d1f;
-        }
-        .field > small {
-            color: #6b7280;
-            font-size: 11px;
-            line-height: 1.35;
-        }
-        .config-card-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-            gap: 12px;
-        }
-        .config-mini-card {
-            border: 1px solid #e5e7eb;
-            background: #fbfbfd;
-            border-radius: 10px;
-            padding: 14px;
-            min-height: 120px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            cursor: pointer;
-            transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
-        }
-        .config-mini-card:hover {
-            border-color: rgba(0,122,255,.35);
-            box-shadow: 0 8px 24px rgba(0,0,0,.06);
-            transform: translateY(-1px);
-        }
-        .config-mini-card h5 {
-            margin: 0;
-            font-size: 17px;
-            line-height: 1.25;
-            word-break: break-all;
-        }
-        .config-mini-card .meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            color: #6b7280;
-            font-size: 12px;
-        }
-        .config-mini-card .actions {
-            display: flex;
-            gap: 8px;
-            margin-top: auto;
-        }
-        .config-mini-card .actions .btn {
-            padding: 6px 10px;
-            font-size: 12px;
-        }
-        .config-empty-state {
-            padding: 18px;
-            border: 1px dashed #d8dce3;
-            border-radius: 10px;
-            color: #6b7280;
-            background: #f8fafc;
-            font-size: 13px;
-            text-align: center;
-        }
-        .config-save-btn {
-            position: sticky;
-            top: 10px;
-            z-index: 5;
-        }
-        .config-edit-panel {
-            display: none;
-            margin-top: 12px;
-            padding: 14px;
-            border: 1px solid #dbe3f0;
-            border-radius: 10px;
-            background: #fff;
-        }
-        .config-edit-panel.active {
-            display: block;
-        }
-        .config-edit-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-        }
-        .config-edit-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-            margin-top: 12px;
-        }
-        .pool-tools {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .pool-tools .form-select {
-            width: 160px;
-            border-radius: 8px;
-        }
-        .domain-binding-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            cursor: pointer;
-            margin-bottom: 0;
-            list-style: none;
-        }
-        .domain-binding-header::-webkit-details-marker {
-            display: none;
-        }
-        .domain-binding-card[open] .domain-binding-header {
-            margin-bottom: 1rem;
-        }
-        .domain-binding-header h6 {
-            min-width: 0;
-        }
-        .domain-binding-actions {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-shrink: 0;
-        }
-        .domain-binding-table-wrap {
-            max-height: 280px;
-            overflow: auto;
-            border: 1px solid #e8edf5;
-            border-radius: 12px;
-            -webkit-overflow-scrolling: touch;
-        }
-        .domain-binding-table-wrap::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        .domain-binding-table-wrap::-webkit-scrollbar-thumb {
-            background: #d1d1d6;
-            border-radius: 3px;
-        }
-        .domain-binding-table-wrap .table {
-            table-layout: fixed;
-            width: 100%;
-            min-width: 0;
-            margin-bottom: 0;
-        }
-        .domain-binding-table-wrap th:first-child,
-        .domain-binding-table-wrap td:first-child {
-            width: 58%;
-        }
-        .domain-binding-table-wrap th:last-child,
-        .domain-binding-table-wrap td:last-child {
-            width: 42%;
-        }
-        .domain-binding-table-wrap thead {
-            position: sticky;
-            top: 0;
-            z-index: 1;
-            background: #fff;
-        }
-        .domain-binding-table-wrap th,
-        .domain-binding-table-wrap td {
-            padding: 10px 12px;
-        }
-        .domain-binding-domain {
-            display: grid;
-            grid-template-columns: 24px minmax(0, 1fr);
-            align-items: center;
-            gap: 8px;
-            max-width: 100%;
-            overflow: hidden;
-        }
-        .domain-binding-domain .record-badge {
-            justify-content: center;
-            width: 24px;
-            margin-left: 0;
-            padding: 0;
-        }
-        .domain-binding-name {
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .record-badge {
-            display: inline-flex;
-            align-items: center;
-            height: 18px;
-            margin-left: 8px;
-            padding: 0 6px;
-            border-radius: 999px;
-            font-size: 10px;
-            font-weight: 700;
-            line-height: 1;
-            letter-spacing: 0;
-            vertical-align: middle;
-            border: 1px solid transparent;
-        }
-        .record-badge-a {
-            color: #0b5cab;
-            background: #e8f2ff;
-            border-color: #b8d7ff;
-        }
-        .record-badge-txt {
-            color: #087443;
-            background: #e6f7ee;
-            border-color: #a8e3c3;
-        }
-        .domain-binding-select {
-            width: 100%;
-            min-width: 0;
-        }
-        .filter-line {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 34px repeat(3, minmax(58px, 76px));
-            gap: 6px;
-            align-items: center;
-        }
-        .filter-help-btn {
-            width: 34px;
-            height: 34px;
-            border-radius: 999px;
-            border: 1px solid #d8dce3;
-            background: #fff;
-            color: #4b5563;
-            font-weight: 800;
-            cursor: pointer;
-        }
-        .filter-help {
-            margin-top: 8px;
-            padding: 10px 12px;
-            border-radius: 10px;
-            background: #f5f5f7;
-            color: #4b5563;
-            font-size: 12px;
-            line-height: 1.55;
-        }
-        .filter-preview {
-            color: #6b7280;
-            font-size: 12px;
-            margin-top: 6px;
-            min-height: 18px;
-        }
-        .filter-preview strong {
-            color: #1d1d1f;
-        }
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 56px;
-            border-radius: 999px;
-            padding: 5px 9px;
-            font-size: 12px;
-            font-weight: 700;
-        }
-        .status-badge.ok {
-            color: #166534;
-            background: #dcfce7;
-        }
-        .status-badge.bad {
-            color: #991b1b;
-            background: #fee2e2;
-        }
-        .status-badge.warn {
-            color: #92400e;
-            background: #fef3c7;
-        }
-        .pill-badge, .latency-badge, .colo-badge {
-            display: inline-flex;
-            justify-content: center;
-            align-items: center;
-            border-radius: 999px;
-            padding: 5px 9px;
-            font-size: 12px;
-            font-weight: 700;
-            line-height: 1.15;
-            white-space: nowrap;
-        }
-        .latency-badge {
-            min-width: 64px;
-            color: #1d4ed8;
-            background: #dbeafe;
-        }
-        .colo-badge {
-            min-width: 48px;
-            color: #374151;
-            background: #f3f4f6;
-        }
-        .address-pill {
-            max-width: 240px;
-            min-width: 150px;
-            font-family: 'SF Mono', Consolas, monospace;
-            color: #0f172a;
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .switch-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-        }
-        .switch-row label {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            color: #4b5563;
-        }
-        .config-toolbar {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .config-details {
-            overflow: hidden;
-        }
-        .config-details-summary {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            cursor: pointer;
-            list-style: none;
-        }
-        .config-details-summary::-webkit-details-marker {
-            display: none;
-        }
-        .config-details-summary::after {
-            content: '展开';
-            color: #6b7280;
-            font-size: 12px;
-            background: #f5f5f7;
-            border-radius: 999px;
-            padding: 6px 10px;
-        }
-        .config-details[open] .config-details-summary::after {
-            content: '收起';
-        }
-        .config-details-body {
-            padding-top: 16px;
-        }
-        #page-config button:disabled {
-            opacity: .55;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        .top-nav {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
-        .nav-tab {
-            border: 1px solid #d8dce3;
-            background: #fff;
-            color: #4b5563;
-            border-radius: 999px;
-            padding: 8px 14px;
-            font-weight: 700;
-            cursor: pointer;
-        }
-        .nav-tab.active {
-            background: var(--primary);
-            color: #fff;
-            border-color: var(--primary);
-        }
-        .page-panel { display: none; }
-        .page-panel.active { display: block; }
-        .toast {
-            position: fixed;
-            right: 18px;
-            bottom: 18px;
-            z-index: 10001;
-            background: #1f2937;
-            color: #fff;
-            padding: 10px 14px;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0,0,0,.18);
-            opacity: 0;
-            transform: translateY(8px);
-            transition: opacity .2s ease, transform .2s ease;
-            pointer-events: none;
-        }
-        .toast.show {
-            opacity: 1;
-            transform: translateY(0);
-        }
-        .toast.success { background: #166534; }
-        .toast.error { background: #991b1b; }
-        .switch {
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            user-select: none;
-            font-weight: 700;
-            color: #374151;
-        }
-        .switch input {
-            position: absolute;
-            opacity: 0;
-            pointer-events: none;
-        }
-        .switch-slider {
-            width: 48px;
-            height: 26px;
-            border-radius: 999px;
-            background: #cfd5df;
-            position: relative;
-            transition: background .2s ease;
-        }
-        .switch-slider::before {
-            content: '';
-            position: absolute;
-            width: 20px;
-            height: 20px;
-            left: 3px;
-            top: 3px;
-            border-radius: 999px;
-            background: #fff;
-            box-shadow: 0 1px 4px rgba(0,0,0,.2);
-            transition: transform .2s ease;
-        }
-        .switch input:checked + .switch-slider {
-            background: var(--success);
-        }
-        .switch input:checked + .switch-slider::before {
-            transform: translateX(22px);
-        }
-        @media (max-width: 768px) {
-            .config-info {
-                font-size: 9px;
-                padding: 3px 6px;
-            }
-            .config-grid {
-                grid-template-columns: 1fr;
-            }
-            .config-grid .span-2 {
-                grid-column: auto;
-            }
-            .config-edit-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        .ip-info-tag {
-            display: inline-flex;
-            align-items: center;
-            background: #e8f4ff;
-            color: var(--primary);
-            padding: 3px 7px;
-            border-radius: 999px;
-            font-size: 11px;
-            line-height: 1.2;
-            white-space: nowrap;
-        }
-        .exit-list-cell {
-            min-width: 500px;
-            text-align: left;
-            max-width: 560px;
-            overflow: hidden;
-        }
-        .exit-detail {
-            display: grid;
-            grid-template-columns: 54px minmax(140px, 1fr) minmax(86px, 128px) minmax(110px, 180px);
-            gap: 8px;
-            align-items: center;
-            margin: 2px 0;
-            padding: 4px 0;
-            border-bottom: 1px solid rgba(0,0,0,.05);
-            min-height: 30px;
-            width: 100%;
-            min-width: 100%;
-        }
-        .exit-detail.is-dual {
-            background: linear-gradient(90deg, rgba(52,199,89,.08), rgba(0,122,255,.06));
-            border-radius: 8px;
-            padding: 5px 6px;
-        }
-        .exit-detail:last-child {
-            border-bottom: 0;
-        }
-        .exit-ip {
-            font-family: 'SF Mono', Consolas, monospace;
-            font-weight: 700;
-            color: #1d1d1f;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 11px;
-            line-height: 1.25;
-            cursor: pointer;
-            border: 1px solid #e2e8f0;
-            background: #fff;
-            border-radius: 999px;
-            padding: 5px 9px;
-            min-width: 0;
-            width: 100%;
-        }
-        .copyable {
-            cursor: pointer;
-        }
-        .copyable:hover {
-            color: var(--primary);
-            text-decoration: underline;
-        }
-        .exit-stack {
-            background: #eef2ff;
-            color: #4338ca;
-        }
-        .exit-field {
-            max-width: 260px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            background: #eef6ff;
-            color: #0b65d8;
-        }
-        @media (max-width: 768px) {
-            .ip-info-tag {
-                font-size: 9px;
-                padding: 2px 4px;
-            }
-        }
-
-        /* 自定义模态对话框 */
-        .custom-modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10000;
-            backdrop-filter: blur(4px);
-        }
-        .custom-modal {
-            background: #fff;
-            border-radius: 16px;
-            padding: 24px;
-            max-width: 400px;
-            width: 90%;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            animation: modalIn 0.2s ease-out;
-        }
-        @keyframes modalIn {
-            from { opacity: 0; transform: scale(0.9); }
-            to { opacity: 1; transform: scale(1); }
-        }
-        .custom-modal-title {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: #1d1d1f;
-        }
-        .custom-modal-content {
-            font-size: 14px;
-            color: #4b5563;
-            margin-bottom: 20px;
-            line-height: 1.6;
-        }
-        .custom-modal-stats {
-            background: #f5f5f7;
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 16px;
-        }
-        .custom-modal-stats div {
-            display: flex;
-            justify-content: space-between;
-            padding: 4px 0;
-        }
-        .custom-modal-stats .label {
-            color: #86868b;
-        }
-        .custom-modal-stats .value {
-            font-weight: 600;
-            color: #1d1d1f;
-        }
-        .custom-modal-buttons {
-            display: flex;
-            gap: 12px;
-        }
-        .custom-modal-buttons button {
-            flex: 1;
-            padding: 12px 20px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: none;
-        }
-        .custom-modal-buttons .btn-continue {
-            background: var(--primary);
-            color: #fff;
-        }
-        .custom-modal-buttons .btn-continue:hover {
-            background: #0056b3;
-        }
-        .custom-modal-buttons .btn-abandon {
-            background: #f5f5f7;
-            color: #1d1d1f;
-        }
-        .custom-modal-buttons .btn-abandon:hover {
-            background: #e5e5e7;
-        }
-        .pool-order-modal {
-            max-width: 520px;
-        }
-        .pool-order-hint {
-            color: #6b7280;
-            font-size: 13px;
-            margin: -8px 0 12px;
-        }
-        .pool-order-list {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            max-height: min(55vh, 460px);
-            overflow-y: auto;
-            margin-bottom: 18px;
-            padding-right: 3px;
-        }
-        .pool-order-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            background: #f9fafb;
-        }
-        .pool-order-index {
-            width: 24px;
-            color: #9ca3af;
-            font-size: 12px;
-            text-align: center;
-            flex: 0 0 auto;
-        }
-        .pool-order-name {
-            min-width: 0;
-            flex: 1;
-        }
-        .pool-order-name strong,
-        .pool-order-name small {
-            display: block;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .pool-order-name small {
-            color: #9ca3af;
-            margin-top: 2px;
-        }
-        .pool-order-actions {
-            display: flex;
-            gap: 5px;
-        }
-        .pool-order-actions button {
-            width: 34px;
-            height: 32px;
-            padding: 0;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-            background: #fff;
-            color: #374151;
-            cursor: pointer;
-        }
-        .pool-order-actions button:hover:not(:disabled) {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        .pool-order-actions button:disabled {
-            opacity: 0.35;
-            cursor: not-allowed;
-        }
-
-        @media (max-width: 768px) {
-            .pool-tools {
-                width: 100%;
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) repeat(5, 38px);
-            }
-            .pool-tools .form-select {
-                width: 100%;
-            }
-            .domain-binding-table-wrap {
-                max-height: 240px;
-            }
-            .domain-binding-table-wrap th,
-            .domain-binding-table-wrap td {
-                padding: 8px;
-            }
-            .domain-binding-select {
-                font-size: 11px;
-                padding: 6px 28px 6px 8px;
-            }
-            .exit-list-cell {
-                min-width: 480px;
-            }
-            .exit-detail {
-                grid-template-columns: 48px minmax(120px, 1fr) minmax(72px, 108px) minmax(110px, 150px);
-            }
-        }
-
-        /* IP库管理和系统控制台卡片等高 */
-        .col-lg-7 > .card.p-4:first-child,
-        .col-lg-5 > .card.p-4 {
-            display: flex;
-            flex-direction: column;
-        }
-        @media (min-width: 992px) {
-            .col-lg-7 > .card.p-4:first-child,
-            .col-lg-5 > .card.p-4 {
-                min-height: 580px;
-            }
-        }
-        /* IP库管理卡片内部布局 - 让内容区域自动扩展，按钮固定底部 */
-        .col-lg-7 > .card.p-4:first-child .ip-content-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .col-lg-7 > .card.p-4:first-child #ip-input {
-            flex: 1;
-            min-height: 120px;
-        }
-        .col-lg-7 > .card.p-4:first-child .ip-actions-area {
-            flex-shrink: 0;
-        }
-        /* 系统控制台卡片内部布局 - 固定高度，不自动扩展 */
-        .col-lg-5 > .card.p-4 .console {
-            height: 380px;
-            max-height: 380px;
-            flex-shrink: 0;
-        }
-
-        /* 响应式优化 */
-        @media (max-width: 768px) {
-            .card {
-                border-radius: 16px;
-                margin-bottom: 16px;
-            }
-            .card.p-3, .card.p-4 {
-                padding: 1rem !important;
-            }
-            .row.g-2 {
-                gap: 8px !important;
-            }
-            .input-group {
-                flex-wrap: nowrap;
-            }
-            .input-group .btn {
-                white-space: nowrap;
-            }
-            .toolbar-row {
-                grid-template-columns: minmax(0, 1fr) repeat(3, 38px);
-                gap: 6px;
-            }
-            .toolbar-row .btn {
-                padding-left: 8px !important;
-                padding-right: 8px !important;
-            }
-            .primary-actions {
-                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            }
-            .primary-actions .btn-outline-secondary {
-                grid-column: 1 / -1;
-            }
-            /* 筛选工具栏移动端适配 */
-            .filter-toolbar {
-                display: block !important;
-            }
-            .filter-line {
-                grid-template-columns: minmax(0, 1fr) 34px repeat(3, minmax(54px, 1fr));
-            }
-            .filter-line .btn {
-                padding: 7px 9px !important;
-                font-size: 12px !important;
-            }
-            .filter-toolbar {
-                gap: 6px !important;
-            }
-            .filter-toolbar .form-control-sm {
-                min-width: 70px !important;
-                flex: 1 1 35% !important;
-                font-size: 11px !important;
-                padding: 6px 8px !important;
-            }
-            .filter-toolbar .pool-stat {
-                font-size: 10px !important;
-                white-space: nowrap;
-                flex-shrink: 0;
-            }
-        }
-    </style>
-`;
+__name(requirePoolKey, "requirePoolKey");
+function requireUserPoolKey(value) {
+  const key = typeof value === "string" ? value.trim() : "";
+  if (!isUserPoolKey(key)) throw new PoolInputError("\u76EE\u6807\u6C60\u65E0\u6548");
+  return key;
 }
-
-function renderGithubCorner() {
-    return `
-<a href="https://github.com/231128ikun/DDNS-cf-proxyip" class="github-corner" aria-label="View source on GitHub" target="_blank">
-    <svg viewBox="0 0 250 250" aria-hidden="true">
-        <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path>
-        <path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path>
-        <path d="M115.0,115.0 C114.9,115.1 118.7,116.6 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.6 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path>
-    </svg>
-</a>
-`;
+__name(requireUserPoolKey, "requireUserPoolKey");
+function normalizeDisplayName(value) {
+  const displayName = typeof value === "string" ? value.trim() : "";
+  if (!displayName) throw new PoolInputError("\u663E\u793A\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A");
+  if (displayName.length > MAX_POOL_DISPLAY_NAME_LENGTH || /[\r\n]/.test(displayName)) {
+    throw new PoolInputError(`\u663E\u793A\u540D\u79F0\u4E0D\u80FD\u8D85\u8FC7 ${MAX_POOL_DISPLAY_NAME_LENGTH} \u4E2A\u5B57\u7B26\u4E14\u4E0D\u80FD\u6362\u884C`);
+  }
+  return displayName;
 }
-
-function renderHero(C, kvReady) {
-    return `
-<div class="container hero">
-    <h1>
-        🌐 DDNS Pro 多域名管理
-    </h1>
-    <div class="hero-actions">
-        <div class="guide-toggle" onclick="toggleHidden('usage-guide')" title="使用步骤提示">?</div>
-        <div class="config-info">
-            🧭 建议流程：导入IP → 检测 → 入库 → 执行维护
-        </div>
-    </div>
-    ${kvReady ? '' : `<div class="kv-alert"><strong>KV 未绑定。</strong>请在 Worker Settings &gt; Bindings 中绑定 KV Namespace，变量名必须为 <code>IP_DATA</code>。未绑定前配置保存、IP 池、维护任务都不可用。</div>`}
-    <div id="usage-guide" class="usage-guide" hidden>
-        <ol>
-            <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【⚡ 检测】筛出可用 IP。</li>
-            <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【💾 入库】将可用 IP 入库。</li>
-            <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【🔧 执行全部维护】或依靠定时任务自动维护。</li>
-        </ol>
-    </div>
-    <div class="domain-selector">
-        <label class="target-summary">
-            <span id="current-target-summary-content">
-                <span class="target-summary-domain">未配置维护域名</span>
-                <span class="target-summary-meta">请先到配置中心添加</span>
-            </span>
-            <select id="domain-select" class="target-select-overlay" onchange="switchDomain()" aria-label="选择维护域名">
-                ${C.targets.map((t, i) => {
-                    const modeLabel = {'A': 'A/AAAA', 'TXT': 'TXT'};
-                    const label = `${t.domain} - ${modeLabel[t.mode] || t.mode}`;
-                    return `<option value="${i}">${escapeHTML(label)}</option>`;
-                }).join('')}
-            </select>
-        </label>
-    </div>
-</div>
-`;
+__name(normalizeDisplayName, "normalizeDisplayName");
+function parseSaveMode(value) {
+  if (value === void 0 || value === null || value === "") return "append";
+  if (value === "append" || value === "replace" || value === "remove") return value;
+  throw new PoolInputError("IP \u6C60\u5199\u5165\u6A21\u5F0F\u65E0\u6548");
 }
-
-function renderTopNav() {
-    return `
-    <div class="top-nav">
-        <button class="nav-tab active" data-page="dashboard" onclick="showPage('dashboard')">运行面板</button>
-        <button class="nav-tab" data-page="config" onclick="showPage('config')">配置中心</button>
-    </div>
-`;
+__name(parseSaveMode, "parseSaveMode");
+function normalizeContent(value) {
+  if (typeof value !== "string") throw new PoolInputError("IP \u6C60\u5185\u5BB9\u5FC5\u987B\u662F\u6587\u672C");
+  if (value.length > MAX_POOL_CONTENT_LENGTH) throw new PoolInputError("IP \u6C60\u5185\u5BB9\u8D85\u51FA\u957F\u5EA6\u9650\u5236");
+  return value.replace(/\r\n?/g, "\n").trim();
 }
-
-function renderConfigToggleField(field) {
-    return `
-                <label class="switch">
-                    <input type="checkbox" id="${escapeHTML(field.id)}">
-                    <span class="switch-slider"></span>
-                    <span>${escapeHTML(field.label)}</span>
-                </label>`;
+__name(normalizeContent, "normalizeContent");
+function poolEntryMap(text3) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const line of poolLineMap(text3).values()) entries.set(canonicalAddressKey(line.entry.address), line.entry);
+  return entries;
 }
-
-function renderConfigInputField(field) {
-    const limits = SETTING_LIMITS[field.key] || {};
-    const classes = ['field', field.span ? `span-${field.span}` : ''].filter(Boolean).join(' ');
-    const type = CONFIG_NUMBER_FIELDS.includes(field) ? 'number' : 'text';
-    const minAttr = limits.min === undefined ? '' : ` min="${limits.min}"`;
-    const maxAttr = limits.max === undefined ? '' : ` max="${limits.max}"`;
-    return `<label class="${escapeHTML(classes)}"><span>${escapeHTML(field.label)}</span><small>${escapeHTML(field.help)}</small><input id="${escapeHTML(field.id)}" type="${type}"${minAttr}${maxAttr} class="form-control form-control-sm" placeholder="${escapeHTML(field.placeholder)}"></label>`;
+__name(poolEntryMap, "poolEntryMap");
+function poolLineMap(text3) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const line of parsePoolText(text3)) {
+    const entry = line.entry;
+    if (!entry || !parsePoolAddress(entry)) continue;
+    const key = canonicalAddressKey(entry.address);
+    if (key) entries.set(key, { raw: line.raw, entry });
+  }
+  return entries;
 }
-
-function renderConfigPage() {
-    return `
-    <div id="page-config" class="page-panel">
-        <details class="card p-4 mb-3 config-details">
-            <summary class="config-details-summary">
-                <h6 class="m-0 fw-bold">⚙️ 基础配置</h6>
-                <div class="config-toolbar">
-                    <button id="btn-cancel-config" class="btn btn-sm btn-outline-secondary" onclick="event.preventDefault(); resetConfigDraft()" hidden>还原改动</button>
-                    <button id="btn-save-config" class="btn btn-sm btn-success config-save-btn" onclick="event.preventDefault(); saveAppConfig()" hidden>💾 保存到 KV</button>
-                </div>
-            </summary>
-            <div class="config-details-body">
-                <div class="switch-row mb-3">
-                    ${CONFIG_TOGGLE_FIELDS.map(renderConfigToggleField).join('\n')}
-                </div>
-                <div class="config-grid mb-3">
-                    ${CONFIG_TEXT_FIELDS.concat(CONFIG_NUMBER_FIELDS).map(renderConfigInputField).join('\n')}
-                </div>
-            </div>
-        </details>
-
-        <div class="card p-4 mb-3">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h6 class="m-0 fw-bold">🌐 维护的域名配置</h6>
-                <button class="btn btn-sm btn-outline-primary config-add-action" onclick="addZoneConfigRow()">➕ 添加权限配置</button>
-            </div>
-            <div id="zone-config-list" class="config-card-grid"></div>
-            <div id="zone-edit-panel" class="config-edit-panel"></div>
-        </div>
-
-        <div class="card p-4 mb-3">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h6 class="m-0 fw-bold">🧭 管理域名</h6>
-                <button class="btn btn-sm btn-outline-primary config-add-action" onclick="addTargetConfigRow()">➕ 添加管理域名</button>
-            </div>
-            <div id="target-config-list" class="config-card-grid"></div>
-            <div id="target-edit-panel" class="config-edit-panel"></div>
-        </div>
-    </div>
-`;
+__name(poolLineMap, "poolLineMap");
+function lineEntriesToEntries(lines) {
+  return new Map([...lines].map(([key, line]) => [key, line.entry]));
 }
-
-function renderDashboardPage() {
-    return `
-    <div id="page-dashboard" class="page-panel active">
-    <!-- 解析实况 & Check ProxyIP -->
-    <div class="card p-3">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-            <h6 class="m-0 fw-bold">📡 解析实况</h6>
-            <div class="d-flex gap-2 align-items-center flex-grow-1" style="max-width:500px">
-                <input type="text" id="lookup-domain" class="form-control form-control-sm" placeholder="探测: 域名 / IP:端口 / txt@域名" style="border-radius:8px">
-                <button class="btn btn-info btn-sm text-white" onclick="lookupDomain()" title="探测任意域名或IP" style="white-space:nowrap">🔎</button>
-                <button class="btn btn-primary btn-sm" onclick="refreshStatus()" title="刷新当前域名解析">🔄</button>
-            </div>
-        </div>
-
-        <div id="manual-add-section" class="mb-2">
-            <div class="input-group input-group-sm">
-                <input type="text" id="manual-add-ip" class="form-control" placeholder="手动添加IP到当前域名 (如: 1.2.3.4:443)">
-                <button class="btn btn-success" onclick="manualAddIP()" title="添加IP到当前域名">➕</button>
-            </div>
-        </div>
-
-        <!-- 统一展示区域 -->
-        <div id="status-display" class="scroll-box" style="max-height:320px">
-            <div class="table-responsive">
-                <table class="table text-center mb-0 status-table">
-                    <thead style="position:sticky;top:0;background:#fff;z-index:1">
-                        <tr>
-                            <th>目标地址</th>
-                            <th>Colo</th>
-                            <th>延迟</th>
-                            <th>状态</th>
-                            <th>出口IP / 线路</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="status-table"></tbody>
-                </table>
-            </div>
-            <div id="txt-status"></div>
-        </div>
-    </div>
-
-    <div class="row">
-        <!-- IP管理 -->
-        <div class="col-lg-7">
-            <div class="card p-4 mb-3">
-                <!-- 池选择器和操作 -->
-                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                    <h6 class="m-0 fw-bold">📦 IP库管理</h6>
-                    <div class="pool-tools">
-                        <select id="pool-selector" class="form-select form-select-sm" onchange="switchPool()">
-                            <option value="${POOL_DEFAULT_KEY}">默认池</option>
-                        </select>
-                        <button class="btn btn-sm" onclick="createNewPool()" title="新建池" style="padding:6px 8px">➕</button>
-                        <button class="btn btn-sm" onclick="renameCurrentPool()" title="重命名池" style="padding:6px 8px">✏️</button>
-                        <button class="btn btn-sm" onclick="openPoolOrderDialog()" title="自定义池排序" style="padding:6px 8px">↕️</button>
-                        <button class="btn btn-sm" onclick="deleteCurrentPool()" title="删除池" style="padding:6px 8px">🗑️</button>
-                        <button class="btn btn-sm" onclick="oneClickClean()" title="一键洗库" style="padding:6px 8px">🧹</button>
-                    </div>
-                </div>
-
-                <!-- 内容区域 - 自动扩展 -->
-                <div class="ip-content-area">
-                    <!-- 加载区 -->
-                    <div class="toolbar-row mb-2">
-                        <input type="text" id="remote-url" class="form-control form-control-sm flex-grow-1" placeholder="远程TXT URL" style="border-radius:8px">
-                        <button class="btn btn-sm btn-outline-primary" onclick="loadRemoteUrl()" style="white-space:nowrap" title="从远程URL加载">🌐 加载</button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="loadCurrentPool()" title="加载当前池到输入框" style="white-space:nowrap">📂 从库</button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="clearInput()" title="清空输入框" style="white-space:nowrap">🗑️ 清空</button>
-                    </div>
-
-                    <!-- 输入区 -->
-                    <textarea id="ip-input" class="form-control mb-2" rows="6" placeholder="支持格式：&#10;1.2.3.4:443&#10;1.2.3.4 (默认443端口)&#10;example.com:8443 (检测时解析为IP)&#10;1.2.3.4:443 #HK 香港节点 (带注释)" style="border-radius:12px;font-family:'SF Mono',monospace;font-size:12px"></textarea>
-
-                    <!-- 筛选工具 -->
-                    <div class="mb-2 filter-toolbar">
-                        <div class="filter-line">
-                            <input type="text" id="universal-filter" class="form-control form-control-sm" style="border-radius:8px" placeholder="筛选">
-                            <button class="filter-help-btn" onclick="toggleHidden('filter-help')" title="筛选用法">?</button>
-                            <button class="btn btn-sm btn-outline-success" onclick="smartFilter('keep')" title="保留匹配的IP">保留</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="smartFilter('exclude')" title="排除匹配的IP">排除</button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="quickDeduplicate()" title="去除重复IP">去重</button>
-                        </div>
-                        <div id="filter-help" class="filter-help" hidden>
-                            支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4</code>、<code>stack:v6</code>、<code>stack:dual</code>（双栈，等同 v4/v6）、普通关键词。<br>
-                            空格表示“且”；逗号表示同一条件内“或”（如 <code>country:US,KR</code> 即美国或韩国）；竖线 <code>|</code> 表示整段之间“或”，优先级最低（先算空格和逗号，最后算 <code>|</code>）。<br>
-                            例如：<code>country:US,KR stack:v4</code>（美国或韩国，且出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>（韩国且ASN为AS4766，或者美国，两者满足其一即可）。
-                        </div>
-                        <div id="filter-preview" class="filter-preview">输入条件后会显示匹配数量。</div>
-                        <span class="text-secondary small pool-stat" title="当前池中IP数量">📊<span id="pool-count">0</span></span>
-                    </div>
-                </div>
-
-                <!-- 底部按钮区域 - 固定在底部 -->
-                <div class="ip-actions-area mt-auto">
-                    <!-- 主操作按钮 -->
-                    <div class="primary-actions" id="main-actions">
-                        <button id="btn-check" class="btn btn-primary" onclick="batchCheck()">⚡ 检测</button>
-                        <button class="btn btn-success" onclick="saveToCurrentPool('append')">💾 入库</button>
-                        <button class="btn btn-outline-secondary btn-sm" onclick="removeFromPool()" title="从库中移除输入框中的IP">从库中移除</button>
-                    </div>
-
-                    <!-- 垃圾桶专用操作 -->
-                    <div id="trash-actions" class="mt-2" hidden>
-                        <div class="row g-2">
-                            <div class="col-6">
-                                <button class="btn btn-outline-success btn-sm w-100" onclick="restoreSelected()">♻️ 恢复选中</button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-danger btn-sm w-100" onclick="clearTrash()">🗑️ 清空垃圾桶</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 域名池绑定 -->
-            <details id="domain-binding-card" class="card p-4 mb-3 domain-binding-card">
-                <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
-                    <h6 class="m-0 fw-bold">🔗 域名池绑定</h6>
-                    <div class="domain-binding-actions" onclick="event.stopPropagation()">
-                        <button class="btn btn-sm btn-outline-primary" onclick="event.preventDefault(); loadDomainPoolMapping()" title="刷新">🔄</button>
-                        <button class="btn btn-sm btn-outline-primary" onclick="event.preventDefault(); openDomainPoolOrderDialog()" title="自定义绑定显示顺序">↕️</button>
-                    </div>
-                </summary>
-                <div class="domain-binding-table-wrap">
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>域名</th>
-                                <th>绑定池</th>
-                            </tr>
-                        </thead>
-                        <tbody id="domain-binding-list">
-                            <tr><td colspan="2" class="text-center text-secondary">加载中...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </details>
-
-        </div>
-
-        <!-- 控制台 -->
-        <div class="col-lg-5">
-            <div class="card p-4">
-                <h6 class="mb-3 fw-bold">📊 系统控制台</h6>
-                <div id="log-window" class="console mb-3"></div>
-                <div class="progress mb-3" style="height:12px; background:#2c2c2e; border-radius:6px;">
-                    <div id="pg-bar" class="progress-bar" style="width:0%; background:var(--success);"></div>
-                </div>
-                <button id="btn-maintain" class="btn btn-dark w-100" onclick="runMaintain()">🔧 执行全部维护</button>
-            </div>
-        </div>
-    </div>
-    </div>
-`;
+__name(lineEntriesToEntries, "lineEntriesToEntries");
+function serializeEntries(entries) {
+  return [...entries.values()].map((entry) => formatPoolEntry(entry)).join("\n");
 }
+__name(serializeEntries, "serializeEntries");
+function normalizePoolOrder(submitted, actual) {
+  const submittedSet = new Set(submitted);
+  const middle = submitted.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY && submittedSet.has(key));
+  const actualMiddle = actual.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY);
+  for (const key of actualMiddle) if (!middle.includes(key)) middle.push(key);
+  return [
+    ...actual.includes(DEFAULT_POOL_KEY) ? [DEFAULT_POOL_KEY] : [],
+    ...middle,
+    ...actual.includes(TRASH_POOL_KEY) ? [TRASH_POOL_KEY] : []
+  ];
+}
+__name(normalizePoolOrder, "normalizePoolOrder");
 
-function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnabled }) {
-    return `
-<script>
-    // ===== Client state =====
-    const TARGETS = ${targetsJson};
-    let SETTINGS = ${settingsJson};
-    const INITIAL_APP_CONFIG = ${appConfigJson};
-    const AUTH_ENABLED = ${authEnabled ? 'true' : 'false'};
-    const MODE_LABELS = {'A': 'A/AAAA', 'TXT': 'TXT'};
-    const CONFIG_TEXT_FIELDS = ${JSON.stringify(CONFIG_TEXT_FIELDS.map(({ key, id }) => [key, id]))};
-    const CONFIG_NUMBER_FIELDS = ${JSON.stringify(CONFIG_NUMBER_FIELDS.map(({ key, id }) => [key, id]))};
-    const CONFIG_TOGGLE_FIELDS = ${JSON.stringify(CONFIG_TOGGLE_FIELDS.map(({ key, id, fallback }) => [key, id, fallback]))};
-    let currentTargetIndex = 0;
-    const POOL_DEFAULT_KEY = '${POOL_DEFAULT_KEY}';
-    const POOL_TRASH_KEY = '${POOL_TRASH_KEY}';
-    let currentPool = POOL_DEFAULT_KEY;
-    let abortController = null;
-    let domainPoolMapping = {};
-    let domainPoolOrder = [];
-    let availablePools = [POOL_DEFAULT_KEY];
-    let poolDisplayNames = {};
-    let toastTimer = null;
-    let configDraft = null;
-    let configSavedSnapshot = null;
-    let configDirty = false;
-    // 检测中断状态
-    let activeBatchRun = null; // 逐项状态；停止后等在途请求结束再决定是否继续
+// app/src/domain/pool-text.ts
+function cleanPoolText(text3) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const rawLine of String(text3 ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const entry = parsePoolEntry(line);
+    if (!entry) continue;
+    const target = parseProxyTarget(entry.address, 443);
+    if (!target) continue;
+    entries.set(target.key, formatPoolEntry({ ...entry, address: target.authority }));
+  }
+  return [...entries.values()].join("\n");
+}
+__name(cleanPoolText, "cleanPoolText");
+function countPoolTextLines(text3) {
+  const trimmed = String(text3 ?? "").trim();
+  return trimmed ? trimmed.split("\n").length : 0;
+}
+__name(countPoolTextLines, "countPoolTextLines");
 
-    const byId = id => document.getElementById(id);
-    const nonEmptyLines = text => String(text || '').split('\\n').filter(line => line.trim());
-    const getInputLines = id => {
-        const el = byId(id);
-        return el ? nonEmptyLines(el.value) : [];
-    };
-    const setElementValue = (id, value) => {
-        const el = byId(id);
-        if (el) el.value = value || '';
-    };
-    const setInputValueAndPreview = (id, value) => {
-        setElementValue(id, value);
-        updateFilterPreview();
-    };
+// app/src/domain/remote-url.ts
+var BLOCKED_HOSTNAMES = /* @__PURE__ */ new Set([
+  "localhost",
+  "metadata",
+  "metadata.google.internal",
+  "metadata.goog",
+  "instance-data"
+]);
+var BLOCKED_SUFFIXES = [".localhost", ".internal", ".local", ".home.arpa"];
+function validateRemoteUrl(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed || trimmed.length > 2048) return { ok: false, reason: "invalid-url" };
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: "invalid-url" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, reason: "invalid-url" };
+  if (url.username || url.password) return { ok: false, reason: "invalid-url" };
+  if (isPrivateHost(url.hostname)) return { ok: false, reason: "blocked-host" };
+  return { ok: true, url };
+}
+__name(validateRemoteUrl, "validateRemoteUrl");
+function isPrivateHost(hostname) {
+  const host = normalizeHost(hostname);
+  if (!host) return true;
+  if (BLOCKED_HOSTNAMES.has(host)) return true;
+  if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) return true;
+  const ipv4 = parseIpv4(host);
+  if (ipv4) return isPrivateIpv4(ipv4);
+  if (host.includes(":")) return isPrivateIpv6(host);
+  return false;
+}
+__name(isPrivateHost, "isPrivateHost");
+function normalizeHost(hostname) {
+  const host = String(hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
+  if (host.startsWith("[") && host.endsWith("]")) return host.slice(1, -1);
+  const zoneIndex = host.indexOf("%");
+  return zoneIndex === -1 ? host : host.slice(0, zoneIndex);
+}
+__name(normalizeHost, "normalizeHost");
+function parseIpv4(host) {
+  const parts = host.split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => /^\d{1,3}$/.test(part) ? Number(part) : Number.NaN);
+  return octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) ? octets : null;
+}
+__name(parseIpv4, "parseIpv4");
+function isPrivateIpv4(octets) {
+  const [a, b] = octets;
+  if (a === 0) return true;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 192 && b === 0) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a >= 224) return true;
+  return false;
+}
+__name(isPrivateIpv4, "isPrivateIpv4");
+function isPrivateIpv6(host) {
+  const groups = expandIpv6(host);
+  if (!groups) return true;
+  const [first = 0, second = 0, third = 0, fourth = 0, fifth = 0, sixth = 0, seventh = 0, eighth = 0] = groups;
+  const leading = [first, second, third, fourth, fifth, sixth];
+  const isV4Compatible = leading.every((group) => group === 0);
+  const isV4Mapped = sixth === 65535 && leading.slice(0, 5).every((group) => group === 0);
+  if (isV4Compatible || isV4Mapped) {
+    return isPrivateIpv4([seventh >> 8, seventh & 255, eighth >> 8, eighth & 255]);
+  }
+  if ((first & 65024) === 64512) return true;
+  if ((first & 65472) === 65152) return true;
+  if ((first & 65280) === 65280) return true;
+  return false;
+}
+__name(isPrivateIpv6, "isPrivateIpv6");
+function expandIpv6(address) {
+  let value = address;
+  const tailStart = value.lastIndexOf(":") + 1;
+  const tail = value.slice(tailStart);
+  if (tail.includes(".")) {
+    const octets = parseIpv4(tail);
+    if (!octets) return null;
+    const [a, b, c, d] = octets;
+    value = `${value.slice(0, tailStart)}${(a << 8 | b).toString(16)}:${(c << 8 | d).toString(16)}`;
+  }
+  const halves = value.split("::");
+  if (halves.length > 2) return null;
+  const readGroups = /* @__PURE__ */ __name((part) => {
+    if (!part) return [];
+    const groups = part.split(":").map((group) => /^[0-9a-f]{1,4}$/.test(group) ? parseInt(group, 16) : -1);
+    return groups.some((group) => group < 0) ? null : groups;
+  }, "readGroups");
+  const head = readGroups(halves[0] ?? "");
+  const body = readGroups(halves[1] ?? "");
+  if (!head || !body) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const zeros = 8 - head.length - body.length;
+  return zeros >= 1 ? [...head, ...new Array(zeros).fill(0), ...body] : null;
+}
+__name(expandIpv6, "expandIpv6");
 
+// app/src/application/remote-pool-loader.ts
+var DEFAULT_MAX_REMOTE_BYTES = 512 * 1024;
+var DEFAULT_MAX_REDIRECTS = 3;
+var REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+var RemotePoolLoader = class {
+  static {
+    __name(this, "RemotePoolLoader");
+  }
+  timeoutMs;
+  maxBytes;
+  maxRedirects;
+  fetchImpl;
+  constructor(options) {
+    this.timeoutMs = options.timeoutMs;
+    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_REMOTE_BYTES;
+    this.maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+  async load(rawUrl, options = {}) {
+    let target = validateRemoteUrl(rawUrl);
+    if (!target.ok) return { ok: false, reason: target.reason };
+    for (let hop = 0; hop <= this.maxRedirects; hop += 1) {
+      const response = await this.fetchOnce(target.url, options);
+      if (!response.ok) return response;
+      const location = response.value.headers.get("location");
+      if (REDIRECT_STATUSES.has(response.value.status) && location) {
+        const next = validateRedirect(location, target.url);
+        if (!next.ok) return { ok: false, reason: next.reason };
+        target = next;
+        continue;
+      }
+      return await this.readBody(response.value, target.url.toString());
+    }
+    return { ok: false, reason: "too-many-redirects" };
+  }
+  async fetchOnce(url, options) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortUpstream = /* @__PURE__ */ __name(() => controller.abort(), "abortUpstream");
+    options.signal?.addEventListener("abort", abortUpstream, { once: true });
+    try {
+      const response = await this.fetchImpl(url.toString(), {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: { accept: "text/plain, text/*;q=0.9, */*;q=0.8" }
+      });
+      if (REDIRECT_STATUSES.has(response.status) && response.headers.get("location")) return { ok: true, value: response };
+      if (!response.ok) return { ok: false, reason: "http-error" };
+      return { ok: true, value: response };
+    } catch {
+      return this.timedOut(options.signal, controller.signal) ? { ok: false, reason: "timeout" } : { ok: false, reason: "network-error" };
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abortUpstream);
+    }
+  }
+  async readBody(response, finalUrl) {
+    const declared = Number(response.headers.get("content-length") ?? Number.NaN);
+    if (Number.isFinite(declared) && declared > this.maxBytes) return { ok: false, reason: "too-large" };
+    let text3;
+    try {
+      text3 = await response.text();
+    } catch {
+      return { ok: false, reason: "network-error" };
+    }
+    if (text3.length > this.maxBytes) return { ok: false, reason: "too-large" };
+    return { ok: true, content: cleanPoolText(text3), finalUrl };
+  }
+  /** 只有本地超时控制器被触发、且调用方没有主动取消，才算超时。 */
+  timedOut(upstream, local) {
+    return local.aborted && !upstream?.aborted;
+  }
+};
+function validateRedirect(location, base) {
+  try {
+    return validateRemoteUrl(new URL(location, base).toString());
+  } catch {
+    return { ok: false, reason: "invalid-url" };
+  }
+}
+__name(validateRedirect, "validateRedirect");
 
-    // ===== Modal / small UI helpers =====
-    // 自定义模态对话框
-    function showCheckInterruptModal(stats) {
-        return new Promise((resolve) => {
-            const overlay = document.createElement('div');
-            overlay.className = 'custom-modal-overlay';
-            overlay.innerHTML = \`
-                <div class="custom-modal">
-                    <div class="custom-modal-title">⏸️ 检测已中断</div>
-                    <div class="custom-modal-stats">
-                        <div><span class="label">已检测</span><span class="value">\${stats.checked} / \${stats.total}</span></div>
-                        <div><span class="label">有效IP</span><span class="value">\${stats.valid} 个</span></div>
-                        <div><span class="label">有效率</span><span class="value">\${stats.rate}%</span></div>
-                        <div><span class="label">未检测</span><span class="value">\${stats.unchecked} 个</span></div>
-                    </div>
-                    <div class="custom-modal-buttons">
-                        <button class="btn-abandon" id="modal-abandon">放弃检测</button>
-                        <button class="btn-continue" id="modal-continue">继续</button>
-                    </div>
-                </div>
-            \`;
-            document.body.appendChild(overlay);
+// app/src/adapters/probe/probe-payload.ts
+function readText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : void 0;
+}
+__name(readText, "readText");
+function firstText(record, keys) {
+  for (const key of keys) {
+    const value = readText(record[key]);
+    if (value) return value;
+  }
+  return void 0;
+}
+__name(firstText, "firstText");
+function readProbeExit(record, stackHint) {
+  const ip = firstText(record, ["ip", "ipAddress", "exitIp", "exit_ip", "address", "query"]);
+  const family = normalizeSingleExitFamily(readText(record.ipType) ?? readText(record.type) ?? stackHint, ip);
+  const asn = normalizeAsn2(firstText(record, ["asn", "as", "asNumber"]));
+  const country = firstText(record, ["country", "countryCode"]);
+  const organization = firstText(record, ["asOrganization", "asname", "org", "isp"]);
+  if (!ip && !asn && !country && !organization && family === "unknown") return null;
+  return {
+    family,
+    ...ip ? { ip } : {},
+    ...asn ? { asn } : {},
+    ...country ? { country: country.toUpperCase() } : {},
+    ...organization ? { organization } : {}
+  };
+}
+__name(readProbeExit, "readProbeExit");
+function normalizeSingleExitFamily(value, ip) {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "ipv4" || normalized === "v4" || normalized === "ipv4-only" || normalized === "only-ipv4") return "ipv4";
+  if (normalized === "ipv6" || normalized === "v6" || normalized === "ipv6-only" || normalized === "only-ipv6") return "ipv6";
+  const inferred = exitFamilyFromIp(ip);
+  return inferred === "ipv4" || inferred === "ipv6" ? inferred : "unknown";
+}
+__name(normalizeSingleExitFamily, "normalizeSingleExitFamily");
+function normalizeAsn2(value) {
+  if (!value) return void 0;
+  const normalized = value.trim().replace(/^AS/i, "").toUpperCase();
+  return normalized || void 0;
+}
+__name(normalizeAsn2, "normalizeAsn");
+function uniqueExits(exits) {
+  const seen = /* @__PURE__ */ new Set();
+  return exits.filter((exit) => {
+    const key = `${exit.family}:${exit.ip ?? ""}:${exit.asn ?? ""}:${exit.country ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+__name(uniqueExits, "uniqueExits");
 
-            byId('modal-continue').onclick = () => {
-                document.body.removeChild(overlay);
-                resolve(true);
-            };
-            byId('modal-abandon').onclick = () => {
-                document.body.removeChild(overlay);
-                resolve(false);
-            };
+// app/src/adapters/probe/external-api.ts
+var ExternalApiProbeAdapter = class {
+  static {
+    __name(this, "ExternalApiProbeAdapter");
+  }
+  name = "external-api";
+  endpoints;
+  timeoutMs;
+  fallbackToNext;
+  fetchImpl;
+  constructor(options) {
+    if (options.endpoints.length === 0) throw new Error("external-api probe requires at least one endpoint");
+    this.endpoints = options.endpoints;
+    this.timeoutMs = options.timeoutMs;
+    this.fallbackToNext = options.fallbackToNext ?? true;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+  async probe(target, context = {}) {
+    const attempts = [];
+    for (const endpoint of this.endpoints) {
+      const result = await this.probeEndpoint(target, endpoint, context);
+      attempts.push(result);
+      if (result.status === "alive") return result;
+      if (!this.fallbackToNext) return result;
+      if (context.signal?.aborted) return result;
+    }
+    return attempts.find((result) => result.status === "dead") ?? attempts.at(-1) ?? unknown(target, "NO_ENDPOINT", "\u6CA1\u6709\u53EF\u7528\u7684\u68C0\u6D4B\u63A5\u53E3");
+  }
+  async probeEndpoint(target, endpoint, context) {
+    const startedAt = Date.now();
+    const timeout = createRequestTimeout(endpoint.timeoutMs ?? this.timeoutMs, context.signal);
+    try {
+      const url = buildProbeUrl(endpoint.urlTemplate, target);
+      const init = { method: "GET", signal: timeout.signal };
+      if (endpoint.headers) init.headers = endpoint.headers;
+      const response = await this.fetchImpl(url, init);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => void 0);
+        return unknown(target, "HTTP_ERROR", `\u68C0\u6D4B\u63A5\u53E3 HTTP ${response.status}`, {
+          endpoint: endpoint.name,
+          latencyMs: Date.now() - startedAt
         });
-    }
-
-    // 池名显示（统一格式）
-    const POOL_NAMES = { [POOL_DEFAULT_KEY]: '默认池', [POOL_TRASH_KEY]: '🗑️ 垃圾桶' };
-    const NUMBERED_POOL_KEY_RE = /^ip_pool_(\\d{3})$/;
-    function getPoolName(key) {
-        if (poolDisplayNames[key]) return poolDisplayNames[key];
-        if (POOL_NAMES[key]) return POOL_NAMES[key];
-        const numbered = NUMBERED_POOL_KEY_RE.exec(key || '');
-        if (numbered) return \`池 \${numbered[1]}\`;
-        return String(key || '').replace(/^ip_pool_/, '池 ');
-    }
-    function getPoolFixedName(key) {
-        if (POOL_NAMES[key]) return POOL_NAMES[key];
-        const numbered = NUMBERED_POOL_KEY_RE.exec(key || '');
-        if (numbered) return \`池 \${numbered[1]}\`;
-        return getPoolName(key);
-    }
-    function comparePoolKeys(a, b) {
-        const order = key => key === POOL_DEFAULT_KEY ? 0 : (key === POOL_TRASH_KEY ? 1 : 2);
-        const oa = order(a);
-        const ob = order(b);
-        if (oa !== ob) return oa - ob;
-        const na = NUMBERED_POOL_KEY_RE.exec(a || '');
-        const nb = NUMBERED_POOL_KEY_RE.exec(b || '');
-        if (na && nb) return Number(na[1]) - Number(nb[1]);
-        if (na) return -1;
-        if (nb) return 1;
-        return String(a || '').localeCompare(String(b || ''), 'zh-CN', { numeric: true });
-    }
-
-    function getBoundPoolForTarget(target = {}) {
-        const key = getTargetDuplicateKey(target);
-        const domain = String(target.domain || '').trim().toLowerCase();
-        return domainPoolMapping[key] || domainPoolMapping[domain] || domainPoolMapping[target.domain] || POOL_DEFAULT_KEY;
-    }
-
-    function renderTargetSummary(target = {}) {
-        if (!target.domain) {
-            return '<span class="target-summary-domain">未配置维护域名</span><span class="target-summary-meta">请先到配置中心添加</span>';
-        }
-        const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-        const modeLabel = MODE_LABELS[mode] || mode;
-        const modeShortLabel = mode === 'TXT' ? 'T' : 'A';
-        const port = String(target.port || '').trim();
-        const meta = mode !== 'TXT' && port && port !== 'any' ? '端口 ' + port : modeLabel + ' 记录';
-        return '<span class="record-badge record-badge-' + mode.toLowerCase() + '" title="' + escapeHTML(modeLabel) + '">' + escapeHTML(modeShortLabel) + '</span>' +
-            '<span class="target-summary-domain">' + escapeHTML(target.domain) + '</span>' +
-            '<span class="target-summary-meta">' + escapeHTML(meta) + '</span>';
-    }
-
-    function applyPoolState(state = {}) {
-        domainPoolMapping = state.mapping && typeof state.mapping === 'object' && !Array.isArray(state.mapping) ? state.mapping : {};
-        availablePools = Array.isArray(state.pools) && state.pools.length ? state.pools : [POOL_DEFAULT_KEY, POOL_TRASH_KEY];
-        poolDisplayNames = state.poolNames && typeof state.poolNames === 'object' && !Array.isArray(state.poolNames) ? state.poolNames : {};
-        if (Array.isArray(state.domainPoolOrder)) domainPoolOrder = state.domainPoolOrder;
-        if (!availablePools.includes(currentPool)) currentPool = POOL_DEFAULT_KEY;
-        updatePoolSelector();
-        updateDomainBindingTable();
-    }
-
-    // ===== Form / toast / navigation helpers =====
-    function setInputValue(id, value) {
-        const el = byId(id);
-        if (el) el.value = value || '';
-    }
-
-    function getInputValue(id) {
-        const el = byId(id);
-        return el ? el.value.trim() : '';
-    }
-
-    function getNumberInputValue(id, fallback) {
-        const value = parseInt(getInputValue(id), 10);
-        return Number.isFinite(value) ? value : fallback;
-    }
-
-    function showToast(message, type = 'success') {
-        const el = byId('toast');
-        if (!el) return;
-        el.textContent = message;
-        el.className = \`toast \${type} show\`;
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => {
-            el.classList.remove('show');
-        }, 2600);
-    }
-
-    async function copyText(value, label = '内容') {
-        const text = String(value || '').trim();
-        if (!text) return;
-        try {
-            await navigator.clipboard.writeText(text);
-            showToast(label + '已复制');
-            log('✓ 已复制' + label, 'success');
-        } catch (e) {
-            showToast('复制失败', 'error');
-            log('✗ 复制失败: ' + e.message, 'error');
-        }
-    }
-
-    function showPage(page) {
-        document.querySelectorAll('.page-panel').forEach(el => el.classList.toggle('active', el.id === \`page-\${page}\`));
-        document.querySelectorAll('.nav-tab').forEach(el => el.classList.toggle('active', el.dataset.page === page));
-    }
-
-    function toggleHidden(id) {
-        const el = byId(id);
-        if (el) el.hidden = !el.hidden;
-    }
-
-    function resetConfigDraft() {
-        loadAppConfigToForm(configSavedSnapshot || INITIAL_APP_CONFIG, false);
-        closeConfigEditor('zone');
-        closeConfigEditor('target');
-        showToast('已还原未保存改动');
-    }
-
-    function cloneConfig(config) {
-        return JSON.parse(JSON.stringify(config || {}));
-    }
-
-    function setConfigDirty(dirty, message) {
-        configDirty = dirty;
-        document.querySelectorAll('#btn-save-config,#btn-cancel-config').forEach(btn => {
-            btn.hidden = !configDirty;
+      }
+      const text3 = await response.text();
+      let payload;
+      try {
+        payload = JSON.parse(text3);
+      } catch {
+        return unknown(target, "INVALID_JSON", "\u68C0\u6D4B\u63A5\u53E3\u8FD4\u56DE\u7684 JSON \u65E0\u6CD5\u89E3\u6790", {
+          endpoint: endpoint.name,
+          latencyMs: Date.now() - startedAt
         });
-        if (message) showToast(message, 'info');
-    }
-
-    // ===== Config center =====
-    function normalizeDraftZone(zone = {}, index = 0) {
-        const label = String(zone.label || zone.name || zone.baseDomain || '').trim();
-        return {
-            name: label,
-            label,
-            baseDomain: String(zone.baseDomain || '').trim(),
-            zoneId: String(zone.zoneId || '').trim(),
-            apiKey: String(zone.apiKey || '').trim()
-        };
-    }
-
-    function hasZoneConfigValue(zone = {}) {
-        return Boolean(String(zone.baseDomain || '').trim() || String(zone.zoneId || '').trim() || String(zone.apiKey || '').trim());
-    }
-
-    function normalizeConfigCompareValue(value) {
-        return String(value || '').trim().toLowerCase();
-    }
-
-    function findDuplicateDraftValue(items, keyFn, skipIndex = -1) {
-        const seen = new Set();
-        for (let i = 0; i < (items || []).length; i++) {
-            if (i === skipIndex) continue;
-            const key = normalizeConfigCompareValue(keyFn(items[i]));
-            if (!key) continue;
-            if (seen.has(key)) return key;
-            seen.add(key);
-        }
-        return '';
-    }
-
-    function getZoneDuplicateMessage(zones, skipIndex = -1) {
-        const duplicateBaseDomain = findDuplicateDraftValue(zones, zone => zone.baseDomain, skipIndex);
-        if (duplicateBaseDomain) return '权限配置重复：' + duplicateBaseDomain;
-        return '';
-    }
-
-    function getTargetDuplicateKey(target = {}) {
-        const domain = normalizeConfigCompareValue(target.domain || computeDomainFromTarget(target));
-        const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-        return domain ? domain + '|' + mode : '';
-    }
-
-    function formatTargetDuplicateKey(key) {
-        const parts = String(key || '').split('|');
-        const domain = parts[0] || '';
-        const mode = parts[1] === 'TXT' ? 'TXT' : 'A/AAAA';
-        return domain + ' / ' + mode;
-    }
-
-    function getTargetDuplicateMessage(targets, skipIndex = -1) {
-        const duplicateTarget = findDuplicateDraftValue(targets, getTargetDuplicateKey, skipIndex);
-        return duplicateTarget ? '管理域名重复：' + formatTargetDuplicateKey(duplicateTarget) : '';
-    }
-
-    function getDraftZones() {
-        if (!configDraft) configDraft = cloneConfig(INITIAL_APP_CONFIG);
-        configDraft.zones = (Array.isArray(configDraft.zones) ? configDraft.zones : [])
-            .map(normalizeDraftZone)
-            .filter(hasZoneConfigValue);
-        return configDraft.zones;
-    }
-
-    function getDraftTargets() {
-        if (!configDraft) configDraft = cloneConfig(INITIAL_APP_CONFIG);
-        configDraft.targets = (Array.isArray(configDraft.targets) ? configDraft.targets : [])
-            .filter(target => target && typeof target === 'object');
-        return configDraft.targets;
-    }
-
-    function getZoneDisplayName(index) {
-        const zone = getDraftZones()[index] || {};
-        return zone.baseDomain || zone.label || zone.zoneId
-            ? [zone.label || zone.name || zone.baseDomain || '未命名权限配置', zone.baseDomain].filter((value, itemIndex, values) => value && values.indexOf(value) === itemIndex).join(' · ')
-            : '未选择权限配置';
-    }
-
-    function computeDomainFromTarget(target = {}) {
-        const zones = getDraftZones();
-        const zone = zones[parseInt(target.zoneIndex || 0, 10)] || zones[0] || {};
-        const baseDomain = zone.baseDomain || target.baseDomain || '';
-        const prefix = String(target.prefix || '').trim().replace(/^\\.+|\\.+$/g, '');
-        return baseDomain ? (prefix ? prefix + '.' + baseDomain : baseDomain) : String(target.domain || '').trim();
-    }
-
-    function renderConfigCards() {
-        renderZoneConfigRows(getDraftZones());
-        renderTargetConfigRows(getDraftTargets());
-    }
-
-    const ZONE_SAVED_MSG = '权限配置已保存到页面，点击“保存到 KV”后生效';
-    const TARGET_SAVED_MSG = '管理域名已保存到页面，点击“保存到 KV”后生效';
-
-    function applyConfigDraftChange(key, value, editorType, message) {
-        configDraft[key] = value;
-        renderConfigCards();
-        closeConfigEditor(editorType);
-        setConfigDirty(true, message);
-    }
-
-    function renderConfigRows(listId, rows, draftKey, renderCard, emptyHtml) {
-        const list = byId(listId);
-        if (!list) return;
-        if (configDraft) configDraft[draftKey] = rows;
-        list.innerHTML = rows.length ? rows.map((item, index) => renderCard(item, index)).join('') : emptyHtml;
-    }
-
-    function renderZoneConfigRows(zones) {
-        const rows = (Array.isArray(zones) ? zones : []).map(normalizeDraftZone).filter(hasZoneConfigValue);
-        renderConfigRows('zone-config-list', rows, 'zones', buildZoneCard, '<div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>');
-    }
-
-    function buildZoneCard(zone = {}, index = 0) {
-        const title = zone.label || zone.name || zone.baseDomain || '未命名权限配置';
-        return \`
-            <div class="config-mini-card" onclick="editZoneConfig(\${index})">
-                <h5>\${escapeHTML(title)}</h5>
-                <div class="meta"><span>\${escapeHTML(zone.baseDomain || '未设置维护域名')}</span></div>
-                <div class="meta"><span>Zone: \${escapeHTML(zone.zoneId ? '已填写' : '未填写')}</span><span>CF Key: \${escapeHTML(zone.apiKey ? '已填写' : '未填写')}</span></div>
-                <div class="actions" onclick="event.stopPropagation()">
-                    <button class="btn btn-outline-primary btn-sm config-edit-action" onclick="editZoneConfig(\${index})">编辑</button>
-                    <button class="btn btn-outline-danger btn-sm config-edit-action" onclick="deleteZoneConfig(\${index})">删除</button>
-                </div>
-            </div>
-        \`;
-    }
-
-    function addZoneConfigRow() {
-        const zones = getDraftZones();
-        showZoneEditor(zones.length, { label: '', baseDomain: '', zoneId: '', apiKey: '' });
-    }
-
-    function collectZoneConfigRows() {
-        return getDraftZones().map(normalizeDraftZone).filter(zone => zone.baseDomain || zone.zoneId || zone.apiKey);
-    }
-
-    function getZoneOptionsHtml(selectedIndex) {
-        const zones = getDraftZones();
-        if (!zones.length) {
-            return '<option value="" disabled selected>请先添加权限配置</option>';
-        }
-        return zones.map((zone, index) => {
-            const label = [zone.label || zone.name || zone.baseDomain || '未命名权限配置', zone.baseDomain].filter((value, itemIndex, values) => value && values.indexOf(value) === itemIndex).join(' · ');
-            return \`<option value="\${index}" \${Number(selectedIndex) === index ? 'selected' : ''}>\${escapeHTML(label)}</option>\`;
-        }).join('');
-    }
-
-    function editZoneConfig(index) {
-        const panel = byId('zone-edit-panel');
-        const editorKey = 'zone:' + index;
-        if (panel?.classList.contains('active') && panel.dataset.editorKey === editorKey) {
-            closeConfigEditor('zone');
-            return;
-        }
-        showZoneEditor(index, getDraftZones()[index] || {});
-    }
-
-    function openConfigEditor(type, title, content, editorKey = '') {
-        const panel = byId(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
-        if (!panel) return null;
-        panel.classList.add('active');
-        panel.dataset.editorKey = editorKey;
-        panel.innerHTML = '<h6 class="mb-3 fw-bold">' + title + '</h6>' + content;
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        return panel;
-    }
-
-    function renderField(tag, { id, label, hint = '', value = '', placeholder = '', className = 'form-control form-control-sm', attrs = '' }, content = '') {
-        const body = tag === 'select'
-            ? '<select id="' + id + '" class="' + className + '" ' + attrs + '>' + content + '</select>'
-            : '<input id="' + id + '" class="' + className + '" value="' + escapeHTML(value) + '" placeholder="' + placeholder + '" ' + attrs + '>';
-        return '<label class="field"><span>' + label + '</span><small>' + hint + '</small>' + body + '</label>';
-    }
-
-    function renderEditorActions(type, submitAction) {
-        return '<div class="config-edit-actions"><button class="btn btn-outline-secondary btn-sm" onclick="closeConfigEditor(&quot;' + escapeHTML(type) + '&quot;)">取消</button><button class="btn btn-primary btn-sm" onclick="' + submitAction + '">保存到页面</button></div>';
-    }
-
-    function showZoneEditor(index, zone = {}) {
-        const panel = byId('zone-edit-panel');
-        if (!panel) return;
-        const noteValue = zone.label && zone.label !== zone.baseDomain
-            ? zone.label
-            : (zone.name && zone.name !== zone.baseDomain ? zone.name : '');
-        const zoneFields = [
-            renderField('input', { id: 'edit-zone-label', label: '备注', hint: '可选；不填时使用维护域名。', value: noteValue, placeholder: '可选' }),
-            renderField('input', { id: 'edit-zone-base', label: '目标维护域名', hint: '目前只支持托管在cf的域名', value: zone.baseDomain || '', placeholder: 'example.com' }),
-            renderField('input', { id: 'edit-zone-id', label: 'Zone ID', hint: 'Cloudflare 区域 ID。', value: zone.zoneId || '', placeholder: 'Zone ID' }),
-            '<label class="field span-2"><span>CF Key</span><small>需要 DNS 编辑权限。</small><input id="edit-zone-key" class="form-control form-control-sm" value="' + escapeHTML(zone.apiKey || '') + '" placeholder="CF API Token"></label>'
-        ].join('');
-        openConfigEditor('zone', (index >= getDraftZones().length ? '添加' : '编辑') + '权限配置', '<div class="config-edit-grid">' + zoneFields + '</div>' + renderEditorActions('zone', 'commitZoneEditor(' + index + ')'), 'zone:' + index);
-    }
-
-    function commitZoneEditor(index) {
-        const zones = getDraftZones();
-        const nextZone = normalizeDraftZone({
-            label: getInputValue('edit-zone-label'),
-            baseDomain: getInputValue('edit-zone-base'),
-            zoneId: getInputValue('edit-zone-id'),
-            apiKey: getInputValue('edit-zone-key')
-        }, index);
-        if (!hasZoneConfigValue(nextZone)) {
-            showToast('请至少填写目标维护域名、Zone ID 或 CF Key', 'error');
-            return;
-        }
-        const nextZones = zones.slice();
-        nextZones[index] = nextZone;
-        const duplicateMessage = getZoneDuplicateMessage(nextZones);
-        if (duplicateMessage) {
-            showToast(duplicateMessage, 'error');
-            return;
-        }
-        applyConfigDraftChange('zones', nextZones, 'zone', ZONE_SAVED_MSG);
-    }
-
-    function deleteZoneConfig(index) {
-        const zones = getDraftZones();
-        if (!confirm('确认删除这个权限配置？相关管理域名会改到第一组权限配置。')) return;
-        zones.splice(index, 1);
-        configDraft.targets = getDraftTargets().map(target => ({
-            ...target,
-            zoneIndex: target.zoneIndex === index ? 0 : (target.zoneIndex > index ? target.zoneIndex - 1 : target.zoneIndex)
-        }));
-        applyConfigDraftChange('zones', zones.map(normalizeDraftZone).filter(hasZoneConfigValue), 'zone', ZONE_SAVED_MSG);
-    }
-
-    function closeConfigEditor(type) {
-        const panel = byId(type === 'zone' ? 'zone-edit-panel' : 'target-edit-panel');
-        if (panel) {
-            panel.classList.remove('active');
-            delete panel.dataset.editorKey;
-            panel.innerHTML = '';
-        }
-    }
-
-    function renderTargetConfigRows(targets) {
-        const rows = (Array.isArray(targets) ? targets : []).filter(target => target && typeof target === 'object');
-        renderConfigRows('target-config-list', rows, 'targets', buildTargetCard, '<div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>');
-    }
-
-    function buildTargetCard(target = {}, index = 0) {
-        const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-        const domain = computeDomainFromTarget(target);
-        const meta = mode === 'TXT' ? 'TXT' : 'A/AAAA · ' + (target.port || '443');
-        const exitLabel = { any: '任意出口', v4: 'IPv4出口', v6: 'IPv6出口', dual: '双栈出口' }[target.exitFilter || 'any'] || '任意出口';
-        const filters = [target.country ? '国家 ' + target.country : '', target.asn ? 'ASN ' + target.asn : ''].filter(Boolean).join(' · ');
-        const enabled = target.enabled !== false;
-        return \`
-            <div class="config-mini-card" onclick="editTargetConfig(\${index})">
-                <h5>\${escapeHTML(domain || '等待生成')}</h5>
-                <div class="meta"><span>\${escapeHTML(meta)}</span><span>\${escapeHTML(exitLabel)}</span><span>\${escapeHTML(getZoneDisplayName(target.zoneIndex || 0))}</span><span>\${enabled ? '维护开启' : '维护关闭'}</span></div>
-                <div class="meta"><span>活跃数 \${escapeHTML(String(target.minActive ?? 3))}</span>\${filters ? '<span>' + escapeHTML(filters) + '</span>' : ''}</div>
-                <div class="actions" onclick="event.stopPropagation()">
-                    <label class="switch" title="单独控制这个域名是否参与维护">
-                        <input type="checkbox" \${enabled ? 'checked' : ''} onchange="toggleTargetEnabled(\${index}, this.checked)">
-                        <span class="switch-slider"></span>
-                    </label>
-                    <button class="btn btn-outline-primary btn-sm config-edit-action" onclick="editTargetConfig(\${index})">编辑</button>
-                    <button class="btn btn-outline-danger btn-sm config-edit-action" onclick="deleteTargetConfig(\${index})">删除</button>
-                </div>
-            </div>
-        \`;
-    }
-
-    function addTargetConfigRow() {
-        if (!getDraftZones().length) {
-            showToast('请先添加权限配置，再创建管理域名', 'error');
-            return;
-        }
-        showTargetEditor(getDraftTargets().length, { mode: 'A', zoneIndex: 0, prefix: '', port: '443', minActive: (configDraft?.settings?.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE) });
-    }
-
-    function loadAppConfigToForm(config, updateSnapshot = true) {
-        configDraft = cloneConfig(config);
-        if (updateSnapshot) configSavedSnapshot = cloneConfig(config);
-        CONFIG_TEXT_FIELDS.forEach(([key, id]) => setInputValue(id, config[key]));
-        const settings = config.settings || SETTINGS;
-        CONFIG_NUMBER_FIELDS.forEach(([key, id]) => setInputValue(id, settings[key] ?? SETTINGS[key]));
-        CONFIG_TOGGLE_FIELDS.forEach(([key, id, fallback]) => {
-            const el = byId(id);
-            if (el) el.checked = config[key] === undefined ? fallback : config[key] !== false;
+      }
+      return parseProbePayload(payload, target, endpoint.name, Date.now() - startedAt);
+    } catch (error) {
+      const latencyMs = Date.now() - startedAt;
+      if (context.signal?.aborted) {
+        return unknown(target, "CANCELLED", "\u68C0\u6D4B\u5DF2\u53D6\u6D88", { endpoint: endpoint.name, latencyMs });
+      }
+      if (timeout.didTimeout() || isAbortError(error)) {
+        return unknown(target, "TIMEOUT", `\u68C0\u6D4B\u8D85\u65F6 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, {
+          endpoint: endpoint.name,
+          latencyMs
         });
-        renderConfigCards();
-        setConfigDirty(false);
+      }
+      return unknown(target, "NETWORK_ERROR", "\u68C0\u6D4B\u63A5\u53E3\u7F51\u7EDC\u5F02\u5E38", {
+        endpoint: endpoint.name,
+        latencyMs
+      });
+    } finally {
+      timeout.cleanup();
     }
-
-    function collectTargetConfigRows() {
-        return getDraftTargets().map(target => ({
-            ...target,
-            domain: computeDomainFromTarget(target)
-        })).filter(target => target.domain);
-    }
-
-    function editTargetConfig(index) {
-        const panel = byId('target-edit-panel');
-        const editorKey = 'target:' + index;
-        if (panel?.classList.contains('active') && panel.dataset.editorKey === editorKey) {
-            closeConfigEditor('target');
-            return;
-        }
-        showTargetEditor(index, (getDraftTargets()[index] || {}));
-    }
-
-   function showTargetEditor(index, target = {}) {
-        const panel = byId('target-edit-panel');
-        if (!panel) return;
-        const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-        const modeOptions = ['A', 'TXT'].map(value => \`<option value="\${value}" \${mode === value ? 'selected' : ''}>\${MODE_LABELS[value]}</option>\`).join('');
-        const exit = target.exitFilter || 'any';
-        const portValue = mode === 'TXT' ? '任意' : (target.port || '443');
-        const previousAPort = mode === 'TXT' && target.port && target.port !== 'any' ? target.port : '443';
-        const exitOptions = '<option value="any" ' + (exit === 'any' ? 'selected' : '') + '>任意</option><option value="v4" ' + (exit === 'v4' ? 'selected' : '') + '>IPv4</option><option value="v6" ' + (exit === 'v6' ? 'selected' : '') + '>IPv6</option><option value="dual" ' + (exit === 'dual' ? 'selected' : '') + '>IPv4 & IPv6</option>';
-        const targetFields = [
-            renderField('input', { id: 'edit-target-prefix', label: '域名前缀', hint: '留空表示根域。', value: target.prefix || '', placeholder: 'kr' }),
-            renderField('input', { id: 'edit-target-min', label: '活跃数', hint: '最小可用数量。', value: String(target.minActive ?? 3), placeholder: '3', attrs: 'type="number" min="0"' }),
-            renderField('input', { id: 'edit-target-country', label: '国家', hint: '可填多个，逗号分隔；任一命中即可。', value: target.country || '', placeholder: 'JP,US,SG' }),
-            renderField('input', { id: 'edit-target-asn', label: 'ASN', hint: '可填多个，逗号分隔；任一命中即可。', value: target.asn || '', placeholder: '13335,209242' })
-        ].join('');
-        const targetContent = '<div class="config-edit-grid">'
-            + renderField('select', { id: 'edit-target-zone', label: '权限配置', hint: '选择配置1/2/3。', className: 'form-select form-select-sm' }, getZoneOptionsHtml(target.zoneIndex ?? 0))
-            + renderField('select', { id: 'edit-target-mode', label: '维护类型', hint: 'A/AAAA 或 TXT。', className: 'form-select form-select-sm', attrs: 'onchange="handleTargetModeChange()"' }, modeOptions)
-            + renderField('select', { id: 'edit-target-exit', label: '出口类型', hint: '由检测 API 实时判断。', className: 'form-select form-select-sm' }, exitOptions)
-            + targetFields
-            + '<label class="field"><span>端口</span><small id="edit-target-port-hint">A/AAAA 模式使用，TXT 为任意。</small><input id="edit-target-port" class="form-control form-control-sm" value="' + escapeHTML(portValue) + '" data-a-port="' + escapeHTML(previousAPort) + '" placeholder="443"></label>'
-            + '</div><input type="hidden" id="edit-target-enabled" value="' + (target.enabled !== false ? 'true' : 'false') + '">'
-            + renderEditorActions('target', 'commitTargetEditor(' + index + ')');
-        openConfigEditor('target', (index >= (configDraft?.targets || []).length ? '添加' : '编辑') + '管理域名', targetContent, 'target:' + index);
-        syncTargetPortMode();
-    }
-
-    function syncTargetPortMode() {
-        const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
-        const portInput = byId('edit-target-port');
-        const hint = byId('edit-target-port-hint');
-        if (!portInput) return;
-        if (mode === 'TXT') {
-            if (!portInput.dataset.aPort || portInput.value !== '任意') {
-                portInput.dataset.aPort = (portInput.value && portInput.value !== '任意') ? portInput.value : (portInput.dataset.aPort || '443');
-            }
-            portInput.value = '任意';
-            portInput.disabled = true;
-            if (hint) hint.textContent = 'TXT 模式不限制端口。';
-        } else {
-            portInput.disabled = false;
-            portInput.value = portInput.dataset.aPort || (portInput.value === '任意' ? '443' : portInput.value) || '443';
-            if (hint) hint.textContent = 'A/AAAA 模式使用。';
-        }
-    }
-
-    function handleTargetModeChange() {
-        const portInput = byId('edit-target-port');
-        if (portInput && !portInput.disabled && portInput.value && portInput.value !== '任意') {
-            portInput.dataset.aPort = portInput.value;
-        }
-        syncTargetPortMode();
-    }
-
-    function getTargetEditorValue() {
-        const zoneIndex = parseInt(getInputValue('edit-target-zone') || '0', 10) || 0;
-        const prefix = getInputValue('edit-target-prefix').replace(/^\\.+|\\.+$/g, '');
-        const mode = getInputValue('edit-target-mode') === 'TXT' ? 'TXT' : 'A';
-        const portInput = byId('edit-target-port');
-        const port = mode === 'TXT' ? 'any' : ((portInput?.value || '').trim() || '443');
-        const parsedMinActive = parseInt(getInputValue('edit-target-min'), 10);
-        const minActive = Number.isFinite(parsedMinActive) ? Math.max(0, parsedMinActive) : (configDraft?.settings?.DEFAULT_MIN_ACTIVE ?? SETTINGS.DEFAULT_MIN_ACTIVE);
-        const target = {
-            mode,
-            zoneIndex,
-            prefix,
-            port,
-            minActive,
-            country: getInputValue('edit-target-country').toUpperCase(),
-            asn: getInputValue('edit-target-asn').toUpperCase(),
-            exitFilter: getInputValue('edit-target-exit') || 'any',
-            enabled: getInputValue('edit-target-enabled') !== 'false'
-        };
-        target.domain = computeDomainFromTarget(target);
-        return target;
-    }
-
-    function commitTargetEditor(index) {
-        const target = getTargetEditorValue();
-        if (!target.domain) {
-            showToast('请先填写权限配置和域名前缀', 'error');
-            return;
-        }
-        const targets = getDraftTargets();
-        const nextTargets = targets.slice();
-        nextTargets[index] = target;
-        const duplicateMessage = getTargetDuplicateMessage(nextTargets);
-        if (duplicateMessage) {
-            showToast(duplicateMessage, 'error');
-            return;
-        }
-        applyConfigDraftChange('targets', nextTargets, 'target', TARGET_SAVED_MSG);
-    }
-
-    function deleteTargetConfig(index) {
-        if (!confirm('确认删除这个管理域名？')) return;
-        const targets = getDraftTargets();
-        targets.splice(index, 1);
-        applyConfigDraftChange('targets', targets, 'target', TARGET_SAVED_MSG);
-    }
-
-    function toggleTargetEnabled(index, enabled) {
-        const targets = getDraftTargets();
-        if (!targets[index]) return;
-        targets[index].enabled = enabled;
-        configDraft.targets = targets;
-        renderConfigCards();
-        setConfigDirty(true, enabled ? '已开启该域名维护，点击“保存到 KV”后生效' : '已关闭该域名维护，点击“保存到 KV”后生效');
-    }
-
-    async function saveAppConfig() {
-        const config = {
-            zones: collectZoneConfigRows()
-        };
-        CONFIG_TEXT_FIELDS.forEach(([key, id]) => {
-            config[key] = getInputValue(id);
-        });
-        CONFIG_TOGGLE_FIELDS.forEach(([key, id, fallback]) => {
-            const el = byId(id);
-            config[key] = el ? el.checked : fallback;
-        });
-        config.settings = {};
-        CONFIG_NUMBER_FIELDS.forEach(([key, id]) => {
-            config.settings[key] = getNumberInputValue(id, SETTINGS[key]);
-        });
-        config.targets = collectTargetConfigRows();
-        const zoneDuplicateMessage = getZoneDuplicateMessage(config.zones);
-        if (zoneDuplicateMessage) {
-            showToast(zoneDuplicateMessage, 'error');
-            return;
-        }
-        const targetDuplicateMessage = getTargetDuplicateMessage(config.targets);
-        if (targetDuplicateMessage) {
-            showToast(targetDuplicateMessage, 'error');
-            return;
-        }
-        try {
-            const btn = byId('btn-save-config');
-            const cancelBtn = byId('btn-cancel-config');
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = '保存中...';
-            }
-            if (cancelBtn) cancelBtn.disabled = true;
-            const r = await apiPostJson('/api/save-config', { config });
-            if (!r.success) {
-                log(\`❌ 配置保存失败: \${r.error || '未知错误'}\`, 'error');
-                showToast(r.error || '配置保存失败', 'error');
-                return;
-            }
-            const savedConfig = cloneConfig(r.config || config);
-            configDraft = savedConfig;
-            configSavedSnapshot = cloneConfig(savedConfig);
-            SETTINGS = configDraft.settings || SETTINGS;
-            setConfigDirty(false);
-            renderConfigCards();
-            log('✅ 配置已保存到 KV，刷新页面后生效', 'success');
-            showToast('配置已保存到 KV');
-        } catch (e) {
-            log(\`❌ 配置保存失败: \${e.message}\`, 'error');
-            showToast('配置保存失败', 'error');
-        } finally {
-            const btn = byId('btn-save-config');
-            const cancelBtn = byId('btn-cancel-config');
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = '💾 保存到 KV';
-            }
-            if (cancelBtn) {
-                cancelBtn.disabled = false;
-            }
-            setConfigDirty(configDirty);
-        }
-    }
-
-    async function apiRequest(path, options = {}) {
-        const opts = { ...options };
-        const headers = new Headers(opts.headers || {});
-        headers.set('Accept', 'application/json');
-        if (opts.body && !(opts.body instanceof FormData) && !headers.has('Content-Type')) {
-            headers.set('Content-Type', 'application/json');
-        }
-        opts.headers = headers;
-
-        const resp = await fetch(path, opts);
-        if (resp.status === 401 && AUTH_ENABLED) {
-            location.href = '/';
-        }
-        return resp;
-    }
-
-    const apiJson = (path, options = {}) => apiRequest(path, options).then(r => r.json());
-    const apiPostJson = (path, body = {}, options = {}) => apiJson(path, {
-        ...options,
-        method: 'POST',
-        body: JSON.stringify(body)
+  }
+};
+function buildProbeUrl(urlTemplate, target) {
+  const encoded = encodeURIComponent(target.authority);
+  return urlTemplate.includes("{proxyip}") ? urlTemplate.replaceAll("{proxyip}", encoded) : `${urlTemplate}${encoded}`;
+}
+__name(buildProbeUrl, "buildProbeUrl");
+function createRequestTimeout(timeoutMs, externalSignal) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const handleExternalAbort = /* @__PURE__ */ __name(() => controller.abort(externalSignal?.reason), "handleExternalAbort");
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  if (externalSignal?.aborted) handleExternalAbort();
+  else externalSignal?.addEventListener("abort", handleExternalAbort, { once: true });
+  return {
+    signal: controller.signal,
+    didTimeout: /* @__PURE__ */ __name(() => timedOut, "didTimeout"),
+    cleanup: /* @__PURE__ */ __name(() => {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", handleExternalAbort);
+    }, "cleanup")
+  };
+}
+__name(createRequestTimeout, "createRequestTimeout");
+function parseProbePayload(payload, target, endpoint, latencyMs) {
+  const record = unwrapPayload(payload);
+  if (!record) return unknown(target, "INVALID_RESPONSE", "\u68C0\u6D4B\u63A5\u53E3\u54CD\u5E94\u4E0D\u662F\u5BF9\u8C61", { endpoint, latencyMs });
+  if (!isRecognizedPayload(record)) return unknown(target, "INVALID_RESPONSE", "\u68C0\u6D4B\u63A5\u53E3\u54CD\u5E94\u683C\u5F0F\u4E0D\u53EF\u8BC6\u522B", { endpoint, latencyMs });
+  const statusText = readText(record.status)?.toLowerCase();
+  if (statusText === "error" || statusText === "invalid") {
+    return unknown(target, "API_ERROR", readMessage(record) ?? "\u68C0\u6D4B\u63A5\u53E3\u8FD4\u56DE\u9519\u8BEF", { endpoint, latencyMs });
+  }
+  const decision = readBooleanDecision(record) ?? readStatusDecision(statusText) ?? readProbeResultsDecision(record.probe_results);
+  const exits = readProbeExits(record);
+  const exitIp = pickExitIp(record, exits);
+  const exitFamily = pickExitFamily(record, exitIp);
+  const message = readMessage(record);
+  if (decision === true) {
+    return alive(target, {
+      endpoint,
+      latencyMs,
+      exitFamily,
+      exits,
+      ...exitIp ? { exitIp } : {}
     });
-    const savePool = (poolKey, pool, mode = 'append') => apiPostJson('/api/save-pool', { pool, poolKey, mode });
-    const restoreTrashIPs = ips => apiPostJson('/api/restore-from-trash', { ips, restoreToSource: true });
-
-    function escapeHTML(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    }
-
-    function escapeJSString(str) {
-        return JSON.stringify(String(str || '')).slice(1, -1).replace(/'/g, "\\'");
-    }
-
-    const log = (m, t='info', skipTimestamp=false) => {
-        const w = byId('log-window');
-        const colors = { success: '#32d74b', error: '#ff453a', info: '#64d2ff', warn: '#ffd60a' };
-
-        let output;
-        if (skipTimestamp) {
-            output = \`<div style="color:\${colors[t]}">\${escapeHTML(m)}</div>\`;
-        } else {
-            const time = new Date().toLocaleTimeString('zh-CN');
-            output = \`<div style="color:\${colors[t]}">[<span style="color:#8e8e93">\${time}</span>] \${escapeHTML(m)}</div>\`;
-        }
-
-        if (activeBatchRun) {
-            const run = activeBatchRun;
-            (run.logBuffer ||= []).push(output);
-            if (!run.logTimer) run.logTimer = setTimeout(() => flushBatchLogs(run), 100);
-        } else {
-            w.insertAdjacentHTML('beforeend', output);
-            w.scrollTop = w.scrollHeight;
-        }
-    };
-
-    function flushBatchLogs(run) {
-        clearTimeout(run.logTimer);
-        run.logTimer = null;
-        if (!run.logBuffer?.length) return;
-        const w = byId('log-window');
-        w.insertAdjacentHTML('beforeend', run.logBuffer.join(''));
-        run.logBuffer.length = 0;
-        w.scrollTop = w.scrollHeight;
-    }
-
-    // ===== IP formatting / status table =====
-    function normalizeIPFormat(input) {
-        if (!input) return null;
-
-        input = input.trim();
-        const isValidIP = ip => ip.split('.').every(o => { const n = Number(o); return n >= 0 && n <= 255; });
-        const isValidPort = port => { const n = Number(port); return n >= 1 && n <= 65535; };
-
-        // 分离注释
-        let comment = '';
-        let mainPart = input;
-        const commentIndex = input.indexOf('#');
-        if (commentIndex > 0) {
-            mainPart = input.substring(0, commentIndex).trim();
-            comment = ' ' + input.substring(commentIndex).trim();
-        }
-        const fields = mainPart.split(',').map(item => item.trim());
-        if (fields.length > 1) {
-            const normalizedAddress = normalizeIPFormat(fields[0]);
-            if (!normalizedAddress) return null;
-            const metaFields = fields.slice(1, 4).map(item => item || 'null');
-            return [normalizedAddress.split('#')[0].trim(), ...metaFields].join(',') + comment;
-        }
-        let match = mainPart.match(/^\\[([0-9a-fA-F:]+)\\]:(\\d+)$/);
-        if (match && isValidPort(match[2])) {
-            return \`[\${match[1]}]:\${match[2]}\${comment}\`;
-        }
-        if (/^[0-9a-fA-F:]+$/.test(mainPart) && mainPart.includes(':')) {
-            return \`[\${mainPart.replace(/^\\[/, '').replace(/\\]$/, '')}]:443\${comment}\`;
-        }
-
-        // 已经是标准格式
-        match = mainPart.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}):(\\d+)$/);
-        if (match && isValidIP(match[1]) && isValidPort(match[2])) {
-            return \`\${match[1]}:\${match[2]}\${comment}\`;
-        }
-
-        // 空格分隔
-        const parts = mainPart.split(/\\s+/);
-        if (parts.length === 2) {
-            const ip = parts[0].trim();
-            const port = parts[1].trim();
-
-            if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(ip) && /^\\d+$/.test(port) && isValidIP(ip) && isValidPort(port)) {
-                return \`\${ip}:\${port}\${comment}\`;
-            }
-        }
-
-        // 纯IP（默认443端口）
-        if (/^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(mainPart) && isValidIP(mainPart)) {
-            return \`\${mainPart}:443\${comment}\`;
-        }
-
-        // 中文冒号
-        match = mainPart.match(/^(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})：(\\d+)$/);
-        if (match && isValidIP(match[1]) && isValidPort(match[2])) {
-            return \`\${match[1]}:\${match[2]}\${comment}\`;
-        }
-
-        const complexMatch = mainPart.match(/(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\\D+(\\d+)/);
-        if (complexMatch && isValidIP(complexMatch[1]) && isValidPort(complexMatch[2])) {
-            return \`\${complexMatch[1]}:\${complexMatch[2]}\${comment}\`;
-        }
-
-        return null;
-    }
-
-    function formatIPInfo(ipInfo) {
-        if (!ipInfo) return '';
-
-        let html = '';
-        if (ipInfo.country) {
-            html += \`<span class="ip-info-tag" title="\${escapeHTML(ipInfo.country)}">\${escapeHTML(ipInfo.country)}</span>\`;
-        }
-        if (ipInfo.asn) {
-            html += \`<span class="ip-info-tag" title="\${escapeHTML(formatAsn(ipInfo.asn))}">\${escapeHTML(formatAsn(ipInfo.asn))}</span>\`;
-        }
-        return html;
-    }
-
-    function formatAsn(asn) {
-        const values = String(asn || '')
-            .split(/[\/,\\s]+/)
-            .map(item => item.trim())
-            .filter(item => item && !['null', 'unknown', 'n/a', '-', 'asnull', 'asunknown'].includes(item.toLowerCase()));
-        if (!values.length) return '';
-        return values.map(item => item.toUpperCase().startsWith('AS') ? item.toUpperCase() : 'AS' + item).join('/');
-    }
-
-    function formatExitInfo(exits) {
-        if (!Array.isArray(exits) || exits.length === 0) return '';
-        const ordered = [...exits].sort((a, b) => {
-            const order = { ipv4: 0, v4: 0, ipv6: 1, v6: 1 };
-            return (order[String(a.stack || '').toLowerCase()] ?? 9) - (order[String(b.stack || '').toLowerCase()] ?? 9);
-        });
-        return ordered.map(exit => {
-            const stackValue = String(exit.stack || '').toLowerCase();
-            const stack = exit.stack ? exit.stack.toUpperCase() : 'EXIT';
-            const location = [exit.country, exit.city].filter(Boolean).join(' · ');
-            const network = [formatAsn(exit.asn), exit.asOrganization].filter(Boolean).join(' · ');
-            const dualClass = ['dual', 'v4/v6', 'dual-stack'].includes(stackValue) ? ' is-dual' : '';
-            return \`<div class="exit-detail\${dualClass}">
-                <span class="ip-info-tag exit-stack">\${escapeHTML(stack)}</span>
-                <span class="exit-ip copyable" onclick="copyText('\${escapeJSString(exit.ip || '')}', '出口IP')" title="点击复制出口IP">\${escapeHTML(exit.ip || '-')}</span>
-                <span class="ip-info-tag exit-field" title="\${escapeHTML(location || '-') }">\${escapeHTML(location || '-')}</span>
-                <span class="ip-info-tag exit-field" title="\${escapeHTML(network || '-') }">\${escapeHTML(network || '-')}</span>
-            </div>\`;
-        }).join('');
-    }
-
-    function parseAddrParts(addr) {
-        const value = String(addr || '').split('#')[0].split(',')[0].trim();
-        if (!value) return { host: '', port: '443' };
-        if (value.startsWith('[')) {
-            const end = value.indexOf(']');
-            const host = end >= 0 ? value.slice(1, end) : value.replace(/^\\[/, '');
-            const portMatch = value.match(/\\]:(\\d+)$/);
-            return { host, port: portMatch ? portMatch[1] : '443' };
-        }
-        const parts = value.split(':');
-        if (parts.length === 2) return { host: parts[0], port: parts[1] || '443' };
-        return { host: value, port: '443' };
-    }
-
-    function normalizeStackFilter(value) {
-        const text = String(value || '').trim().toLowerCase().replace(/_/g, '-');
-        if (!text) return 'v4/v6';
-        if (['v4', 'ipv4', 'ipv4-only', 'only-ipv4'].includes(text)) return 'v4';
-        if (['v6', 'ipv6', 'ipv6-only', 'only-ipv6'].includes(text)) return 'v6';
-        if (['v4/v6', 'v6/v4', 'dual', 'dual-stack', 'both', 'all', 'ipv4-ipv6'].includes(text)) return 'v4/v6';
-        return text.replace('-', '_');
-    }
-
-    function parsePoolLine(line) {
-        const raw = String(line || '').trim();
-        const beforeComment = raw.split('#')[0].trim();
-        const fields = beforeComment.split(',').map(item => item.trim());
-        return {
-            address: fields[0] || '',
-            asn: formatAsn(fields[1]) || 'null',
-            country: fields[2] || 'null',
-            stack: fields[3] || 'null',
-            comment: raw.includes('#') ? raw.slice(raw.indexOf('#') + 1).trim() : ''
-        };
-    }
-
-    function getPoolLineKey(line) {
-        const source = normalizeIPFormat(line) || line;
-        return parsePoolLine(source).address;
-    }
-
-    function canonicalCheckAddress(address) {
-        const parts = parseAddrParts(address);
-        const host = new URL('http://' + (parts.host.includes(':') ? '[' + parts.host + ']' : parts.host)).hostname.toLowerCase();
-        return host + ':' + Number(parts.port);
-    }
-
-    function getPoolComparisonKey(line) {
-        try {
-            const normalized = normalizeIPFormat(line);
-            return normalized ? canonicalCheckAddress(normalized) : getPoolLineKey(line);
-        } catch { return getPoolLineKey(line); }
-    }
-
-    function getPoolKeySet(lines) {
-        return new Set(lines.map(getPoolComparisonKey).filter(Boolean));
-    }
-
-    function filterLinesByKeys(lines, keys, shouldMatch) {
-        return lines.filter(line => {
-            const key = getPoolComparisonKey(line);
-            return key && (shouldMatch ? keys.has(key) : !keys.has(key));
-        });
-    }
-
-    function buildPoolLineFromCheckResult(addr, result, previousEntry = '') {
-        const parsed = parseAddrParts(addr), previous = parsePoolLine(previousEntry);
-        const ip = previousEntry ? parsed.host : (result.proxyIP || parsed.host);
-        const port = previousEntry ? parsed.port : (result.portRemote || parsed.port);
-        const known = value => value && !['null', 'unknown', 'n/a', '-'].includes(String(value).toLowerCase());
-        const pick = (value, old) => known(value) ? value : (known(old) ? old : 'null');
-        const exits = Array.isArray(result.exits) ? result.exits : [];
-        const asn = pick(result.asn, exits.map(exit => exit.asn).filter(known).join('/'));
-        const country = pick(result.country, exits.map(exit => exit.country).filter(known).join('/'));
-        const host = String(ip || '').replace(/^\\[/, '').replace(/\\]$/, '');
-        const address = host.includes(':') ? \`[\${host}]:\${port}\` : \`\${host}:\${port}\`;
-        return [address, formatAsn(pick(asn, previous.asn)) || 'null', pick(country, previous.country), pick(result.stack, previous.stack)].join(',') +
-            (previous.comment ? ' # ' + previous.comment : '');
-    }
-
-    function formatLatencyValue(value) {
-        if (value === null || value === undefined || value === '' || value === '-') return '未知';
-        const text = String(value).trim();
-        return text.endsWith('ms') ? text : text + 'ms';
-    }
-
-    async function checkIPWithInfo(addr) {
-    const r = await apiJson(\`/api/check-ip?ip=\${encodeURIComponent(addr)}\`);
-    return { ip: addr, success: r.success, colo: r.colo || 'N/A', time: r.responseTime || '-', exits: r.exits || [], proxyIP: r.proxyIP, portRemote: r.portRemote, ipInfo: r.ipInfo || null, asn: r.asn, country: r.country, stack: r.stack, apiError: r.apiError || false };
-    }
-    const addProbeButton = r => \`<button class="btn btn-sm btn-outline-primary" onclick="addToInput('\${escapeHTML(buildPoolLineFromCheckResult(r.ip, r))}')" title="添加到输入框">➕</button>\`;
-
-    function renderIPRow(r, actionHTML) {
-    const infoHtml = formatExitInfo(r.exits) || (r.ipInfo ? formatIPInfo(r.ipInfo) : '-');
-    const statusClass = r.apiError ? 'warn' : (r.success ? 'ok' : 'bad');
-    const statusText = r.apiError ? '⚠️ 异常' : (r.success ? '可用' : '失败');
-    return \`<tr>
-        <td><span class="pill-badge address-pill copyable" onclick="copyText('\${escapeJSString(r.ip)}', '维护地址')" title="点击复制">\${escapeHTML(r.ip)}</span></td>
-        <td><span class="colo-badge" title="Cloudflare 机房 / colo">\${escapeHTML(r.colo || 'N/A')}</span></td>
-        <td><span class="latency-badge" title="来自后端检测 API 返回的 responseTime，不是浏览器到节点的延迟">\${escapeHTML(formatLatencyValue(r.time))}</span></td>
-        <td><span class="status-badge \${statusClass}">\${statusText}</span></td>
-        <td class="exit-list-cell">\${infoHtml}</td>
-        <td>\${actionHTML}</td>
-    </tr>\`;
-}
-
-    async function renderProbeResults(targets, total = targets.length) {
-        const checkResults = await Promise.all(targets.map(addr => checkIPWithInfo(addr)));
-        byId('status-table').innerHTML = checkResults.map(r => renderIPRow(r, addProbeButton(r))).join('');
-        const activeCount = checkResults.filter(r => r.success).length;
-        log(\`📊 探测完成: \${activeCount}/\${total} 活跃\`, activeCount === total ? 'success' : (activeCount > 0 ? 'warn' : 'error'));
-    }
-
-    function switchDomain() {
-        if (!TARGETS.length) {
-            const manualSection = byId('manual-add-section');
-            const t = byId('status-table');
-            const summary = byId('current-target-summary-content');
-            if (manualSection) manualSection.hidden = true;
-            if (summary) summary.innerHTML = renderTargetSummary();
-            if (t) t.innerHTML = '<tr><td colspan="6" class="text-secondary p-4">请先到配置中心添加管理域名</td></tr>';
-            log('请先在配置中心添加管理域名', 'warn');
-            return;
-        }
-        currentTargetIndex = parseInt(byId('domain-select').value);
-        const target = TARGETS[currentTargetIndex];
-        const summary = byId('current-target-summary-content');
-        if (summary) summary.innerHTML = renderTargetSummary(target);
-        log(\`切换到: \${target.domain} (\${target.mode})\`);
-
-        const manualSection = byId('manual-add-section');
-        if (manualSection) manualSection.hidden = false;
-
-        refreshStatus();
-    }
-
-    // ===== Pool editor actions =====
-    async function loadRemoteUrl() {
-        const url = byId('remote-url').value.trim();
-        if (!url) {
-            log('❌ 请输入URL', 'error');
-            return;
-        }
-
-        log(\`🌐 加载: \${url}\`, 'warn');
-        try {
-            const r = await apiPostJson('/api/load-remote-url', { url });
-
-            if (r.success) {
-                setInputValueAndPreview('ip-input', r.ips);
-                log(\`✅ 成功: \${r.count} 个\`, 'success');
-            } else {
-                log(\`❌ 失败\`, 'error');
-            }
-        } catch (e) {
-            log(\`❌ 出错\`, 'error');
-        }
-    }
-
-    function setPoolCount(count) {
-        byId('pool-count').innerText = count;
-    }
-
-    function clearPoolInput() {
-        setInputValueAndPreview('ip-input', '');
-    }
-
-    const fetchCurrentPool = () => apiJson('/api/get-pool?poolKey=' + currentPool);
-
-    async function loadCurrentPool() {
-        log(\`📂 加载 \${currentPool}...\`, 'info');
-
-        try {
-            const r = await fetchCurrentPool();
-            setElementValue('ip-input', r.pool);
-            setPoolCount(r.count);
-            updateFilterPreview();
-            log(\`✅ 已加载 \${r.count} 个IP\`, 'success');
-        } catch (e) {
-            log('❌ 加载失败', 'error');
-        }
-    }
-
-    async function saveToCurrentPool(mode = 'append') {
-        const content = byId('ip-input').value;
-        if (!content.trim()) {
-            log('❌ 内容为空', 'error');
-            return;
-        }
-
-        const modeLabel = mode === 'replace' ? '覆盖' : '追加';
-        log(\`💾 \${modeLabel}到 \${getPoolName(currentPool)}...\`, 'warn');
-
-        try {
-            const r = await savePool(currentPool, content, mode);
-
-            if (r.success) {
-                if (mode === 'replace') {
-                    log(\`✅ \${r.message}\`, 'success');
-                } else {
-                    log(\`✅ 已追加 \${r.added} 个IP到 \${getPoolName(currentPool)}\`, 'success');
-                }
-                setPoolCount(r.count);
-                clearPoolInput();
-            } else {
-                log(\`❌ 失败: \${r.error}\`, 'error');
-            }
-        } catch (e) {
-            log(\`❌ 保存失败\`, 'error');
-        }
-    }
-
-    async function removeFromPool() {
-        const content = byId('ip-input').value;
-        if (!content.trim()) {
-            log('❌ 内容为空', 'error');
-            return;
-        }
-
-        if (!confirm(\`确认从 \${getPoolName(currentPool)} 中删除这些IP？\`)) return;
-
-        log(\`🗑️ 从 \${getPoolName(currentPool)} 删除...\`, 'warn');
-
-        try {
-            const r = await savePool(currentPool, content, 'remove');
-
-            if (r.success) {
-                log(\`✅ \${r.message}\`, 'success');
-                setPoolCount(r.count);
-                clearPoolInput();
-            } else {
-                log(\`❌ 失败: \${r.error}\`, 'error');
-            }
-        } catch (e) {
-            log(\`❌ 删除失败\`, 'error');
-        }
-    }
-
-    async function showPoolInfo() {
-        try {
-            const r = await fetchCurrentPool();
-            setPoolCount(r.count);
-        } catch (e) {
-            log('❌ 查询失败', 'error');
-        }
-    }
-
-    // 动态补位队列：解析和检测分开限流；只有生产者关闭且在途任务结束才完成。
-${combineCheckAttempts.toString()}
-
-    function createCheckQueue(limit, signal, onError) {
-        const pending = [];
-        let active = 0, cursor = 0, closed = false, finish;
-        const done = new Promise(resolve => { finish = resolve; });
-        const pump = () => {
-            while (!signal.aborted && active < limit && cursor < pending.length) {
-                const work = pending[cursor++];
-                active++;
-                Promise.resolve().then(() => signal.aborted ? undefined : work())
-                    .catch(onError).finally(() => { active--; pump(); });
-            }
-            if ((closed || signal.aborted) && active === 0 && (cursor === pending.length || signal.aborted)) {
-                signal.removeEventListener('abort', pump);
-                finish();
-            }
-        };
-        signal.addEventListener('abort', pump, { once: true });
-        return {
-            push(work) { pending.push(work); pump(); },
-            close() { closed = true; pump(); return done; }
-        };
-    }
-
-    function mergeBatchSource(oldLine, newLine) {
-        if (!oldLine) return newLine;
-        const old = parsePoolLine(oldLine), next = parsePoolLine(newLine);
-        const known = value => value && !['null', 'unknown', 'n/a', '-'].includes(String(value).toLowerCase());
-        const pick = (a, b) => known(a) ? a : (known(b) ? b : 'null');
-        const comments = Array.from(new Set([old.comment, next.comment].filter(Boolean))).join(' | ');
-        return [old.address, pick(old.asn, next.asn), pick(old.country, next.country), pick(old.stack, next.stack)].join(',') +
-            (comments ? ' # ' + comments : '');
-    }
-
-    function addBatchTarget(run, address, sourceLine, order) {
-        const normalized = normalizeIPFormat(address);
-        if (!normalized) throw new Error('无效检测地址');
-        // 与洗库比较使用同一规范化地址；不会把 IPv6 文本形式变化误判为失效。
-        const key = canonicalCheckAddress(normalized);
-        const source = parsePoolLine(sourceLine);
-        const previousLine = [key, source.asn, source.country, source.stack].join(',') + (source.comment ? ' # ' + source.comment : '');
-        if (run.tasks.has(key)) {
-            const task = run.tasks.get(key);
-            task.sourceLine = mergeBatchSource(task.sourceLine, previousLine);
-            task.order = Math.min(task.order, order);
-            return task;
-        }
-        const task = { address: key, sourceLine: previousLine, order, state: 'pending', primary: null, result: null };
-        run.tasks.set(key, task);
-        return task;
-    }
-
-    function batchSnapshot(run) {
-        const tasks = Array.from(run.tasks.values());
-        const unresolved = run.sources.filter(source => source.state !== 'resolved');
-        const pending = tasks.filter(task => ['pending', 'recheck'].includes(task.state)).length +
-            unresolved.filter(source => source.state === 'pending').length;
-        const unknown = tasks.filter(task => task.state === 'unknown').length +
-            unresolved.filter(source => source.state === 'unknown').length;
-        const successful = tasks.filter(task => task.state === 'success').length;
-        const retained = tasks.filter(task => task.state !== 'failed').map(task => ({
-            order: task.order,
-            line: task.state === 'success'
-                ? buildPoolLineFromCheckResult(task.address, task.result, task.sourceLine)
-                : task.sourceLine
-        }));
-        unresolved.forEach(source => retained.push({ order: source.index, line: source.line }));
-        retained.sort((a, b) => a.order - b.order);
-        return { pending, unknown, successful, total: tasks.length + unresolved.length, lines: retained.map(item => item.line) };
-    }
-
-    async function requestBatchCheck(address, phase, signal) {
-        const deadline = AbortSignal.timeout(SETTINGS.CHECK_TIMEOUT * (phase === 'full' ? 2 : 1) + 5000);
-        const response = await apiRequest(\`/api/check-ip?ip=\${encodeURIComponent(address)}&phase=\${phase}\`, {
-            signal: AbortSignal.any([signal, deadline])
-        });
-        if (!response.ok) throw new Error('检测请求 HTTP ' + response.status);
-        const result = await response.json();
-        if (!result || typeof result.success !== 'boolean') throw new Error('检测响应格式错误');
-        return result;
-    }
-
-    async function runBatchPass(run, controller) {
-        const signal = controller.signal;
-        const failQueue = error => { run.error = error; controller.abort(); };
-        const queue = createCheckQueue(SETTINGS.CONCURRENT_CHECKS, signal, failQueue);
-        const resolvers = createCheckQueue(Math.min(4, SETTINGS.CONCURRENT_CHECKS), signal, failQueue);
-        const enqueued = new Set();
-        const refresh = () => {
-            if (run.progressTimer) return;
-            run.progressTimer = setTimeout(() => {
-                run.progressTimer = null;
-                if (activeBatchRun !== run) return;
-                let total = run.tasks.size, pending = 0;
-                run.tasks.forEach(task => { if (['pending', 'recheck'].includes(task.state)) pending++; });
-                run.sources.forEach(source => {
-                    if (source.state !== 'resolved') total++;
-                    if (source.state === 'pending') pending++;
-                });
-                byId('pg-bar').style.width = (total ? (total - pending) / total * 100 : 0) + '%';
-            }, 100);
-        };
-        const finishTask = (task, result) => {
-            task.result = result;
-            task.state = result.apiError ? 'unknown' : (result.success ? 'success' : 'failed');
-            if (task.state === 'success') log(\`  ✅ \${task.address} - \${result.colo} (\${result.responseTime}ms)\`, 'success');
-            else if (task.state === 'unknown') log(\`  ⚠️ \${task.address} - 检测接口异常，保留待确认\`, 'warn');
-            else log(\`  ❌ \${task.address}\${result.checkOutcome === 'timeout' ? ' - 超时淘汰' : ''}\`, 'error');
-            refresh();
-        };
-        // 复检复用当前检测槽位：在当前 worker 内串行执行，不额外占用并发。
-        const runRetry = async task => {
-            if (signal.aborted) return;
-            let result;
-            try { result = await requestBatchCheck(task.address, task.retryPhase, signal); }
-            catch { result = { success: false, apiError: true, checkOutcome: "api_error" }; }
-            if (!signal.aborted) finishTask(task, combineCheckAttempts([task.primary, result]));
-        };
-        const checkPrimary = async task => {
-            try {
-                const result = await requestBatchCheck(task.address, 'primary', signal);
-                if (signal.aborted) return;
-                task.primary = result;
-                if (result.recheckRequired || result.apiError) {
-                    task.state = 'recheck';
-                    task.retryPhase = result.recheckRequired ? 'backup' : 'primary';
-                    await runRetry(task);
-                } else finishTask(task, result);
-            } catch (error) {
-                if (signal.aborted) return;
-                task.primary = { success: false, apiError: true, checkOutcome: 'api_error' };
-                task.state = 'recheck';
-                task.retryPhase = 'full';
-                await runRetry(task);
-            }
-            refresh();
-        };
-        const enqueue = task => {
-            if (!task || task.state !== 'pending' || enqueued.has(task.address)) return;
-            enqueued.add(task.address);
-            queue.push(() => checkPrimary(task));
-        };
-        run.tasks.forEach(enqueue);
-        run.tasks.forEach(task => {
-            if (task.state !== 'recheck' || enqueued.has(task.address)) return;
-            enqueued.add(task.address);
-            queue.push(() => runRetry(task));
-        });
-        for (const source of run.sources) {
-            if (source.state !== 'pending') continue;
-            if (source.address) {
-                try {
-                    enqueue(addBatchTarget(run, source.address, source.line, source.index));
-                    source.state = 'resolved';
-                } catch { source.state = 'unknown'; }
-                continue;
-            }
-            resolvers.push(async () => {
-                try {
-                    const response = await apiRequest(\`/api/lookup-domain?domain=\${encodeURIComponent(source.domain + ':' + source.port)}\`, {
-                        signal: AbortSignal.any([signal, AbortSignal.timeout(SETTINGS.DOH_TIMEOUT * 2 + 5000)])
-                    });
-                    if (!response.ok) throw new Error('域名查询失败');
-                    const data = await response.json();
-                    if (signal.aborted) return;
-                    if (!Array.isArray(data.ips) || !data.ips.length) throw new Error('域名无解析');
-                    const targets = data.ips.map(ip => {
-                        const host = String(ip).replace(/^\\[/, '').replace(/\\]$/, '');
-                        return host.includes(':') ? \`[\${host}]:\${source.port}\` : \`\${host}:\${source.port}\`;
-                    });
-                    targets.forEach(address => enqueue(addBatchTarget(run, address, source.line, source.index)));
-                    source.state = 'resolved';
-                    log(\`  🌐 \${source.domain} → \${targets.length} 个IP\`, 'info');
-                } catch (error) {
-                    if (signal.aborted) return;
-                    source.state = 'unknown';
-                    log(\`  ⚠️ \${source.domain} - 解析异常，保留原输入\`, 'warn');
-                }
-                refresh();
-            });
-        }
-        await resolvers.close();
-        await queue.close();
-    }
-
-    async function batchCheck() {
-        const btn = byId('btn-check'), input = byId('ip-input');
-        if (activeBatchRun) {
-            abortController?.abort();
-            btn.textContent = '⏳ 正在停止';
-            return 'abandoned';
-        }
-        const lines = getInputLines('ip-input');
-        if (!lines.length) { log('❌ 请先输入IP', 'error'); return 'abandoned'; }
-        const run = { tasks: new Map(), sources: [], error: null };
-        run.sources = lines.map((line, index) => {
-            const source = { line, index, state: 'pending' };
-            const normalized = normalizeIPFormat(line);
-            if (normalized) source.address = getPoolLineKey(normalized);
-            else {
-                const match = parsePoolLine(line).address.match(/^([a-zA-Z0-9][-a-zA-Z0-9.]*\\.[a-zA-Z]{2,})(?::(\\d+))?$/);
-                if (match && Number(match[2] || 443) >= 1 && Number(match[2] || 443) <= 65535) {
-                    source.domain = match[1]; source.port = match[2] || '443';
-                } else {
-                    source.state = 'unknown';
-                    log(\`  ⚠️ 格式无法识别，保留原输入: \${line}\`, 'warn');
-                }
-            }
-            return source;
-        });
-        activeBatchRun = run;
-        const wasReadOnly = input.readOnly;
-        input.readOnly = true;
-        log(\`🚀 开始检测 \${lines.length} 行 (检测并发: \${SETTINGS.CONCURRENT_CHECKS}，复检复用同槽位)\`, 'warn');
-        try {
-            while (true) {
-                const controller = new AbortController();
-                abortController = controller;
-                btn.textContent = '🛑 停止检测';
-                btn.classList.add('btn-danger');
-                btn.classList.remove('btn-warning');
-                await runBatchPass(run, controller);
-                const stats = batchSnapshot(run);
-                input.value = stats.lines.join('\\n');
-                if (run.error) throw run.error;
-                if (controller.signal.aborted && stats.pending > 0) {
-                    log(\`⏸️ 检测已停止：成功 \${stats.successful}，待处理 \${stats.pending}；已保留全部未确认项\`, 'warn');
-                    const resume = await showCheckInterruptModal({
-                        checked: stats.total - stats.pending, total: stats.total, valid: stats.successful,
-                        rate: stats.total ? (stats.successful / stats.total * 100).toFixed(1) : '0.0', unchecked: stats.pending
-                    });
-                    if (resume) { log('🔄 继续未完成任务，已完成项不重复检测', 'info'); continue; }
-                    return 'abandoned';
-                }
-                log(\`检测完成：\${stats.successful}/\${stats.total} 有效，\${stats.unknown} 个待确认\`, stats.unknown ? 'warn' : 'success');
-                if (stats.unknown) log('⚠️ 待确认项保留原数据；本次洗库不会自动写回或移入垃圾桶', 'warn');
-                return stats.unknown ? 'incomplete' : 'completed';
-            }
-        } catch (error) {
-            input.value = batchSnapshot(run).lines.join('\\n');
-            log(\`❌ 检测中断，已保留成功及未确认项: \${error.message}\`, 'error');
-            return 'incomplete';
-        } finally {
-            abortController = null;
-            flushBatchLogs(run);
-            activeBatchRun = null;
-            clearTimeout(run.progressTimer);
-            input.readOnly = wasReadOnly;
-            updateFilterPreview();
-            btn.textContent = '⚡ 检测清洗';
-            btn.classList.remove('btn-danger');
-            btn.classList.add('btn-warning');
-            byId('pg-bar').style.width = '0%';
-        }
-    }
-
-    function clearInput() {
-        if (activeBatchRun) { log('⚠️ 请先停止检测', 'warn'); return; }
-        const input = byId('ip-input');
-        if (input.value.trim() && !confirm('确认清空输入框？')) return;
-        input.value = '';
-        updateFilterPreview();
-        log('🗑️ 输入框已清空', 'info');
-    }
-
-    function quickDeduplicate() {
-        const input = byId('ip-input');
-        const lines = getInputLines('ip-input');
-
-        if (lines.length === 0) {
-            log('❌ 输入为空', 'error');
-            return;
-        }
-
-        const before = lines.length;
-        const seen = new Map();
-
-        // 去重逻辑：IP:PORT 相同即判断为重复，保留最后出现的
-        lines.forEach(line => {
-            const normalized = normalizeIPFormat(line);
-            if (normalized) {
-                // 使用 IP:PORT 作为唯一标识
-                const key = getPoolLineKey(normalized);
-                seen.set(key, normalized);
-            }
-        });
-
-        const unique = Array.from(seen.values());
-        input.value = unique.join('\\n');
-        updateFilterPreview();
-
-        const removed = before - unique.length;
-        if (removed > 0) {
-            log(\`✅ 去重完成: \${before} → \${unique.length} (移除 \${removed} 个重复)\`, 'success');
-        } else {
-            log(\`✨ 无重复IP\`, 'info');
-        }
-    }
-
-    // ===== Domain status / lookup / maintenance actions =====
-    async function refreshStatus() {
-        const t = byId('status-table');
-        const txtDiv = byId('txt-status');
-            const colspan = '6';
-        if (!TARGETS.length) {
-            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">请先到配置中心添加管理域名</td></tr>\`;
-            txtDiv.innerHTML = '';
-            return;
-        }
-        t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 查询中...</td></tr>\`;
-        txtDiv.innerHTML = '';
-
-        try {
-            const data = await apiJson(\`/api/current-status?target=\${currentTargetIndex}\`);
-
-            if (data.error) {
-                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ \${escapeHTML(data.error)}<br><small>请检查 CF_KEY, CF_ZONEID 配置</small></td></tr>\`;
-                return;
-            }
-
-            // 统一收集所有记录到表格中显示
-            let allRows = [];
-
-            // 地址记录
-            if (data.mode === 'A' && data.aRecords && data.aRecords.length > 0) {
-                data.aRecords.forEach(r => {
-                    allRows.push(renderIPRow(
-                        { ip: r.address || (r.ip + ':' + r.port), colo: r.colo, time: r.time, success: r.success, exits: r.exits, proxyIP: r.proxyIP, portRemote: r.portRemote, ipInfo: r.ipInfo },
-                        \`<a href="javascript:deleteRecord('\${escapeJSString(r.id)}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>\`
-                    ));
-                });
-            }
-
-            // TXT记录（统一显示在表格中）
-            if (data.mode === 'TXT' && data.txtRecords && data.txtRecords.length > 0) {
-                const record = data.txtRecords[0];
-                record.ips.forEach(ip => {
-                    allRows.push(renderIPRow(
-                        ip,
-                        \`<a href="javascript:deleteTxtIP('\${escapeJSString(record.id)}', '\${escapeJSString(ip.ip)}')" class="text-danger text-decoration-none small fw-bold">🗑️</a>\`
-                    ));
-                });
-            }
-
-            // 显示结果
-            if (allRows.length === 0) {
-                t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">暂无记录</td></tr>\`;
-            } else {
-                t.innerHTML = allRows.join('');
-            }
-        } catch (e) {
-            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 查询失败<br><small>请检查网络连接和CF配置</small></td></tr>\`;
-        }
-    }
-
-    async function manualAddIP() {
-        if (!TARGETS.length) {
-            log('❌ 请先添加管理域名', 'error');
-            return;
-        }
-        const input = byId('manual-add-ip');
-        const ip = input.value.trim();
-
-        if (!ip) {
-            log('❌ 请输入IP', 'error');
-            return;
-        }
-
-        const target = TARGETS[currentTargetIndex];
-
-        log(\`➕ 添加到\${MODE_LABELS[target.mode]}: \${ip}\`, 'info');
-
-        try {
-            const r = await apiPostJson('/api/add-a-record', { ip, targetIndex: currentTargetIndex });
-
-            if (r.success) {
-                const mode = r.mode || 'A';
-                log(\`✅ 成功添加到\${mode}记录\`, 'success');
-                input.value = '';
-                updateFilterPreview();
-                refreshStatus();
-            } else {
-                log(\`❌ 失败: \${r.error || '未知错误'}\`, 'error');
-            }
-        } catch (e) {
-            log(\`❌ 出错: \${e.message}\`, 'error');
-        }
-    }
-
-    async function lookupDomain() {
-        const input = byId('lookup-domain');
-        const val = input.value.trim();
-
-        if (!val) {
-            log('❌ 请输入', 'error');
-            return;
-        }
-
-        log(\`🔍 探测: \${val}\`, 'info');
-
-        const t = byId('status-table');
-        const txtDiv = byId('txt-status');
-        const colspan = '6';
-        t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">🔄 探测中...</td></tr>\`;
-        txtDiv.innerHTML = '';
-
-        try {
-            if (val.startsWith('txt@')) {
-                const data = await apiJson(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`);
-
-                // null 检查
-                if (!data.ips || !Array.isArray(data.ips)) {
-                    log(\`❌ TXT 查询失败\`, 'error');
-                    t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ TXT 查询失败</td></tr>\`;
-                    return;
-                }
-
-                log(\`📝 TXT: \${data.ips.length} 个IP\`, 'success');
-                await renderProbeResults(data.ips);
-                return;
-            }
-
-            const isIP = /^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$/.test(val) || /^\\[[0-9a-fA-F:]+\\](:\\d+)?$/.test(val) || (/^[0-9a-fA-F:]+$/.test(val) && val.includes(':'));
-            let targets = [];
-
-            if (isIP) {
-                const normalized = normalizeIPFormat(val);
-                targets = [normalized ? getPoolLineKey(normalized) : val];
-            } else {
-                const data = await apiJson(\`/api/lookup-domain?domain=\${encodeURIComponent(val)}\`);
-
-                if (!data.ips || !Array.isArray(data.ips) || data.ips.length === 0) {
-                    log(\`⚠️ 域名无A/AAAA记录\`, 'warn');
-                    t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-secondary p-4">域名无A/AAAA记录</td></tr>\`;
-                    return;
-                }
-
-                targets = data.ips.map(ip => ip.includes(':') ? \`[\${ip.replace(/^\\[/, '').replace(/\\]$/, '')}]:\${data.port || '443'}\` : \`\${ip}:\${data.port || '443'}\`);
-                log(\`📡 \${data.ips.length} 个IP (端口: \${data.port || '443'})\`, 'success');
-            }
-
-            await renderProbeResults(targets);
-        } catch (e) {
-            log(\`❌ 失败: \${e.message}\`, 'error');
-            t.innerHTML = \`<tr><td colspan="\${colspan}" class="text-danger p-4">❌ 探测失败</td></tr>\`;
-        }
-    }
-
-    function addToInput(ip) {
-        const input = byId('ip-input');
-        const lines = getInputLines('ip-input');
-
-        if (!lines.includes(ip)) {
-            input.value = lines.concat([ip]).join('\\n');
-            updateFilterPreview();
-            log(\`✅ 已添加: \${ip}\`, 'success');
-        } else {
-            log(\`⚠️  已存在\`, 'warn');
-        }
-    }
-
-    async function deleteRecord(id) {
-        if (!confirm('确认删除？')) return;
-
-        try {
-            await apiRequest('/api/delete-record?id=' + encodeURIComponent(id) + '&target=' + currentTargetIndex, { method: 'POST' });
-            log('🗑️  已删除', 'success');
-            refreshStatus();
-        } catch (e) {
-            log('❌ 失败', 'error');
-        }
-    }
-
-    async function deleteTxtIP(recordId, ip) {
-        if (!confirm('确认删除 ' + ip + '？')) return;
-
-        try {
-            await apiRequest('/api/delete-record?id=' + encodeURIComponent(recordId) + '&ip=' + encodeURIComponent(ip) + '&isTxt=true&target=' + currentTargetIndex, { method: 'POST' });
-            log('🗑️ 已从TXT记录删除', 'success');
-            refreshStatus();
-        } catch (e) {
-            log('❌ 删除失败', 'error');
-        }
-    }
-
-    async function runMaintain() {
-        log('🔧 启动维护...', 'warn');
-
-        try {
-            const r = await apiJson('/api/maintain?manual=true', { method: 'POST' });
-
-            const allLogs = Array.isArray(r.allLogs)
-                ? r.allLogs
-                : (Array.isArray(r.reports) ? r.reports.flatMap(report => [
-                    ...(report.logs || []),
-                    ...(report.txtLogs || [])
-                ]) : []);
-            if (allLogs.length > 0) {
-                allLogs.forEach(msg => log(msg, 'info', true));
-            }
-
-            log(\`✅ 维护完成，耗时: \${r.processingTime}ms\`, 'success');
-
-            if (r.tgStatus) {
-                switch (r.tgStatus.reason) {
-                    case 'success':
-                        log(\`📱 TG通知发送成功\`, 'success');
-                        break;
-                    case 'not_configured':
-                        log(\`📱 TG未配置，跳过通知\`, 'info');
-                        break;
-                    case 'config_error':
-                        log(\`📱 TG配置错误，发送失败 - \${r.tgStatus.message}\`, 'error');
-                        if (r.tgStatus.detail) {
-                            log(\`   详情: \${r.tgStatus.detail}\`, 'error');
-                        }
-                        break;
-                    case 'network_error':
-                        log(\`📱 TG发送失败，网络错误 - \${r.tgStatus.detail}\`, 'error');
-                        break;
-                    case 'no_need':
-                        log(\`📱 无需通知（无变化）\`, 'info');
-                        break;
-                    default:
-                        log(\`📱 未发送通知\`, 'info');
-                }
-            }
-
-            refreshStatus();
-            showPoolInfo();
-        } catch (e) {
-            log(\`❌ 维护失败: \${e.message}\`, 'error');
-        }
-    }
-
-    // ===== Pool mapping / trash / filtering =====
-    async function loadDomainPoolMapping() {
-        try {
-            const r = await apiJson('/api/get-domain-pool-mapping');
-            applyPoolState(r);
-            log('✅ 已加载池配置', 'success');
-        } catch (e) {
-            log('❌ 加载配置失败', 'error');
-        }
-    }
-
-    function updatePoolSelector() {
-        const selector = byId('pool-selector');
-        if (!selector) return;
-        const source = [...new Set(Array.isArray(availablePools) ? availablePools : [])];
-        const pools = [
-            POOL_DEFAULT_KEY,
-            ...source.filter(pool => ![POOL_DEFAULT_KEY, POOL_TRASH_KEY].includes(pool)),
-            POOL_TRASH_KEY
-        ];
-
-        selector.innerHTML = pools.map(pool => \`<option value="\${escapeHTML(pool)}">\${escapeHTML(getPoolName(pool))}</option>\`).join('');
-        selector.value = currentPool;
-    }
-
-    function getOrderedDomainTargets() {
-        const targets = TARGETS.filter(target => target && typeof target === 'object');
-        const targetKeys = targets.map(getTargetDuplicateKey).filter(Boolean);
-        const normalized = [];
-        for (const targetKey of (Array.isArray(domainPoolOrder) ? domainPoolOrder : [])) {
-            if (targetKeys.includes(targetKey) && !normalized.includes(targetKey)) normalized.push(targetKey);
-        }
-        for (const targetKey of targetKeys) {
-            if (!normalized.includes(targetKey)) normalized.push(targetKey);
-        }
-        const targetMap = new Map(targets.map(target => [getTargetDuplicateKey(target), target]));
-        return normalized.map(targetKey => targetMap.get(targetKey)).filter(Boolean);
-    }
-
-    function updateDomainBindingTable() {
-        const tbody = byId('domain-binding-list');
-        if (!tbody) return;
-        if (TARGETS.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="2" class="text-center text-secondary">请先到配置中心添加管理域名</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = getOrderedDomainTargets().map(target => {
-            const bindingKey = getTargetDuplicateKey(target);
-            const boundPool = getBoundPoolForTarget(target);
-            const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-            const modeLabel = MODE_LABELS[mode] || mode;
-            const modeShortLabel = mode === 'TXT' ? 'T' : 'A';
-            const badgeClass = 'record-badge-' + mode.toLowerCase();
-
-            const selectablePools = (Array.isArray(availablePools) ? availablePools : [POOL_DEFAULT_KEY])
-                .filter(p => p !== POOL_TRASH_KEY);
-
-            const options = selectablePools.map(pool => {
-                const selected = pool === boundPool ? 'selected' : '';
-                return \`<option value="\${escapeHTML(pool)}" \${selected}>\${escapeHTML(getPoolName(pool))}</option>\`;
-            }).join('');
-
-            return \`
-                <tr>
-                    <td>
-                        <span class="domain-binding-domain" title="\${escapeHTML(target.domain || '')}">
-                            <span class="record-badge \${badgeClass}" title="\${escapeHTML(modeLabel)}">\${escapeHTML(modeShortLabel)}</span>
-                            <span class="domain-binding-name">\${escapeHTML(target.domain || '')}</span>
-                        </span>
-                    </td>
-                    <td>
-                        <select class="form-select form-select-sm domain-binding-select"
-                                onchange="bindDomainToPool('\${escapeJSString(bindingKey)}', this.value)">
-                            \${options}
-                        </select>
-                    </td>
-                </tr>
-            \`;
-        }).join('');
-    }
-
-    function openDomainPoolOrderDialog() {
-        const order = getOrderedDomainTargets().map(getTargetDuplicateKey);
-        if (order.length < 2) {
-            showToast('至少需要两个管理域名才能排序', 'info');
-            return;
-        }
-
-        const overlay = document.createElement('div');
-        overlay.className = 'custom-modal-overlay';
-        overlay.innerHTML = \`
-            <div class="custom-modal pool-order-modal" role="dialog" aria-modal="true" aria-labelledby="domain-pool-order-title">
-                <div class="custom-modal-title" id="domain-pool-order-title">↕️ 自定义绑定池排序</div>
-                <div class="pool-order-hint">调整域名池绑定区域中管理域名的显示顺序，不会改变维护执行顺序。</div>
-                <div class="pool-order-list" id="domain-pool-order-list"></div>
-                <div class="custom-modal-buttons">
-                    <button class="btn-abandon" type="button" id="domain-pool-order-cancel">取消</button>
-                    <button class="btn-continue" type="button" id="domain-pool-order-save">保存排序</button>
-                </div>
-            </div>
-        \`;
-        document.body.appendChild(overlay);
-
-        const list = byId('domain-pool-order-list');
-        const closeDialog = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        };
-        const renderOrder = () => {
-            list.innerHTML = order.map((targetKey, index) => {
-                const target = TARGETS.find(item => getTargetDuplicateKey(item) === targetKey) || {};
-                const mode = target.mode === 'TXT' ? 'TXT' : 'A';
-                const modeLabel = MODE_LABELS[mode] || mode;
-                return \`
-                    <div class="pool-order-item">
-                        <span class="pool-order-index">\${index + 1}</span>
-                        <span class="pool-order-name">
-                            <strong>\${escapeHTML(target.domain || targetKey)}</strong>
-                            <small>\${escapeHTML(modeLabel)}</small>
-                        </span>
-                        <span class="pool-order-actions">
-                            <button type="button" data-action="up" data-index="\${index}" title="上移" aria-label="上移" \${index === 0 ? 'disabled' : ''}>↑</button>
-                            <button type="button" data-action="down" data-index="\${index}" title="下移" aria-label="下移" \${index === order.length - 1 ? 'disabled' : ''}>↓</button>
-                        </span>
-                    </div>
-                \`;
-            }).join('');
-        };
-
-        list.addEventListener('click', event => {
-            const button = event.target.closest('button[data-action]');
-            if (!button || button.disabled) return;
-            const index = Number(button.dataset.index);
-            const targetIndex = button.dataset.action === 'up' ? index - 1 : index + 1;
-            if (targetIndex < 0 || targetIndex >= order.length) return;
-            [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
-            renderOrder();
-        });
-        byId('domain-pool-order-cancel').onclick = closeDialog;
-        overlay.addEventListener('click', event => {
-            if (event.target === overlay) closeDialog();
-        });
-        byId('domain-pool-order-save').onclick = async () => {
-            const saveButton = byId('domain-pool-order-save');
-            saveButton.disabled = true;
-            saveButton.textContent = '保存中...';
-            try {
-                const result = await apiPostJson('/api/save-domain-pool-order', { order });
-                if (!result.success) throw new Error(result.error || '保存失败');
-                applyPoolState(result);
-                closeDialog();
-                log('✅ 域名池绑定顺序已保存', 'success');
-                showToast('域名池绑定顺序已保存');
-            } catch (e) {
-                saveButton.disabled = false;
-                saveButton.textContent = '保存排序';
-                log(\`❌ 保存域名池绑定顺序失败: \${e.message}\`, 'error');
-                showToast(e.message || '保存排序失败', 'error');
-            }
-        };
-        renderOrder();
-    }
-
-    function openPoolOrderDialog() {
-        const order = (Array.isArray(availablePools) ? availablePools : [])
-            .filter(poolKey => ![POOL_DEFAULT_KEY, POOL_TRASH_KEY].includes(poolKey));
-        if (order.length < 2) {
-            showToast('至少需要两个自定义池才能排序', 'info');
-            return;
-        }
-
-        const overlay = document.createElement('div');
-        overlay.className = 'custom-modal-overlay';
-        overlay.innerHTML = \`
-            <div class="custom-modal pool-order-modal" role="dialog" aria-modal="true" aria-labelledby="pool-order-title">
-                <div class="custom-modal-title" id="pool-order-title">↕️ 自定义池排序</div>
-                <div class="pool-order-hint">默认池固定在最前，垃圾桶固定在最后。使用箭头调整自定义池顺序。</div>
-                <div class="pool-order-list" id="pool-order-list"></div>
-                <div class="custom-modal-buttons">
-                    <button class="btn-abandon" type="button" id="pool-order-cancel">取消</button>
-                    <button class="btn-continue" type="button" id="pool-order-save">保存排序</button>
-                </div>
-            </div>
-        \`;
-        document.body.appendChild(overlay);
-
-        const list = byId('pool-order-list');
-        const closeDialog = () => {
-            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        };
-        const renderOrder = () => {
-            list.innerHTML = order.map((poolKey, index) => \`
-                <div class="pool-order-item" data-pool-key="\${escapeHTML(poolKey)}">
-                    <span class="pool-order-index">\${index + 1}</span>
-                    <span class="pool-order-name">
-                        <strong>\${escapeHTML(getPoolName(poolKey))}</strong>
-                        <small>\${escapeHTML(getPoolFixedName(poolKey))}</small>
-                    </span>
-                    <span class="pool-order-actions">
-                        <button type="button" data-action="up" data-index="\${index}" title="上移" aria-label="上移" \${index === 0 ? 'disabled' : ''}>↑</button>
-                        <button type="button" data-action="down" data-index="\${index}" title="下移" aria-label="下移" \${index === order.length - 1 ? 'disabled' : ''}>↓</button>
-                    </span>
-                </div>
-            \`).join('');
-        };
-
-        list.addEventListener('click', event => {
-            const button = event.target.closest('button[data-action]');
-            if (!button || button.disabled) return;
-            const index = Number(button.dataset.index);
-            const targetIndex = button.dataset.action === 'up' ? index - 1 : index + 1;
-            if (targetIndex < 0 || targetIndex >= order.length) return;
-            [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
-            renderOrder();
-        });
-        byId('pool-order-cancel').onclick = closeDialog;
-        overlay.addEventListener('click', event => {
-            if (event.target === overlay) closeDialog();
-        });
-        byId('pool-order-save').onclick = async () => {
-            const saveButton = byId('pool-order-save');
-            saveButton.disabled = true;
-            saveButton.textContent = '保存中...';
-            try {
-                const result = await apiPostJson('/api/save-pool-order', {
-                    order: [POOL_DEFAULT_KEY, ...order, POOL_TRASH_KEY]
-                });
-                if (!result.success) throw new Error(result.error || '保存失败');
-                applyPoolState(result);
-                closeDialog();
-                log('✅ 池排序已保存', 'success');
-                showToast('池排序已保存');
-            } catch (e) {
-                saveButton.disabled = false;
-                saveButton.textContent = '保存排序';
-                log(\`❌ 保存池排序失败: \${e.message}\`, 'error');
-                showToast(e.message || '保存排序失败', 'error');
-            }
-        };
-        renderOrder();
-    }
-    function promptPoolName(message, initialValue = '') {
-        const name = prompt(message, initialValue);
-        if (!name) return '';
-        const displayName = name.trim();
-        if (!displayName) {
-            alert('显示名称不能为空!');
-            return '';
-        }
-        return displayName;
-    }
-
-    async function submitPoolStateChange(request, { successMessage, errorMessage, applyResult, onLogicalFailure } = {}) {
-        try {
-            const result = typeof request === 'function' ? await request() : await request;
-            if (!result.success) {
-                if (onLogicalFailure) onLogicalFailure(result);
-                else log(errorMessage + ': ' + (result.error || '未知错误'), 'error');
-                return false;
-            }
-            if (applyResult) applyResult(result);
-            log(typeof successMessage === 'function' ? successMessage(result) : successMessage, 'success');
-            return true;
-        } catch (e) {
-            log(errorMessage, 'error');
-            return false;
-        }
-    }
-
-    async function createNewPool() {
-        const displayName = promptPoolName('输入池显示名称');
-        if (!displayName) return;
-
-        await submitPoolStateChange(
-            () => apiPostJson('/api/create-pool', { displayName }),
-            {
-                successMessage: r => '✅ 已创建池: ' + getPoolName(r.poolKey),
-                errorMessage: '❌ 创建池失败',
-                applyResult: r => {
-                    currentPool = r.poolKey;
-                    applyPoolState(r);
-                },
-                onLogicalFailure: r => alert(r.error || '创建失败')
-            }
-        );
-    }
-
-    async function renameCurrentPool() {
-        if (currentPool === POOL_TRASH_KEY) {
-            alert(\`不能重命名\${getPoolName(currentPool)}!\`);
-            return;
-        }
-
-        const displayName = promptPoolName('输入新的池显示名称', getPoolName(currentPool));
-        if (!displayName) return;
-
-        await submitPoolStateChange(
-            () => apiPostJson('/api/rename-pool', { poolKey: currentPool, displayName }),
-            {
-                successMessage: '✅ 已重命名为: ' + displayName,
-                errorMessage: '❌ 重命名失败',
-                applyResult: r => {
-                    applyPoolState(r);
-                    showToast('池名称已更新');
-                }
-            }
-        );
-    }
-
-    async function deleteCurrentPool() {
-        const protectedPools = [POOL_DEFAULT_KEY, POOL_TRASH_KEY];
-        if (protectedPools.includes(currentPool)) {
-            alert(\`不能删除\${getPoolName(currentPool)}!\`);
-            return;
-        }
-
-        const boundDomains = Object.entries(domainPoolMapping)
-            .filter(([, poolKey]) => poolKey === currentPool)
-            .map(([domain]) => domain);
-        const confirmLines = [
-            \`确认删除 \${getPoolFixedName(currentPool)}（\${getPoolName(currentPool)}）？\`
-        ];
-        if (boundDomains.length) {
-            confirmLines.push('', \`当前有 \${boundDomains.length} 个管理域名绑定到该池，删除后会自动改回默认池。\`);
-            confirmLines.push(...boundDomains.slice(0, 5).map(domain => \`- \${domain}\`));
-            if (boundDomains.length > 5) confirmLines.push(\`...还有 \${boundDomains.length - 5} 个\`);
-        }
-        if (!confirm(confirmLines.join('\\n'))) return;
-
-        await submitPoolStateChange(
-            () => apiJson('/api/delete-pool?poolKey=' + currentPool, { method: 'POST' }),
-            {
-                successMessage: '✅ 已删除池',
-                errorMessage: '❌ 删除失败',
-                applyResult: r => {
-                    currentPool = POOL_DEFAULT_KEY;
-                    applyPoolState(r);
-                }
-            }
-        );
-    }
-
-    function switchPool() {
-        currentPool = byId('pool-selector').value;
-        log(\`📦 切换到: \${getPoolName(currentPool)}\`, 'info');
-
-        const trashActions = byId('trash-actions');
-        if (trashActions) trashActions.hidden = currentPool !== POOL_TRASH_KEY;
-
-        showPoolInfo();
-    }
-
-    function rollbackDomainPoolMapping(mapping) {
-        domainPoolMapping = mapping;
-        updateDomainBindingTable();
-    }
-
-    async function bindDomainToPool(bindingKey, poolKey) {
-        const target = TARGETS.find(item => getTargetDuplicateKey(item) === bindingKey);
-        const mode = target?.mode === 'TXT' ? 'TXT' : 'A';
-        const modeLabel = target ? (MODE_LABELS[mode] || mode) : '';
-        const domain = target ? target.domain + ' (' + modeLabel + ')' : bindingKey;
-        const oldPool = target ? getBoundPoolForTarget(target) : (domainPoolMapping[bindingKey] || POOL_DEFAULT_KEY);
-        if (oldPool === poolKey) return;
-        const oldMapping = { ...domainPoolMapping };
-        const oldName = getPoolName(oldPool);
-        const newName = getPoolName(poolKey);
-        const message = [
-            \`确认切换 \${domain} 的绑定池？\`,
-            \`\`,
-            \`当前：\${oldName}（\${getPoolFixedName(oldPool)}）\`,
-            \`切换到：\${newName}（\${getPoolFixedName(poolKey)}）\`,
-            \`\`,
-            \`切换后下一次维护会从新池补充 IP。\`
-        ].join('\\n');
-        if (!confirm(message)) {
-            updateDomainBindingTable();
-            return;
-        }
-        domainPoolMapping[bindingKey] = poolKey;
-
-        try {
-            const r = await apiPostJson('/api/save-domain-pool-mapping', { mapping: domainPoolMapping });
-            if (!r.success) {
-                rollbackDomainPoolMapping(oldMapping);
-                log(\`❌ 绑定失败: \${r.error || '未知错误'}\`, 'error');
-                return;
-            }
-            applyPoolState(r);
-
-            log(\`✅ \${domain} → \${getPoolName(poolKey)}\`, 'success');
-        } catch (e) {
-            rollbackDomainPoolMapping(oldMapping);
-            log('❌ 绑定失败', 'error');
-        }
-    }
-
-    async function clearTrash() {
-        if (!confirm('确认清空垃圾桶？此操作不可恢复！')) return;
-
-        await submitPoolStateChange(
-            () => apiJson('/api/clear-trash', { method: 'POST' }),
-            {
-                successMessage: '✅ 垃圾桶已清空',
-                errorMessage: '❌ 清空失败',
-                applyResult: () => {
-                    loadCurrentPool();
-                }
-            }
-        );
-    }
-
-    // 一键洗库状态
-    let cleaningPool = null;
-
-    // 一键洗库：加载池 → 检测 → 自动保存
-    // 普通池：有效IP覆盖保存，失效IP移入垃圾桶
-    // 垃圾桶：有效IP恢复到原来的库
-    async function oneClickClean() {
-        if (activeBatchRun || cleaningPool) { log('⚠️ 请等待当前检测或洗库结束', 'warn'); return; }
-        const isTrash = currentPool === POOL_TRASH_KEY;
-
-        log(\`🧹 开始一键洗库: \${getPoolName(currentPool)}\`, 'warn');
-        cleaningPool = currentPool;
-
-        // 1. 加载池
-        let allIPs = [];
-        let originalLines = []; // 保存原始行（包含注释）
-        try {
-            const r = await apiJson(\`/api/get-pool?poolKey=\${currentPool}\`);
-            if (!r.pool || !r.pool.trim()) {
-                log('❌ 池为空，无需清洗', 'error');
-                cleaningPool = null;
-                return;
-            }
-            originalLines = nonEmptyLines(r.pool);
-            allIPs = [...originalLines];
-            setInputValueAndPreview('ip-input', r.pool);
-            log(\`📂 已加载 \${r.count} 个IP\`, 'info');
-        } catch (e) {
-            log('❌ 加载失败', 'error');
-            cleaningPool = null;
-            return;
-        }
-
-        // 2. 检测（等待检测完成或中断）
-        const checkResult = await batchCheck();
-
-        // 3. 只有完全检测完成才自动保存，中断或放弃则不保存
-        const content = byId('ip-input').value;
-        const validLines = content.trim() ? content.trim().split('\\n') : [];
-        const validCount = validLines.length;
-
-        // 检查是否被中断或放弃
-        if (checkResult !== 'completed') {
-            // 检测被中断或放弃，不自动保存
-            log(\`⚠️ 洗库未完整确认，成功及未确认项已保留，未自动保存\`, 'warn');
-        } else if (cleaningPool) {
-            if (isTrash) {
-                // 垃圾桶洗库：有效IP恢复到原来的库
-                await saveTrashCleanResult(validLines, originalLines);
-            } else {
-                // 普通池洗库：有效IP覆盖保存，失效IP移入垃圾桶
-                await savePoolCleanResult(validLines, originalLines);
-            }
-        }
-
-        cleaningPool = null;
-    }
-
-    // 普通池洗库结果保存：有效IP覆盖保存，失效IP移入垃圾桶
-    async function savePoolCleanResult(validLines, originalLines) {
-        const validCount = validLines.length;
-
-        const validKeys = getPoolKeySet(validLines);
-        const invalidLines = filterLinesByKeys(originalLines, validKeys, false);
-
-        try {
-            // 1. 保存有效IP到池（覆盖）
-            if (validCount > 0) {
-                const r = await savePool(cleaningPool, validLines.join('\\n'), 'replace');
-
-                if (r.success) {
-                    log(\`✅ 洗库完成: \${r.message}\`, 'success');
-                    setPoolCount(r.count);
-                } else {
-                    log(\`❌ 保存失败: \${r.error}\`, 'error');
-                    return;
-                }
-            } else {
-                // 清空池
-                await savePool(cleaningPool, '', 'replace');
-                log(\`⚠️ 洗库完成，无有效IP，池已清空\`, 'warn');
-                setPoolCount('0');
-            }
-
-            // 2. 失效IP移入垃圾桶
-            if (invalidLines.length > 0) {
-                const trashContent = invalidLines.map(line => {
-                    const key = getPoolLineKey(line);
-                    return \`\${key} # 洗库失效 \${new Date().toISOString()} 来自 \${cleaningPool}\`;
-                }).join('\\n');
-
-                await savePool(POOL_TRASH_KEY, trashContent, 'append');
-
-                log(\`🗑️ 已将 \${invalidLines.length} 个失效IP移入垃圾桶\`, 'info');
-            }
-
-            clearPoolInput();
-        } catch (e) {
-            log(\`❌ 保存失败\`, 'error');
-        }
-    }
-
-    // 垃圾桶洗库结果保存：有效IP恢复到原来的库
-    async function saveTrashCleanResult(validLines, originalLines) {
-        if (validLines.length === 0) {
-            log(\`⚠️ 洗库完成，无有效IP可恢复\`, 'warn');
-            clearPoolInput();
-            return;
-        }
-
-        const validKeys = getPoolKeySet(validLines);
-        const ipsToRestore = filterLinesByKeys(originalLines, validKeys, true).map(getPoolLineKey);
-
-        try {
-            const r = await restoreTrashIPs(ipsToRestore);
-
-            if (r.success) {
-                log(\`✅ 垃圾桶洗库完成: \${r.message}\`, 'success');
-                logRestoreSummary(r);
-                clearPoolInput();
-                showPoolInfo();
-            } else {
-                log(\`❌ 恢复失败: \${r.error}\`, 'error');
-            }
-        } catch (e) {
-            log(\`❌ 恢复失败\`, 'error');
-        }
-    }
-
-    function logRestoreFailure(message = '恢复失败') {
-        log('❌ ' + message, 'error');
-    }
-
-    async function restoreSelected() {
-        const lines = getInputLines('ip-input');
-
-        if (lines.length === 0) {
-            log('❌ 请先选择要恢复的IP', 'error');
-            return;
-        }
-
-        const ips = lines.map(line => getPoolLineKey(line)).filter(Boolean);
-
-        try {
-            const r = await restoreTrashIPs(ips);
-
-            if (r.success) {
-                handleRestoreSuccess(r, true);
-            } else {
-                logRestoreFailure(r.error);
-            }
-        } catch (e) {
-            logRestoreFailure();
-        }
-    }
-
-    function handleRestoreSuccess(result, reloadPool = false) {
-        log('✅ ' + result.message, 'success');
-        logRestoreSummary(result);
-        if (reloadPool) loadCurrentPool();
-        else {
-            clearPoolInput();
-            showPoolInfo();
-        }
-    }
-
-    function logRestoreSummary(result) {
-        const entries = Array.isArray(result.restoredByPoolDisplay) ? result.restoredByPoolDisplay : [];
-        if (entries.length <= 1) return;
-        entries.forEach(item => {
-            log(\`   \${item.label || item.name}: \${item.count} 个\`, 'info');
-        });
-    }
-
-    function smartFilter(mode) {
-        const input = byId('ip-input');
-        const criteria = parseFilterExpression(getInputValue('universal-filter'));
-
-        if (!criteria) {
-            log('❌ 请至少填写一个筛选条件', 'error');
-            return;
-        }
-
-        const lines = getInputLines('ip-input');
-        const filtered = lines.filter(line => {
-            const matched = lineMatchesUniversalFilter(line, criteria);
-            return mode === 'keep' ? matched : !matched;
-        });
-
-        input.value = filtered.join('\\n');
-        updateFilterPreview();
-        log(\`✅ 筛选完成: \${lines.length} → \${filtered.length}\`, 'success');
-    }
-
-    function parseUniversalFilter(query) {
-        const tokens = String(query || '').split(/\\s+/).map(v => v.trim()).filter(Boolean);
-        if (!tokens.length) return null;
-        const criteria = { ports: [], countries: [], asns: [], stacks: [], text: [] };
-        for (const token of tokens) {
-            const match = token.match(/^([a-zA-Z]+):(.*)$/);
-            if (!match) {
-                criteria.text.push(token.toLowerCase());
-                continue;
-            }
-            const key = match[1].toLowerCase();
-            const rawValue = match[2].trim();
-            if (!rawValue) continue;
-            const values = rawValue.split(',').map(v => v.trim()).filter(Boolean);
-            if (!values.length) continue;
-            if (key === 'port') {
-                const parsed = parsePortFilter(values.join(','));
-                if (!parsed) return null;
-                criteria.ports.push(...parsed);
-            } else if (key === 'country') {
-                criteria.countries.push(...values.map(v => v.toUpperCase()));
-            } else if (key === 'asn' || key === 'as') {
-                criteria.asns.push(...values.map(v => v.replace(/^AS/i, '').toUpperCase()));
-            } else if (key === 'stack' || key === 'exit') {
-                criteria.stacks.push(...values.map(v => normalizeStackFilter(v)));
-            } else {
-                criteria.text.push(token.toLowerCase());
-            }
-        }
-        return criteria;
-    }
-
-    function parseFilterExpression(query) {
-        const groups = String(query || '').split('|').map(part => parseUniversalFilter(part)).filter(Boolean);
-        return groups.length ? groups : null;
-    }
-
-    function lineMatchesUniversalFilter(line, criteria) {
-        const meta = parsePoolLine(line);
-        const portNum = parseInt(parseAddrParts(meta.address).port, 10);
-        const searchable = [meta.asn, meta.country, meta.comment, line].join(' ').toLowerCase();
-        if (Array.isArray(criteria)) return criteria.some(group => lineMatchesUniversalFilter(line, group));
-        if (criteria.ports.length && !criteria.ports.some(p => typeof p === 'number' ? portNum === p : portNum >= p.start && portNum <= p.end)) return false;
-        const countryValues = String(meta.country || '').toUpperCase().split(/[\/,\uFF0C\\s]+/).filter(Boolean);
-        if (criteria.countries.length && !criteria.countries.some(country => countryValues.includes(country))) return false;
-        const asnValues = String(meta.asn || '').replace(/AS/gi, '').toUpperCase().split(/[\/,\uFF0C\\s]+/).filter(Boolean);
-        if (criteria.asns.length && !criteria.asns.some(asn => asnValues.includes(asn))) return false;
-        if (criteria.stacks.length) {
-            const lineStack = normalizeStackFilter(meta.stack);
-            if (!criteria.stacks.includes(lineStack)) return false;
-        }
-        if (criteria.text.length && !criteria.text.some(token => searchable.includes(token))) return false;
-        return true;
-    }
-
-    function updateFilterPreview() {
-        const preview = byId('filter-preview');
-        if (!preview) return;
-        const lines = getInputLines('ip-input');
-        const criteria = parseFilterExpression(getInputValue('universal-filter'));
-        if (!criteria) {
-            preview.innerHTML = '输入条件后会显示匹配数量。';
-            return;
-        }
-        const matched = lines.filter(line => lineMatchesUniversalFilter(line, criteria)).length;
-        preview.innerHTML = \`当前输入 <strong>\${lines.length}</strong> 条，匹配 <strong>\${matched}</strong> 条。\`;
-    }
-
-    function parsePortFilter(portStr) {
-        const parts = portStr.split(',').map(p => p.trim()).filter(p => p);
-        const result = [];
-
-        for (const part of parts) {
-            if (part.includes('-')) {
-                const [start, end] = part.split('-').map(p => parseInt(p.trim()));
-                if (!start || !end || start < 1 || end > 65535 || start > end) {
-                    return null;
-                }
-                result.push({ start, end });
-            } else if (/^\\d+$/.test(part)) {
-                const portNum = parseInt(part);
-                if (portNum < 1 || portNum > 65535) {
-                    return null;
-                }
-                result.push(portNum);
-            } else {
-                return null;
-            }
-        }
-
-        return result.length > 0 ? result : null;
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-        log('🚀 系统就绪', 'success');
-        log(\`⚙️ 配置: 并发\${SETTINGS.CONCURRENT_CHECKS} | 超时\${SETTINGS.CHECK_TIMEOUT}ms\`, 'info');
-        loadAppConfigToForm(INITIAL_APP_CONFIG);
-        const configBody = document.querySelector('.config-details-body');
-        ['input', 'change'].forEach(type => configBody?.addEventListener(type, () => setConfigDirty(true, type === 'change' ? '基础配置已保存到页面，点击“保存到 KV”后生效' : '')));
-        ['ip-input', 'universal-filter'].forEach(id => {
-            const el = byId(id);
-            if (el) el.addEventListener('input', updateFilterPreview);
-        });
-        updateFilterPreview();
-        switchDomain();
-        Promise.all([
-            showPoolInfo(),
-            loadDomainPoolMapping()
-        ]).catch(e => log('⚠️ 初始化部分失败', 'error'));
+  }
+  if (decision === false) {
+    return dead(target, {
+      endpoint,
+      latencyMs,
+      ...message ? { message } : {}
     });
-</script>`;
+  }
+  if (exitIp) {
+    return alive(target, {
+      endpoint,
+      latencyMs,
+      exitFamily,
+      exits,
+      exitIp
+    });
+  }
+  return unknown(target, "INVALID_RESPONSE", message ?? "\u68C0\u6D4B\u63A5\u53E3\u672A\u8FD4\u56DE\u53EF\u4FE1\u7684\u6210\u529F\u6216\u5931\u8D25\u7ED3\u8BBA", {
+    endpoint,
+    latencyMs
+  });
 }
-
-function renderHTML(C, runtimeState = {}) {
-    const targetsJson = JSON.stringify(C.targets);
-    const settingsJson = JSON.stringify(getRuntimeSettings(C));
-    const appConfigJson = JSON.stringify(getEditableConfig(C));
-    const kvReady = runtimeState.kvReady !== false;
-    const version = APP_VERSION;
-
-    // The Worker is intentionally single-file deployable. Keep front-end code
-    // grouped by the anchors below instead of extracting external assets.
-    const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDNS Pro - IP管理面板</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🌐</text></svg>">
-    ${renderAppStyles()}
-</head>
-<body class="pb-5">
-
-${renderGithubCorner()}
-
-${renderHero(C, kvReady)}
-
-<div class="container">
-    ${renderTopNav()}
-
-    ${renderDashboardPage()}
-
-    ${renderConfigPage()}
-</div>
-<div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-${renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnabled: !!C.authKey })}
-<footer class="container text-center text-secondary small py-3">DDNS Pro · ${version}</footer>
-</body>
-</html>`;
-    // 压缩HTML空白，减少传输体积约20-30%
-    return html
-        .replace(/^[ \t]+/gm, '')
-        .replace(/\n{2,}/g, '\n');
+__name(parseProbePayload, "parseProbePayload");
+function unwrapPayload(payload) {
+  if (Array.isArray(payload)) {
+    if (payload.length !== 1) return null;
+    return asRecord(payload[0]);
+  }
+  return asRecord(payload);
 }
+__name(unwrapPayload, "unwrapPayload");
+function isRecognizedPayload(record) {
+  return [
+    "success",
+    "ok",
+    "status",
+    "proxyIP",
+    "proxy_ip",
+    "probe_results",
+    "exitIp",
+    "exit_ip",
+    "inferred_stack",
+    "supports_ipv4",
+    "supports_ipv6"
+  ].some((key) => key in record);
+}
+__name(isRecognizedPayload, "isRecognizedPayload");
+function readBooleanDecision(record) {
+  if (typeof record.success === "boolean") return record.success;
+  if (typeof record.ok === "boolean") return record.ok;
+  return void 0;
+}
+__name(readBooleanDecision, "readBooleanDecision");
+function readStatusDecision(status) {
+  if (!status) return void 0;
+  if (["success", "ok", "alive", "available", "healthy", "up"].includes(status)) return true;
+  if (["failed", "failure", "dead", "unavailable", "down"].includes(status)) return false;
+  return void 0;
+}
+__name(readStatusDecision, "readStatusDecision");
+function readProbeResultsDecision(value) {
+  const probes = asRecord(value);
+  if (!probes) return void 0;
+  const values = Object.values(probes).map(asRecord).filter((probe) => probe !== null);
+  if (values.length === 0) return void 0;
+  const okValues = values.map((probe) => probe.ok).filter((ok) => typeof ok === "boolean");
+  if (okValues.includes(true)) return true;
+  if (okValues.length > 0 && okValues.every((ok) => !ok)) return false;
+  return void 0;
+}
+__name(readProbeResultsDecision, "readProbeResultsDecision");
+function pickExitIp(record, exits) {
+  const fromExits = exits.find((exit2) => exit2.ip)?.ip;
+  if (fromExits) return fromExits;
+  const direct = firstText(record, ["exitIp", "exit_ip", "ipAddress"]);
+  if (direct) return direct;
+  const exit = asRecord(record.exit);
+  if (exit) {
+    const fromExit = firstText(exit, ["ip", "ipAddress", "exitIp", "exit_ip"]);
+    if (fromExit) return fromExit;
+  } else if (typeof record.exit === "string" && record.exit) {
+    return record.exit;
+  }
+  const candidate = readText(record.proxyIP) ?? readText(record.proxy_ip);
+  const topLevelIp = readText(record.ip);
+  if (topLevelIp && topLevelIp !== candidate) return topLevelIp;
+  const probes = asRecord(record.probe_results);
+  if (!probes) return void 0;
+  for (const probeValue of Object.values(probes)) {
+    const probe = asRecord(probeValue);
+    if (!probe) continue;
+    const probeExit = asRecord(probe.exit);
+    const fromProbe = probeExit ? firstText(probeExit, ["ip", "ipAddress", "exitIp", "exit_ip"]) : firstText(probe, ["exitIp", "exit_ip"]);
+    if (fromProbe) return fromProbe;
+  }
+  return void 0;
+}
+__name(pickExitIp, "pickExitIp");
+function readProbeExits(record) {
+  const exits = [];
+  const probes = asRecord(record.probe_results) ?? asRecord(record.probeResults) ?? asRecord(record.probes);
+  if (probes) {
+    for (const [stack, value] of Object.entries(probes)) {
+      const probe = asRecord(value);
+      if (!probe || !isSuccessfulProbe(probe)) continue;
+      const exit = asRecord(probe.exit) ?? asRecord(probe.egress) ?? asRecord(probe.result) ?? probe;
+      const parsed = readProbeExit(exit, stack);
+      if (parsed) exits.push(parsed);
+    }
+  }
+  const directValues = Array.isArray(record.exits) ? record.exits : [];
+  for (const value of directValues) {
+    const exit = asRecord(value);
+    if (!exit) continue;
+    const parsed = readProbeExit(exit, readText(exit.stack) ?? readText(exit.ipType));
+    if (parsed) exits.push(parsed);
+  }
+  const directExit = asRecord(record.exit) ?? asRecord(record.egress);
+  if (directExit) {
+    const parsed = readProbeExit(directExit, readText(record.stack) ?? readText(record.ipType));
+    if (parsed) exits.push(parsed);
+  }
+  return uniqueExits(exits);
+}
+__name(readProbeExits, "readProbeExits");
+function isSuccessfulProbe(probe) {
+  return probe.ok === true || probe.success === true || readText(probe.status)?.toLowerCase() === "success" || asRecord(probe.exit) !== null;
+}
+__name(isSuccessfulProbe, "isSuccessfulProbe");
+function pickExitFamily(record, exitIp) {
+  const stack = (readText(record.inferred_stack) ?? readText(record.stack) ?? readText(record.ipType) ?? "").toLowerCase();
+  if (stack === "dual_stack" || stack === "dual" || stack === "v4/v6") return "dual";
+  if (stack === "ipv4_only" || stack === "ipv4" || stack === "v4") return "ipv4";
+  if (stack === "ipv6_only" || stack === "ipv6" || stack === "v6") return "ipv6";
+  const supportsIpv4 = record.supports_ipv4 === true;
+  const supportsIpv6 = record.supports_ipv6 === true;
+  if (supportsIpv4 && supportsIpv6) return "dual";
+  if (supportsIpv4) return "ipv4";
+  if (supportsIpv6) return "ipv6";
+  return exitFamilyFromIp(exitIp);
+}
+__name(pickExitFamily, "pickExitFamily");
+function readMessage(record) {
+  const direct = firstText(record, ["message", "errorMessage"]);
+  if (direct) return trimMessage(direct);
+  const error = record.error;
+  if (typeof error === "string") return trimMessage(error);
+  const errorRecord = asRecord(error);
+  return errorRecord ? trimMessage(firstText(errorRecord, ["message", "detail", "code"]) ?? "") : void 0;
+}
+__name(readMessage, "readMessage");
+function trimMessage(value) {
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 240) : void 0;
+}
+__name(trimMessage, "trimMessage");
+function isAbortError(error) {
+  return error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name);
+}
+__name(isAbortError, "isAbortError");
+
+// app/src/adapters/probe/socket.ts
+var SocketProbeAdapter = class {
+  static {
+    __name(this, "SocketProbeAdapter");
+  }
+  name = "socket";
+  targets;
+  timeoutMs;
+  readLimitBytes;
+  connect;
+  constructor(options) {
+    this.targets = [options.ipv4Url, options.ipv6Url].map(buildTarget).filter((target) => target !== null);
+    this.timeoutMs = options.timeoutMs;
+    this.readLimitBytes = options.readLimitBytes;
+    this.connect = options.connect;
+  }
+  async probe(target, context = {}) {
+    if (this.targets.length === 0) {
+      return unknown(target, "NOT_CONFIGURED", "\u672A\u914D\u7F6E IPv4/IPv6 Socket \u63A2\u9488\u5730\u5740");
+    }
+    if (context.signal?.aborted) return cancelled(target);
+    const attempts = await Promise.all(this.targets.map((probe) => this.runProbe(probe, target, context)));
+    return combineAttempts(target, attempts);
+  }
+  async runProbe(probe, target, context) {
+    const startedAt = Date.now();
+    let live = null;
+    try {
+      const connection = this.connect({ hostname: connectHostname(target), port: target.port }, { secureTransport: "starttls", allowHalfOpen: true });
+      live = connection;
+      const response = await withDeadline(async () => {
+        await connection.opened;
+        const tls = connection.startTls({ expectedServerHostname: probe.endpoint });
+        live = tls;
+        await tls.opened;
+        return parseResponse(await exchange(tls, probe.request, this.readLimitBytes));
+      }, this.timeoutMs, context.signal);
+      const latencyMs = Date.now() - startedAt;
+      if (response.ok) {
+        return { ok: true, exit: response.exit, statusCode: response.statusCode, latencyMs, endpoint: probe.endpoint };
+      }
+      return { ok: false, failure: "INVALID_RESPONSE", message: response.message, latencyMs, endpoint: probe.endpoint };
+    } catch (error) {
+      const failure = classifyError(error, context.signal);
+      return {
+        ok: false,
+        failure,
+        message: describeFailure(failure, error),
+        latencyMs: Date.now() - startedAt,
+        endpoint: probe.endpoint
+      };
+    } finally {
+      await closeQuietly(live);
+    }
+  }
+};
+function combineAttempts(target, attempts) {
+  const succeeded = attempts.filter((attempt) => attempt.ok);
+  const latencyMs = Math.min(...attempts.map((attempt) => attempt.latencyMs));
+  if (succeeded.length > 0) {
+    const exits = uniqueExits(succeeded.map((attempt) => attempt.exit));
+    const exitIp = exits.find((exit) => exit.family === "ipv4")?.ip ?? exits[0]?.ip;
+    return alive(target, {
+      endpoint: "socket",
+      exitFamily: familyFromExits(exits),
+      exits,
+      ...exitIp ? { exitIp } : {},
+      latencyMs
+    });
+  }
+  const failed = attempts.filter((attempt) => !attempt.ok);
+  const failure = dominantFailure(failed);
+  const message = failed[0]?.message ?? "Socket \u63A2\u9488\u672A\u8FD4\u56DE\u53EF\u7528\u51FA\u53E3";
+  if (failure === "REFUSED") {
+    return dead(target, { endpoint: "socket", latencyMs, message: "\u4E24\u4E2A Socket \u63A2\u9488\u90FD\u65E0\u6CD5\u8FDE\u63A5\u5019\u9009\u5730\u5740" });
+  }
+  return unknown(target, failure, message, { endpoint: "socket", latencyMs });
+}
+__name(combineAttempts, "combineAttempts");
+function dominantFailure(failed) {
+  const kinds = new Set(failed.map((attempt) => attempt.failure));
+  if (kinds.size === 1) return failed[0]?.failure ?? "NETWORK_ERROR";
+  return kinds.has("CANCELLED") ? "CANCELLED" : "NETWORK_ERROR";
+}
+__name(dominantFailure, "dominantFailure");
+function familyFromExits(exits) {
+  const families = new Set(exits.map((exit) => exit.family));
+  const hasIpv4 = families.has("ipv4");
+  const hasIpv6 = families.has("ipv6");
+  if (hasIpv4 && hasIpv6) return "dual";
+  if (hasIpv4) return "ipv4";
+  if (hasIpv6) return "ipv6";
+  return "unknown";
+}
+__name(familyFromExits, "familyFromExits");
+function buildTarget(url) {
+  const parsed = parseSocketProbeUrl(url);
+  if (!parsed) return null;
+  return { endpoint: parsed.endpoint, request: buildRequest(parsed) };
+}
+__name(buildTarget, "buildTarget");
+function connectHostname(target) {
+  return target.family === "ipv6" ? `[${target.host}]` : target.host;
+}
+__name(connectHostname, "connectHostname");
+function buildRequest(parsed) {
+  const request = [
+    `GET ${parsed.path} HTTP/1.1`,
+    `Host: ${parsed.hostHeader}`,
+    "Accept: application/json, text/plain, */*",
+    "Accept-Encoding: identity",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Connection: close",
+    "",
+    ""
+  ].join("\r\n");
+  return new TextEncoder().encode(request);
+}
+__name(buildRequest, "buildRequest");
+async function exchange(tls, request, readLimitBytes) {
+  const writer = tls.writable.getWriter();
+  try {
+    await writer.write(request);
+  } finally {
+    writer.releaseLock();
+  }
+  return readLimited(tls.readable, readLimitBytes);
+}
+__name(exchange, "exchange");
+async function readLimited(stream, limit) {
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      const remaining = limit - total;
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return concatBytes(chunks, total);
+}
+__name(readLimited, "readLimited");
+var HEADER_SEPARATOR = Uint8Array.of(13, 10, 13, 10);
+var LINE_SEPARATOR = Uint8Array.of(13, 10);
+var HTTP_STATUS_RE = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/;
+var CHUNKED_RE = /transfer-encoding:\s*chunked/i;
+function parseResponse(raw) {
+  if (raw.byteLength === 0) return { ok: false, message: "Socket \u63A2\u9488\u8FD4\u56DE\u7A7A\u54CD\u5E94" };
+  const splitIndex = indexOfBytes(raw, HEADER_SEPARATOR);
+  const headerText = decode(splitIndex < 0 ? raw : raw.subarray(0, splitIndex));
+  const bodyBytes = splitIndex < 0 ? new Uint8Array(0) : raw.subarray(splitIndex + HEADER_SEPARATOR.byteLength);
+  const statusCode = Number(HTTP_STATUS_RE.exec(headerText)?.[1] ?? 0);
+  if (statusCode !== 200) {
+    return { ok: false, message: `Socket \u63A2\u9488 HTTP \u72B6\u6001\u5F02\u5E38\uFF08${statusCode || "unknown"}\uFF09`, ...statusCode ? { statusCode } : {} };
+  }
+  let body = bodyBytes;
+  if (CHUNKED_RE.test(headerText)) {
+    const decoded = decodeChunked(bodyBytes);
+    if (!decoded) return { ok: false, message: "Socket \u63A2\u9488\u54CD\u5E94\u5206\u5757\u6570\u636E\u4E0D\u5B8C\u6574", statusCode };
+    body = decoded;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(decode(body));
+  } catch {
+    return { ok: false, message: "Socket \u63A2\u9488\u54CD\u5E94\u4E0D\u662F\u5408\u6CD5 JSON", statusCode };
+  }
+  const exit = readProbeExit(asRecord(payload) ?? {}, void 0);
+  if (!exit?.ip) return { ok: false, message: "Socket \u63A2\u9488\u54CD\u5E94\u7F3A\u5C11\u51FA\u53E3 IP", statusCode };
+  return { ok: true, exit, statusCode };
+}
+__name(parseResponse, "parseResponse");
+function decodeChunked(body) {
+  const chunks = [];
+  let offset = 0;
+  let total = 0;
+  while (offset < body.byteLength) {
+    const lineEnd = indexOfBytes(body, LINE_SEPARATOR, offset);
+    if (lineEnd < 0) return null;
+    const sizeHex = decode(body.subarray(offset, lineEnd)).split(";")[0]?.trim() ?? "";
+    const size = Number.parseInt(sizeHex, 16);
+    if (!Number.isFinite(size) || size < 0) return null;
+    const bodyStart = lineEnd + LINE_SEPARATOR.byteLength;
+    if (size === 0) return concatBytes(chunks, total);
+    const bodyEnd = bodyStart + size;
+    if (bodyEnd > body.byteLength) return null;
+    const chunk = body.subarray(bodyStart, bodyEnd);
+    chunks.push(chunk);
+    total += chunk.byteLength;
+    offset = bodyEnd + LINE_SEPARATOR.byteLength;
+  }
+  return null;
+}
+__name(decodeChunked, "decodeChunked");
+function indexOfBytes(haystack, needle, start = 0) {
+  const limit = haystack.byteLength - needle.byteLength;
+  outer: for (let index = start; index <= limit; index += 1) {
+    for (let offset = 0; offset < needle.byteLength; offset += 1) {
+      if (haystack[index + offset] !== needle[offset]) continue outer;
+    }
+    return index;
+  }
+  return -1;
+}
+__name(indexOfBytes, "indexOfBytes");
+function concatBytes(chunks, total) {
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+__name(concatBytes, "concatBytes");
+function decode(bytes) {
+  return new TextDecoder().decode(bytes);
+}
+__name(decode, "decode");
+var ProbeTimeoutError = class extends Error {
+  static {
+    __name(this, "ProbeTimeoutError");
+  }
+};
+var ProbeAbortedError = class extends Error {
+  static {
+    __name(this, "ProbeAbortedError");
+  }
+};
+async function withDeadline(work, timeoutMs, externalSignal) {
+  let timer;
+  let onAbort;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new ProbeTimeoutError(`socket probe timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  timeout.catch(() => void 0);
+  const marks = [timeout];
+  if (externalSignal) {
+    const aborted = new Promise((_, reject) => {
+      onAbort = /* @__PURE__ */ __name(() => reject(new ProbeAbortedError("socket probe aborted")), "onAbort");
+      if (externalSignal.aborted) onAbort();
+      else externalSignal.addEventListener("abort", onAbort, { once: true });
+    });
+    aborted.catch(() => void 0);
+    marks.push(aborted);
+  }
+  try {
+    return await Promise.race([work(), ...marks]);
+  } finally {
+    if (timer !== void 0) clearTimeout(timer);
+    if (onAbort) externalSignal?.removeEventListener("abort", onAbort);
+  }
+}
+__name(withDeadline, "withDeadline");
+function classifyError(error, externalSignal) {
+  if (error instanceof ProbeTimeoutError) return "TIMEOUT";
+  if (error instanceof ProbeAbortedError || externalSignal?.aborted) return "CANCELLED";
+  if (isConnectionRefused(error)) return "REFUSED";
+  return "NETWORK_ERROR";
+}
+__name(classifyError, "classifyError");
+function isConnectionRefused(error) {
+  return error instanceof Error && /refused|ECONNREFUSED/i.test(error.message);
+}
+__name(isConnectionRefused, "isConnectionRefused");
+function describeFailure(failure, error) {
+  const detail = error instanceof Error ? trimMessage2(error.message) : void 0;
+  if (failure === "CANCELLED") return "\u68C0\u6D4B\u5DF2\u53D6\u6D88";
+  if (failure === "TIMEOUT") return "Socket \u63A2\u9488\u8D85\u65F6";
+  if (failure === "REFUSED") return "Socket \u63A2\u9488\u8FDE\u63A5\u88AB\u62D2\u7EDD";
+  if (failure === "INVALID_RESPONSE") return detail ?? "Socket \u63A2\u9488\u54CD\u5E94\u4E0D\u53EF\u7528";
+  return detail ? `Socket \u63A2\u9488\u7F51\u7EDC\u5F02\u5E38\uFF1A${detail}` : "Socket \u63A2\u9488\u7F51\u7EDC\u5F02\u5E38";
+}
+__name(describeFailure, "describeFailure");
+function cancelled(target) {
+  return unknown(target, "CANCELLED", "\u68C0\u6D4B\u5DF2\u53D6\u6D88", { endpoint: "socket" });
+}
+__name(cancelled, "cancelled");
+function trimMessage2(value) {
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 160) : void 0;
+}
+__name(trimMessage2, "trimMessage");
+async function closeQuietly(socket) {
+  if (!socket) return;
+  try {
+    await socket.close();
+  } catch {
+  }
+}
+__name(closeQuietly, "closeQuietly");
+
+// app/src/adapters/probe/unconfigured.ts
+var UnconfiguredProbeAdapter = class {
+  static {
+    __name(this, "UnconfiguredProbeAdapter");
+  }
+  name = "unconfigured";
+  async probe(target) {
+    return unknown(target, "NOT_CONFIGURED", "\u672A\u914D\u7F6E\u68C0\u6D4B\u63A5\u53E3");
+  }
+};
+
+// app/src/config/runtime.ts
+function loadEnvConfig(env) {
+  const defaults = createDefaultConfig();
+  const mode = readProbeMode(env.PROBE_MODE);
+  const apiKey = env.CF_KEY?.trim() ?? "";
+  const zoneId = env.CF_ZONEID?.trim() ?? "";
+  const baseDomain = env.CF_BASE_DOMAIN?.trim().replace(/^\.+|\.+$/g, "") ?? "";
+  return {
+    ...defaults,
+    apiKey,
+    zoneId,
+    zones: apiKey || zoneId || baseDomain ? [{ name: baseDomain || "\u73AF\u5883\u53D8\u91CF\u914D\u7F6E", baseDomain, zoneId, apiKey, label: baseDomain || "\u73AF\u5883\u53D8\u91CF\u914D\u7F6E" }] : defaults.zones,
+    checkApi: normalizeCheckApi(env.CHECK_API ?? defaults.checkApi, mode),
+    checkApiBackup: normalizeCheckApi(env.CHECK_API_BACKUP ?? defaults.checkApiBackup, mode),
+    dohApi: readLengthBounded(env.DOH_API, defaults.dohApi),
+    authKey: readLengthBounded(env.AUTH_KEY, defaults.authKey),
+    tgToken: readLengthBounded(env.TG_TOKEN, defaults.tgToken),
+    tgId: readLengthBounded(env.TG_ID, defaults.tgId, 64),
+    scheduledEnabled: readBooleanEnv(env.SCHEDULED_ENABLED, defaults.scheduledEnabled),
+    tgEnabled: readBooleanEnv(env.TG_ENABLED, defaults.tgEnabled),
+    probeMode: mode,
+    socketProbeIpv4Url: readProbeUrlEnv(env.SOCKET_PROBE_IPV4_URL, defaults.socketProbeIpv4Url),
+    socketProbeIpv6Url: readProbeUrlEnv(env.SOCKET_PROBE_IPV6_URL, defaults.socketProbeIpv6Url),
+    settings: {
+      ...DEFAULT_RUNTIME_SETTINGS,
+      CHECK_TIMEOUT: parseInteger(env.CHECK_TIMEOUT, defaults.settings.CHECK_TIMEOUT, MIN_PROBE_TIMEOUT_MS, MAX_PROBE_TIMEOUT_MS),
+      REMOTE_LOAD_TIMEOUT: parseInteger(
+        env.REMOTE_LOAD_TIMEOUT,
+        defaults.settings.REMOTE_LOAD_TIMEOUT,
+        SETTINGS_LIMITS.REMOTE_LOAD_TIMEOUT.min,
+        SETTINGS_LIMITS.REMOTE_LOAD_TIMEOUT.max
+      )
+    }
+  };
+}
+__name(loadEnvConfig, "loadEnvConfig");
+function createProbeAdapterFromConfig(config, deps = {}) {
+  if (config.mode === "socket") {
+    if (!deps.connect || !config.ipv4ProbeUrl && !config.ipv6ProbeUrl) return new UnconfiguredProbeAdapter();
+    return new SocketProbeAdapter({
+      ipv4Url: config.ipv4ProbeUrl,
+      ipv6Url: config.ipv6ProbeUrl,
+      timeoutMs: config.timeoutMs,
+      readLimitBytes: config.readLimitBytes,
+      connect: deps.connect
+    });
+  }
+  if (config.endpoints.length === 0) return new UnconfiguredProbeAdapter();
+  return new ExternalApiProbeAdapter({
+    endpoints: config.endpoints.map(({ name, urlTemplate }) => ({ name, urlTemplate })),
+    timeoutMs: config.timeoutMs,
+    fallbackToNext: config.fallbackToNext,
+    fetchImpl: deps.fetchImpl ?? fetch
+  });
+}
+__name(createProbeAdapterFromConfig, "createProbeAdapterFromConfig");
+function readProbeMode(value) {
+  const trimmed = value?.trim();
+  return PROBE_MODES.find((mode) => mode === trimmed) ?? "external-api";
+}
+__name(readProbeMode, "readProbeMode");
+function readProbeUrlEnv(value, fallback) {
+  const trimmed = value?.trim();
+  if (!trimmed) return fallback;
+  return parseSocketProbeUrl(trimmed) ? trimmed : fallback;
+}
+__name(readProbeUrlEnv, "readProbeUrlEnv");
+function normalizeCheckApi(rawValue, mode) {
+  const value = rawValue.trim();
+  if (!value) return "";
+  return mode === "cmliu-check" ? buildCmliuUrlTemplate(value) ?? "" : value;
+}
+__name(normalizeCheckApi, "normalizeCheckApi");
+function buildCmliuUrlTemplate(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    if (!url.pathname.replace(/\/+$/, "").endsWith("/check")) {
+      url.pathname = `${url.pathname.replace(/\/+$/, "")}/check`;
+    }
+    url.searchParams.set("proxyip", "{proxyip}");
+    return url.toString().replace("%7Bproxyip%7D", "{proxyip}");
+  } catch {
+    return null;
+  }
+}
+__name(buildCmliuUrlTemplate, "buildCmliuUrlTemplate");
+function parseInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+__name(parseInteger, "parseInteger");
+function readLengthBounded(value, fallback, max = MAX_ENDPOINT_URL_LENGTH) {
+  if (value === void 0) return fallback;
+  const trimmed = value.trim();
+  return trimmed.length <= max ? trimmed : fallback;
+}
+__name(readLengthBounded, "readLengthBounded");
+function readBooleanEnv(value, fallback) {
+  if (value === void 0) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+__name(readBooleanEnv, "readBooleanEnv");
+
+// app/src/adapters/notify/telegram-message.ts
+function buildTelegramMaintenanceMessage(run, options) {
+  const title = options.isManual ? "DDNS \u624B\u52A8\u7EF4\u62A4\u62A5\u544A" : "DDNS \u81EA\u52A8\u7EF4\u62A4\u62A5\u544A";
+  const lines = [
+    `${options.isManual ? "\u{1F527}" : "\u2699\uFE0F"} <b>${title}</b>`,
+    `\u23F0 ${escapeHtml(formatBeijingTimestamp(options.now ?? /* @__PURE__ */ new Date()))}`
+  ];
+  if (run.errors.length > 0) lines.push(`\u26A0\uFE0F <b>\u6267\u884C\u9519\u8BEF ${run.errors.length} \u9879</b>`);
+  if (run.probeErrors > 0) lines.push(`\u26A0\uFE0F <b>\u68C0\u6D4B\u5F02\u5E38 ${run.probeErrors} \u6B21</b>\uFF0C\u76F8\u5173\u8282\u70B9\u672A\u505A\u5220\u9664\u6216\u66FF\u6362`);
+  if (run.results.length === 0) lines.push("\u6CA1\u6709\u542F\u7528\u4E2D\u7684\u7EF4\u62A4\u76EE\u6807\u3002");
+  for (const result of run.results) {
+    lines.push("", `\u2501\u2501 <code>${escapeHtml(result.target.domain)}</code> \u2501\u2501`, formatTarget(result));
+  }
+  return lines.join("\n");
+}
+__name(buildTelegramMaintenanceMessage, "buildTelegramMaintenanceMessage");
+function formatTarget(result) {
+  if (result.error) return `\u274C \u6267\u884C\u5931\u8D25\uFF1A${escapeHtml(result.error)}`;
+  if (!result.report) return "\u274C \u6CA1\u6709\u7EF4\u62A4\u62A5\u544A";
+  const { report } = result;
+  const mode = report.target.mode === "A" ? `A/AAAA \xB7 \u7AEF\u53E3 ${report.target.port}` : "TXT";
+  const lines = [
+    `${mode} \xB7 \u6700\u5C0F\u6D3B\u8DC3\u6570 ${report.target.minActive}`,
+    `\u{1F4E6} \u4F7F\u7528\u6C60\uFF1A<b>${escapeHtml(result.poolName)}</b>`,
+    `${report.plan.exhausted ? "\u274C" : "\u2705"} \u5B8C\u6210\uFF1A${report.plan.activeCount}/${report.target.minActive}`
+  ];
+  if (report.dnsUpdated) {
+    lines.push(`\u{1F4DD} DNS \u66F4\u65B0\uFF1A\u65B0\u589E ${report.added}\uFF0C\u79FB\u9664 ${report.deleted}`);
+  } else {
+    lines.push("\u2728 DNS \u65E0\u53D8\u5316");
+  }
+  const additions = report.plan.additions.slice(0, 5).map(({ address }) => address);
+  if (additions.length > 0) {
+    lines.push(`\u65B0\u589E\u5019\u9009\uFF1A${additions.map((address) => `<code>${escapeHtml(address)}</code>`).join("\u3001")}${report.plan.additions.length > additions.length ? " \u2026" : ""}`);
+  }
+  const removed = report.plan.current.filter(({ decision }) => decision === "remove-dead" || decision === "remove-mismatch").slice(0, 5).map(({ item }) => item.address);
+  if (removed.length > 0) lines.push(`\u79FB\u9664\u5730\u5740\uFF1A${removed.map((address) => `<code>${escapeHtml(address)}</code>`).join("\u3001")}`);
+  if (report.plan.trash.length > 0) lines.push(`\u{1F5D1}\uFE0F \u653E\u5165\u5783\u573E\u6876\uFF1A${report.plan.trash.length} \u4E2A`);
+  if (report.plan.exhausted) lines.push("\u26A0\uFE0F \u5019\u9009\u4E0D\u8DB3\uFF0C\u672A\u8FBE\u5230\u6700\u5C0F\u6D3B\u8DC3\u6570");
+  for (const error of report.errors.slice(0, 5)) lines.push(`\u26A0\uFE0F ${escapeHtml(error)}`);
+  return lines.join("\n");
+}
+__name(formatTarget, "formatTarget");
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char] ?? char);
+}
+__name(escapeHtml, "escapeHtml");
+
+// app/src/jobs/maintenance-job.ts
+async function runMaintenanceJob(options) {
+  const data = await options.source.load();
+  const run = await options.maintainer.execute(data, options.fallbackZone);
+  if (!shouldNotifyMaintenance(run, options.isManual)) return { run, notification: null };
+  const notification = await options.notifier.send(buildTelegramMaintenanceMessage(run, {
+    isManual: options.isManual,
+    ...options.now ? { now: options.now() } : {}
+  }));
+  return { run, notification };
+}
+__name(runMaintenanceJob, "runMaintenanceJob");
+
+// app/src/contracts/probe.ts
+var MAX_PROXYIP_LENGTH = 512;
+function parseCheckProxyInput(value) {
+  const proxyip = readTrimmedString(value, 1, MAX_PROXYIP_LENGTH);
+  if (!proxyip) return parseFail(`proxyip must be 1-${MAX_PROXYIP_LENGTH} characters`);
+  return parseOk(proxyip);
+}
+__name(parseCheckProxyInput, "parseCheckProxyInput");
+
+// app/src/transport/auth.ts
+function isAuthorized(request, expectedKey) {
+  const expected = expectedKey?.trim();
+  if (!expected) return true;
+  const authorization = request.headers.get("authorization") ?? "";
+  const bearer = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
+  const headerKey = request.headers.get("x-auth-key")?.trim() ?? "";
+  const queryKey = new URL(request.url).searchParams.get("key")?.trim() ?? "";
+  return [bearer, headerKey, queryKey].some((candidate) => candidate && constantTimeEqual(candidate, expected));
+}
+__name(isAuthorized, "isAuthorized");
+function constantTimeEqual(left, right) {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let diff = leftBytes.length ^ rightBytes.length;
+  for (let index = 0; index < length; index += 1) {
+    diff |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+  return diff === 0;
+}
+__name(constantTimeEqual, "constantTimeEqual");
+
+// app/src/transport/router.ts
+var Router = class {
+  static {
+    __name(this, "Router");
+  }
+  routes = [];
+  get(path, handler) {
+    return this.add("GET", path, handler);
+  }
+  post(path, handler) {
+    return this.add("POST", path, handler);
+  }
+  put(path, handler) {
+    return this.add("PUT", path, handler);
+  }
+  delete(path, handler) {
+    return this.add("DELETE", path, handler);
+  }
+  add(method, path, handler) {
+    this.routes.push({ method, segments: path.split("/").filter(Boolean), handler });
+    return this;
+  }
+  async handle(request) {
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
+    for (const route of this.routes) {
+      if (route.method !== request.method || route.segments.length !== parts.length) continue;
+      const params = matchSegments(route.segments, parts);
+      if (!params) continue;
+      return await route.handler({ request, url, params });
+    }
+    return null;
+  }
+};
+function matchSegments(routeSegments, parts) {
+  const params = {};
+  for (let index = 0; index < routeSegments.length; index += 1) {
+    const segment = routeSegments[index];
+    const part = parts[index];
+    if (segment.startsWith(":")) {
+      params[segment.slice(1)] = decodeURIComponent(part);
+      continue;
+    }
+    if (segment !== part) return null;
+  }
+  return params;
+}
+__name(matchSegments, "matchSegments");
+function jsonResponse(value, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" }
+  });
+}
+__name(jsonResponse, "jsonResponse");
+function errorResponse(error, status) {
+  const body = { error };
+  return jsonResponse(body, status);
+}
+__name(errorResponse, "errorResponse");
+async function readJsonBody(request) {
+  try {
+    return { ok: true, value: await request.json() };
+  } catch {
+    return { ok: false };
+  }
+}
+__name(readJsonBody, "readJsonBody");
+
+// app/src/transport/http.ts
+function createHttpApp(dependencies) {
+  const router = new Router();
+  const guard = /* @__PURE__ */ __name((context) => isAuthorized(context.request, dependencies.authKey) ? null : errorResponse("unauthorized", 401), "guard");
+  router.get("/", (context) => {
+    if (dependencies.assets) return dependencies.assets.fetch(context.request);
+    return jsonResponse({
+      name: "ddns-cf-proxyip",
+      version: dependencies.version,
+      api: "/api/check?proxyip=1.2.3.4:443"
+    });
+  });
+  router.get("/api/health", () => {
+    const response = {
+      ok: true,
+      version: dependencies.version,
+      ...dependencies.configSource ? { configSource: dependencies.configSource } : {}
+    };
+    return jsonResponse(response);
+  });
+  router.get("/api/check", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const parsed = parseCheckProxyInput(context.url.searchParams.get("proxyip"));
+    if (!parsed.ok) return errorResponse("invalid proxyip", 400);
+    const result = await dependencies.checkProxy.execute(parsed.value, { signal: context.request.signal });
+    return jsonResponse(toProbeResponse(result));
+  });
+  router.post("/api/check", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    const parsed = parseCheckProxyInput(body.value?.proxyip);
+    if (!parsed.ok) return errorResponse("invalid proxyip", 400);
+    const result = await dependencies.checkProxy.execute(parsed.value, { signal: context.request.signal });
+    return jsonResponse(toProbeResponse(result));
+  });
+  router.post("/api/check/batch", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const checkPool = dependencies.checkPool;
+    if (!checkPool) return errorResponse("probe unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    const text3 = body.value?.text;
+    if (typeof text3 !== "string" || !text3.trim()) return errorResponse("invalid text", 400);
+    const report = await checkPool.execute(text3, { signal: context.request.signal });
+    return jsonResponse(toPoolCheckResponse(report));
+  });
+  router.get("/api/pools", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const response = { pools: await pools.list() };
+    return jsonResponse(response);
+  });
+  router.post("/api/pools", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      const pool = await pools.create(body.value?.displayName);
+      const response = { ok: true, key: pool.key, displayName: pool.name };
+      return jsonResponse(response);
+    });
+  });
+  router.put("/api/pools/order", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      await pools.saveOrder(body.value?.order);
+      return jsonResponse({ ok: true });
+    });
+  });
+  router.post("/api/pools/trash/clear", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    await pools.clearTrash();
+    return jsonResponse({ ok: true });
+  });
+  router.post("/api/pools/trash/restore", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      const input = body.value;
+      const result = await pools.restoreTrash(input?.addresses, input?.restoreToSource, input?.targetPool);
+      const response = result;
+      return jsonResponse(response);
+    });
+  });
+  router.get("/api/pools/:key", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    return await mapApplicationInputError(async () => {
+      const response = {
+        key: context.params.key,
+        content: await pools.read(context.params.key)
+      };
+      return jsonResponse(response);
+    });
+  });
+  router.put("/api/pools/:key", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      const input = body.value;
+      const result = await pools.save(context.params.key, input?.content, input?.mode);
+      const response = result;
+      return jsonResponse(response);
+    });
+  });
+  router.add("PATCH", "/api/pools/:key", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      await pools.rename(context.params.key, body.value?.displayName);
+      return jsonResponse({ ok: true });
+    });
+  });
+  router.delete("/api/pools/:key", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse("pool storage unavailable", 503);
+    return await mapApplicationInputError(async () => {
+      await pools.remove(context.params.key);
+      return jsonResponse({ ok: true });
+    });
+  });
+  router.get("/api/domain-bindings", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const bindings = dependencies.domainBindings;
+    if (!bindings) return errorResponse("binding storage unavailable", 503);
+    return jsonResponse(await bindings.list());
+  });
+  router.put("/api/domain-bindings", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const bindings = dependencies.domainBindings;
+    if (!bindings) return errorResponse("binding storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      await bindings.save(body.value?.mapping);
+      return jsonResponse({ ok: true });
+    });
+  });
+  router.put("/api/domain-bindings/order", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const bindings = dependencies.domainBindings;
+    if (!bindings) return errorResponse("binding storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    return await mapApplicationInputError(async () => {
+      await bindings.saveOrder(body.value?.order);
+      return jsonResponse({ ok: true });
+    });
+  });
+  router.post("/api/maintenance/run", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const maintenance = dependencies.maintenance;
+    if (!maintenance) return errorResponse("maintenance unavailable", 503);
+    const { run } = await maintenance.run(true);
+    return jsonResponse(toMaintenanceResponse(run));
+  });
+  router.get("/api/config", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const config = dependencies.config;
+    if (!config) return errorResponse("config storage unavailable", 503);
+    return jsonResponse(toConfigResponse(await config.resolve()));
+  });
+  router.put("/api/config", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const config = dependencies.config;
+    if (!config) return errorResponse("config storage unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    const resolved = await config.resolve();
+    const parsed = parseAppConfig(body.value, resolved.config);
+    if (!parsed.ok) return errorResponse(parsed.message, 400);
+    await config.save(parsed.value);
+    return jsonResponse(toConfigResponse({ config: parsed.value, source: "kv" }));
+  });
+  router.post("/api/config/probe/test", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    const input = body.value;
+    const parsed = parseCheckProxyInput(input?.proxyip);
+    if (!parsed.ok) return errorResponse("invalid proxyip", 400);
+    const template = input?.urlTemplate?.trim();
+    const defaultConfig = createDefaultConfig();
+    const checker = template ? new CheckProxy(
+      createProbeAdapterFromConfig(toProbeConfig({
+        ...defaultConfig,
+        checkApi: template,
+        checkApiBackup: "",
+        probeMode: "external-api"
+      }))
+    ) : dependencies.checkProxy;
+    const result = await checker.execute(parsed.value, { signal: context.request.signal });
+    return jsonResponse(toProbeResponse(result));
+  });
+  router.post("/api/remote-load", async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+    const loader = dependencies.remotePoolLoader;
+    if (!loader) return errorResponse("remote load unavailable", 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse("invalid json", 400);
+    const url = body.value?.url;
+    const result = await loader.load(typeof url === "string" ? url : "", { signal: context.request.signal });
+    if (!result.ok) return errorResponse(result.reason, remoteLoadStatus(result.reason));
+    const response = {
+      url: result.finalUrl,
+      content: result.content,
+      count: countPoolTextLines(result.content)
+    };
+    return jsonResponse(response);
+  });
+  const fetch2 = /* @__PURE__ */ __name(async (request) => {
+    try {
+      const matched = await router.handle(request);
+      if (matched) return matched;
+      const path = new URL(request.url).pathname;
+      const canServeAsset = request.method === "GET" || request.method === "HEAD";
+      if (dependencies.assets && canServeAsset && !path.startsWith("/api/")) {
+        return await dependencies.assets.fetch(request);
+      }
+      return errorResponse("not found", 404);
+    } catch (error) {
+      console.error("Unhandled worker error", error);
+      return errorResponse("internal error", 500);
+    }
+  }, "fetch");
+  return {
+    fetch: fetch2,
+    request: /* @__PURE__ */ __name((input, init) => fetch2(typeof input === "string" ? new Request(new URL(input, "http://localhost"), init) : input), "request")
+  };
+}
+__name(createHttpApp, "createHttpApp");
+async function mapApplicationInputError(run) {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof PoolInputError || error instanceof DomainBindingsInputError) {
+      return errorResponse(error.message, 400);
+    }
+    throw error;
+  }
+}
+__name(mapApplicationInputError, "mapApplicationInputError");
+function toConfigResponse(resolved) {
+  return {
+    source: resolved.source,
+    ...resolved.notice ? { notice: resolved.notice } : {},
+    config: toPublicConfig(resolved.config)
+  };
+}
+__name(toConfigResponse, "toConfigResponse");
+function remoteLoadStatus(reason) {
+  if (reason === "invalid-url" || reason === "blocked-host") return 400;
+  if (reason === "too-large") return 413;
+  if (reason === "timeout") return 504;
+  return 502;
+}
+__name(remoteLoadStatus, "remoteLoadStatus");
+function toMaintenanceResponse(run) {
+  return {
+    ok: true,
+    changed: run.changed,
+    insufficient: run.insufficient,
+    errors: run.errors,
+    probeErrors: run.probeErrors,
+    results: run.results.map(({ target, poolKey, poolName, report, error }) => ({
+      domain: target.domain,
+      mode: target.mode,
+      poolKey,
+      poolName,
+      dnsUpdated: report?.dnsUpdated ?? false,
+      added: report?.added ?? 0,
+      deleted: report?.deleted ?? 0,
+      probeErrors: report?.probeErrors ?? 0,
+      error: error ?? (report?.errors.length ? report.errors.join("\uFF1B") : null)
+    }))
+  };
+}
+__name(toMaintenanceResponse, "toMaintenanceResponse");
+function toProbeResponse(result) {
+  const { target: _target, ...response } = result;
+  return response;
+}
+__name(toProbeResponse, "toProbeResponse");
+function toPoolCheckResponse(report) {
+  return {
+    total: report.total,
+    alive: report.alive,
+    dead: report.dead,
+    unknown: report.unknown,
+    invalid: report.invalid,
+    items: report.items.map(toPoolCheckItemResponse)
+  };
+}
+__name(toPoolCheckResponse, "toPoolCheckResponse");
+function toPoolCheckItemResponse(item) {
+  const { result, entry } = item;
+  const primary = result.exits[0];
+  const asn = primary?.asn ?? entry.asn ?? void 0;
+  const country = primary?.country ?? entry.country ?? void 0;
+  return {
+    address: item.address,
+    status: result.status,
+    exitFamily: result.exitFamily,
+    ...result.exitIp ? { exitIp: result.exitIp } : {},
+    ...result.latencyMs === void 0 ? {} : { latencyMs: result.latencyMs },
+    ...result.code ? { code: result.code } : {},
+    ...result.message ? { message: result.message } : {},
+    ...asn ? { asn } : {},
+    ...country ? { country } : {},
+    // 复用领域层的序列化规则，保证入库文本与监控流程完全一致。
+    line: formatPoolEntry(entry)
+  };
+}
+__name(toPoolCheckItemResponse, "toPoolCheckItemResponse");
+
+// app/src/worker.ts
+var APP_VERSION = "2026.09.26-10.21";
+var BATCH_CHECK_CONCURRENCY = 8;
+var DNS_TIMEOUT_MS = 1e4;
+function createWorker(overrides = {}) {
+  const handler = {
+    async fetch(request, env, executionContext) {
+      const configService = createConfigService(env);
+      const resolved = await configService.resolve();
+      const checkProxy = new CheckProxy(createProbeAdapterFromConfig(toProbeConfig(resolved.config), probeDeps(overrides)));
+      const authKey = resolved.config.authKey || env.AUTH_KEY?.trim();
+      const kv = env.IP_DATA;
+      const assets = overrides.assets;
+      const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
+      const maintenance = kv && maintenanceSource ? createMaintenanceRunner(kv, resolved.config, overrides, maintenanceSource) : null;
+      const dependencies = {
+        checkProxy,
+        checkPool: new CheckPoolText(checkProxy, BATCH_CHECK_CONCURRENCY),
+        version: APP_VERSION,
+        configSource: resolved.source,
+        config: configService,
+        remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
+        ...authKey ? { authKey } : {},
+        ...assets ? { assets } : {},
+        ...kv ? {
+          pools: new PoolService(new KvPoolCatalog(kv)),
+          domainBindings: new DomainBindings(maintenanceSource, new KvDomainBindingRepository(kv)),
+          ...maintenance ? { maintenance } : {}
+        } : {}
+      };
+      return createHttpApp(dependencies).fetch(request, env, executionContext);
+    },
+    /**
+     * 定时维护：缺少 KV 绑定或没开启定时维护时直接跳过。
+     * 手动维护复用同一个 runner，保证两条路径的装配与行为完全一致。
+     */
+    async scheduled(_controller, env, executionContext) {
+      if (!env.IP_DATA) {
+        console.error("\u8DF3\u8FC7\u5B9A\u65F6\u7EF4\u62A4\uFF1A\u8BF7\u5148\u7ED1\u5B9A\u540D\u4E3A IP_DATA \u7684 KV Namespace");
+        return;
+      }
+      const resolved = await createConfigService(env).resolve();
+      if (!resolved.config.scheduledEnabled) {
+        console.log("\u5B9A\u65F6\u7EF4\u62A4\u5DF2\u5173\u95ED\uFF0C\u8DF3\u8FC7\u6267\u884C");
+        return;
+      }
+      const source = new KvMaintenanceSource(env.IP_DATA);
+      executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, overrides, source).run(false));
+    }
+  };
+  return handler;
+}
+__name(createWorker, "createWorker");
+function probeDeps(overrides) {
+  return overrides.connect ? { connect: overrides.connect } : {};
+}
+__name(probeDeps, "probeDeps");
+function createConfigService(env) {
+  return new ConfigService({
+    envConfig: loadEnvConfig(env),
+    ...env.IP_DATA ? {
+      repository: new KvConfigRepository(env.IP_DATA)
+    } : {}
+  });
+}
+__name(createConfigService, "createConfigService");
+function createMaintenanceRunner(kv, config, overrides = {}, source) {
+  const maintenanceSource = source ?? new KvMaintenanceSource(kv);
+  const maintainer = new MaintainManagedTargets({
+    maintainer: new MaintainManagedTarget({
+      probe: createProbeAdapterFromConfig(toProbeConfig(config), probeDeps(overrides)),
+      pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
+      dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS })
+    })
+  });
+  const notifier = new TelegramNotifier({
+    enabled: config.tgEnabled,
+    token: config.tgToken,
+    chatId: config.tgId
+  });
+  return {
+    run: /* @__PURE__ */ __name((isManual) => runMaintenanceJob({
+      source: maintenanceSource,
+      maintainer,
+      notifier,
+      fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
+      isManual
+    }), "run")
+  };
+}
+__name(createMaintenanceRunner, "createMaintenanceRunner");
+
+// app/dist/bundle-build/generated/assets.ts
+var BUNDLED_WEB_ASSETS = {
+  "/assets/config-page-DkiHDIzs.js": { contentType: "text/javascript; charset=utf-8", base64: "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", gzip: true },
+  "/assets/index-CivMVuwy.js": { contentType: "text/javascript; charset=utf-8", base64: "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", gzip: true },
+  "/assets/index-Dhy-G5EY.css": { contentType: "text/css; charset=utf-8", base64: "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", gzip: true },
+  "/index.html": { contentType: "text/html; charset=utf-8", base64: "H4sIAAAAAAACCm1Su24UMRTtV+IfLqaYgsx6AlpBInsKEkApiFbiIVE69t0Zg8cejZ155ANSIEBbI0UrUGoqCiQKfobNio5PQLOTwEZKYdm+Pvf43KPDbisnQ1ci5KEw6Yj1GxhhM05O8njvkKQjAJajUP0BgBUYBMhcVB4DJy9fPIkfEqCbj1YUyEmtsSldFQhIZwPawEmjVci5wlpLjNeXLdBWBy1M7KUwyLdvpAo5FhhLZ1y1wXZnNplNZg9u7FDoZaXLoJ3d6NjfP3wO08rB8vzTcrFYzj+svn5ezU9/ff/Yl9vuYAqrH98u3p3/PvtycfbzP7XR9u36BFCh4URLZ8llIa9wxokSQezqQmRIfZ3dbQuzxXydQVsY63mUh1DuUto0zbi5P3ZVRu8lSdJDI+ideuRaHiWQwHayXlHKArYBOh4l4x0sIpg5G2KvT5BHO0mU/lm8nzPaY1LW06SDnCvBQQeD6b+BYziYDrMOkzE6AAbw4BX0MeCkcOrYIAFZOe9dpTNtwVeSEyq8x+CptgrbeE/Xz14dN934jSe9gjXFhluDTz50Bn2OGK4TDp5dZ9zPu/jp5PHrsfR+SB29ih07cqoDaYT3nJRH8YRc/qR0DVpxIsqyV6F0PTT2+HTE6DrUt0Z/ASQ+HRrmAgAA", gzip: true }
+};
+
+// app/dist/bundle-build/generated/index.ts
+var index_default = createWorker({ connect, assets: createBundledAssets(BUNDLED_WEB_ASSETS) });
+export {
+  index_default as default
+};

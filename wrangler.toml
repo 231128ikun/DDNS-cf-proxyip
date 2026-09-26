@@ -1,4 +1,4 @@
-# 当前部署入口：保持原始、可直接阅读和手动复制的 `_worker.js`。
+# 唯一部署入口：由 app/ 构建生成，保持可读并可直接复制部署。
 name = "ddns-cf-proxyip"
 main = "_worker.js"
 compatibility_date = "2026-09-24"

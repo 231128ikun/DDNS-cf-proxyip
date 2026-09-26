@@ -1,6 +1,6 @@
 # DDNS Pro Worker 维护规范
 
-本仓库当前处于同一程序的结构迁移期：根目录 `_worker.js` 是唯一运行与部署入口，必须保持可读且行为不变；`app/` 是同一程序的重构源码，只有与 `_worker.js` 的界面、API、配置和 KV 行为完全对齐后才能切换入口。不得把迁移过程命名成 v1/v2，也不得建立平行产品。
+本仓库只维护一套程序：`app/` 是可维护源码和唯一实现来源，根目录 `_worker.js` 由 `app/` 构建生成，是唯一运行与部署入口，并保持可读、可直接复制部署。不得把迁移过程命名成 v1/v2，也不得建立平行产品。
 
 ## 1. 总原则
 
@@ -28,9 +28,9 @@
 | `app/src/jobs/` | cron 与手动维护共用的任务入口 |
 | `app/src/config/` | 环境变量解析和运行时适配器装配 |
 | `app/src/worker.ts` | 唯一 Worker 装配入口，`fetch` 与 `scheduled` 都在这里 |
-| `app/web/` | 重构中的浏览器端，必须对齐当前 `_worker.js` 界面与操作 |
+| `app/web/` | 浏览器端源码，与 Worker 由同一次构建生成 |
 | `app/scripts/` | 构建、清理、体积门禁和 UI 验收，不进入发布文件 |
-| `_worker.js` | 当前唯一部署入口，保持手工可读 |
+| `_worker.js` | 由 `app/` 构建生成的唯一部署入口；不得手工维护平行实现 |
 | `wrangler.toml` | Cloudflare Git / Wrangler 部署配置，入口为 `_worker.js` |
 
 ### 2.1 当前代码入口
@@ -47,7 +47,7 @@
 | DNS 维护 | `app/src/application/maintain-managed-target.ts`、`maintain-managed-targets.ts`、`app/src/adapters/dns/cloudflare-dns.ts` |
 | Telegram | `app/src/adapters/notify/` |
 | 浏览器端 | `app/web/src/`，页面入口为 `app.tsx`，请求统一走 `api/client.ts` |
-| 重构构建检查 | `app/scripts/build-worker.mjs`，输出 `app/dist/release/worker.js`，不覆盖部署入口 |
+| 发布构建 | `app/scripts/build-worker.mjs`，同步生成 `_worker.js` 和 `app/dist/release/worker.js` |
 
 ## 3. 开始任务前
 
@@ -152,9 +152,9 @@ npm run build
 1. Vite 构建 `app/web/`；
 2. 把前端产物打包进 Worker；
 3. Wrangler 打包唯一的 `app/src/worker.ts` 装配；
-4. 只输出检查产物 `app/dist/release/worker.js`，不得覆盖部署入口 `_worker.js`。
+4. 同时输出部署入口 `_worker.js` 和检查产物 `app/dist/release/worker.js`。
 
-当前 `_worker.js` 是唯一发布入口，必须保持手工可读、可直接复制部署。`app/` 只有在界面、API、配置和 KV 行为与 `_worker.js` 完全一致后，才允许作为新的单一发布入口切换。
+`_worker.js` 是提交到仓库的唯一发布入口，必须保持可读、可直接复制部署。任何功能修改都先改 `app/`，再运行构建同步 `_worker.js`；不得直接修改 `_worker.js` 或另建入口。
 
 构建产物、源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存不得写入发布文件目录。
 
@@ -196,7 +196,7 @@ UI 改动额外验证桌面与窄屏；涉及 KV、探针或 DNS 改动时增加
 - [ ] 仍然只有一套源码、API、配置和 KV 数据；
 - [ ] 没有新增平行入口或重复业务实现；
 - [ ] 前端仍属于同一个 DDNS Pro；
-- [ ] `_worker.js` 是当前可读的部署入口，未被构建产物覆盖；
+- [ ] `_worker.js` 已由 `app/` 构建同步，且与 `app/dist/release/worker.js` 一致；
 - [ ] KV、旧池格式和 `unknown` 安全语义未被破坏；
 - [ ] A/AAAA 与 TXT 两种模式都已考虑；
 - [ ] 没有提交密钥、缓存、sourcemap 或测试杂物到发布目录；
