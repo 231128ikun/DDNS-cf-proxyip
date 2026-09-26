@@ -5,14 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 /**
- * 把 `app/` 中的唯一源码构建成仓库根目录的发布文件 `worker.js`。
+ * 把 `app/` 中的重构源码构建成独立检查产物 `worker.js`。
  *
  * 构建顺序：
  *   1. 用 Vite 构建 `app/web/`；
- *   2. 把前端产物压缩成 Worker 内置资源表；
+ *   2. 把前端产物 gzip 后编码为 Worker 内置资源表；
  *   3. 用 Wrangler 打包唯一的 `createWorker()` 入口。
  *
- * `worker.js` 是生成文件，不手工编辑；源码始终以 `app/` 为准。
+ * 根目录当前仍以手工可读的 `_worker.js` 为部署入口，完成行为对齐前不覆盖它。
+ * 构建产物不手工编辑；重构源码始终以 `app/` 为准。
  */
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -23,7 +24,6 @@ const buildDir = join(appRoot, 'dist', 'bundle-build');
 const generatedDir = join(buildDir, 'generated');
 const bundleDir = join(buildDir, 'bundle');
 const releaseWorkerPath = join(outDir, 'worker.js');
-const deployedWorkerPath = join(root, 'worker.js');
 
 /** 前端产物只支持明确列出的类型；出现新类型时先显式登记 MIME。 */
 const CONTENT_TYPES = new Map([
@@ -67,17 +67,15 @@ runWrangler([
   'wrangler.toml',
   '--outdir',
   toPosix(relative(root, bundleDir)),
-  '--minify',
 ]);
 
 const bundle = createBundle();
-writeFileSync(deployedWorkerPath, bundle, 'utf8');
 writeFileSync(releaseWorkerPath, bundle, 'utf8');
 rmSync(buildDir, { recursive: true, force: true });
 
 console.log(`  资源 ${assets.length} 个，打包 ${formatKb(assets.reduce((sum, asset) => sum + asset.bytes.length, 0))}`);
 console.log(`  worker.js  raw ${formatKb(Buffer.byteLength(bundle))}  gzip ${formatKb(gzipSync(bundle).length)}`);
-console.log('  发布文件：仓库根目录 worker.js；本地副本：app/dist/release/worker.js');
+console.log('  构建产物：app/dist/release/worker.js');
 
 /** npm 在 Windows 上是 .cmd 包装器，用字符串形式交给 shell 启动，避免 spawn EINVAL。 */
 function runNpm(script) {
@@ -132,7 +130,15 @@ function collectAssets(directory) {
     if (!contentType) throw new Error(`app/dist/web 出现未登记 MIME 的资源：${path}`);
 
     const bytes = readFileSync(absolute);
-    collected.push({ path, contentType, bytes, base64: bytes.toString('base64') });
+    const gzip = gzipSync(bytes, { level: 9 });
+    const useGzip = gzip.length < bytes.length;
+    collected.push({
+      path,
+      contentType,
+      bytes,
+      base64: (useGzip ? gzip : bytes).toString('base64'),
+      gzip: useGzip,
+    });
   }
 
   return collected;
@@ -152,7 +158,7 @@ function byName(left, right) {
 
 function renderAssetsModule(collected) {
   const rows = collected
-    .map((asset) => `  ${quote(asset.path)}: { contentType: ${quote(asset.contentType)}, base64: ${quote(asset.base64)} },`)
+    .map((asset) => `  ${quote(asset.path)}: { contentType: ${quote(asset.contentType)}, base64: ${quote(asset.base64)}, gzip: ${asset.gzip} },`)
     .join('\n');
   return [
     '// 由 scripts/build-worker.mjs 生成，请勿手改。',

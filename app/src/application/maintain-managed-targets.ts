@@ -1,4 +1,5 @@
-import { DEFAULT_POOL_KEY, getPoolFixedName, isUserPoolKey } from '../contracts/pool';
+import { getPoolFixedName } from '../contracts/pool';
+import { resolvePoolKey } from '../domain/domain-binding';
 import type { ManagedTarget } from '../domain/managed-target';
 import type { DnsZone } from '../ports/dns-repository';
 import type { MaintenanceSourceData, MaintenanceTargetConfig } from '../ports/maintenance-source';
@@ -59,16 +60,6 @@ export class MaintainManagedTargets {
 
     return summarize(results);
   }
-}
-
-/** 域名池绑定 key 的唯一格式来源：`域名|模式`（旧数据兼容小写域名单键）。 */
-export function bindingKey(target: ManagedTarget): string {
-  return `${target.domain}|${target.mode}`;
-}
-
-export function resolvePoolKey(mapping: Readonly<Record<string, string>>, target: ManagedTarget): string {
-  const mapped = mapping[bindingKey(target)] ?? mapping[target.domain];
-  return mapped && isUserPoolKey(mapped) ? mapped : DEFAULT_POOL_KEY;
 }
 
 export function shouldNotifyMaintenance(run: MaintenanceRunSummary, isManual: boolean): boolean {

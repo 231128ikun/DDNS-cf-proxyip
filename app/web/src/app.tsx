@@ -360,6 +360,25 @@ export function App() {
     }
   };
 
+  /** 排序只在面板显示层生效：先把本地列表换位，失败再回读服务端顺序。 */
+  const handleMoveBinding = async (index: number, delta: number): Promise<void> => {
+    if (bindings.status !== 'ready') return;
+    const next = index + delta;
+    if (next < 0 || next >= bindings.data.items.length) return;
+
+    const items = [...bindings.data.items];
+    const [moved] = items.splice(index, 1);
+    if (!moved) return;
+    items.splice(next, 0, moved);
+    setBindings({ status: 'ready', data: { items } });
+
+    try {
+      await client.saveDomainBindingOrder(items.map((item) => item.key));
+    } catch (error) {
+      notify(errorMessage(error), 'error');
+      await refreshBindings();
+    }
+  };
   const handleRunMaintenance = (): void => {
     if (maintenanceBusy) return;
     setMaintenanceBusy(true);
@@ -399,6 +418,8 @@ export function App() {
     restoreTrash: handleRestoreTrash,
     clearTrash: handleClearTrash,
     bindPool: handleBindPool,
+    moveBinding: (index, delta) => void handleMoveBinding(index, delta),
+    refreshBindings: () => void refreshBindings(),
     runMaintenance: handleRunMaintenance,
   };
 

@@ -1,187 +1,365 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-DDNS Pro 是一个部署在 Cloudflare Workers 上的 ProxyIP 检测、IP 池管理和 Cloudflare DNS 自动维护面板。
+一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
-本仓库只有一套程序：`app/` 是可维护源码，仓库根目录的 `worker.js` 是同一程序生成的发布文件，`wrangler.toml` 是唯一部署配置。两种部署方式只是操作方式不同，不是两个版本，也不存在第二套 API、配置或数据。
+项目不依赖自建服务器，核心代码是单文件 Worker：[`_worker.js`](./_worker.js)。
 
-## 功能
+> 本项目依赖 check-proxyip-api，若要自行部署后端代码，见下方参考代码。现在可行的方案是部署[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)然后将` http://部署的项目地址/check?proxyip= `填入检测api中。（snippets版本可参考[CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)自行修改）
 
-- 单个 ProxyIP 检测与 IP 池批量检测；
-- 外部检测 API、CF-Workers-CheckProxyIP 兼容模式、双探针 Socket 三种检测方式；
-- 地址记录模式维护 `A` / `AAAA`，TXT 模式维护地址列表；
-- 自动删除真实失效节点并从 IP 池补货；
-- IP 池新建、重命名、排序、删除、合并、筛选、去重与垃圾桶恢复；
-- 域名与 IP 池绑定；
-- cron 定时维护与手动立即维护；
-- Telegram 通知；
-- DDNS Pro 管理面板与配置中心。
+---
 
-探针结果严格区分：
+## 📖 项目简介
 
-- `alive`：可信探针确认节点可用；
-- `dead`：可信探针明确确认节点失效；
-- `unknown`：超时、网络错误、HTTP 错误、坏 JSON、TLS 失败或探针异常。
+这个项目适合用于维护 Cloudflare Worker / Pages 反代场景中常见的 ProxyIP，例如让多个业务子域名持续指向可用的反代 IP。
 
-只有 `dead` 会进入删除或垃圾桶流程，`unknown` 不会按死节点处理。
+ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/231128ikun/CF-Workers-CheckProxyIP/blob/main/README.md#-%E4%BB%80%E4%B9%88%E6%98%AF-proxyip-)
 
-## 快速部署
 
-部署前需要一个 Cloudflare 账号和一个 KV Namespace。
+### ✨ 核心特性
 
-### 方法一：Dashboard 手动部署
+- **多域名维护**：支持添加多个cf托管域名。
+- **两种记录模式**：地址记录模式维护 `A/AAAA`，TXT 模式维护一条 TXT 记录里的 IP 列表。
+- **自动补位**：检测失效 IP，删除不合格记录，并从 IP 池补充新 IP。
+- **IP 池管理**：支持通用池、自定义池、域名绑定池、池列表自定义排序和垃圾桶恢复。
+- **出口筛选**：按 IPv4、IPv6、双栈、国家和 ASN 过滤候选节点。
+- **Web 面板**：导入、清洗、去重、筛选、探测、维护都可以在面板完成。
+- **Telegram 通知**：手动维护、IP 变化、库存不足或配置错误时可推送报告。
+- **KV 配置**：配置中心会把运行配置保存到 Cloudflare KV，覆盖环境变量默认值。
 
-1. 打开 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)，创建一个 Worker。
-2. 打开代码编辑器，把仓库根目录 [`worker.js`](./worker.js) 的全部内容复制进去。
-3. 保存并部署。
-4. 创建 KV Namespace，任意命名。
-5. 打开 Worker 的 **Settings → Bindings**，添加 KV Namespace 绑定：
+### 页面展示
+<details>
+<summary>点击展开</summary>
 
-```text
-Variable name: IP_DATA
-```
+![配置中心](./img/config-center.jpg)
 
-绑定名必须填写 `IP_DATA`。前端已经打包在 `worker.js` 中，不需要 Static Assets 绑定。
+![运行面板](./img/dashboard.jpg)
 
-6. 建议添加 `AUTH_KEY`，否则知道 Worker 地址的人都能访问管理面板。
-7. 打开 Worker 地址，进入 **配置中心**，填写维护域名、Zone ID、Cloudflare API Token、检测 API 和 Telegram 等配置。
-8. 如需自动维护，在 **Triggers → Cron Triggers** 添加：
+</details>
 
-```text
-0 */3 * * *
-```
+---
 
-同时要在配置中心打开自动维护开关。
+## 💡 快速部署
 
-以后更新时，重新运行构建并复制新的 `worker.js`。KV 数据不会受影响。
+> [!TIP]
+> 推荐部署顺序：复制 Worker 代码并部署 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 打开面板 -> 配置中心保存配置 -> 设置 cron 触发器
 
-### 方法二：Fork 后通过 Cloudflare Git 构建
+### ⚙️ Worker 手动部署
 
-Fork 本身不会自动部署。只有在 Cloudflare 创建 Workers Builds 项目并连接这个 GitHub 仓库后，推送才会触发部署。
+<details>
+<summary><code><strong>「 Worker 手动部署文字教程 」</strong></code></summary>
 
-1. Fork 本仓库。
-2. 在 Cloudflare 创建 KV Namespace。
-3. 在 fork 的根目录 `wrangler.toml` 填入 KV Namespace ID，或在 Cloudflare 项目中手动创建同样的 `IP_DATA` 绑定：
+1. 部署 CF Worker：
+   - 进入 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)。
+   - 创建一个 Worker。
+   - 把 [`_worker.js`](./_worker.js) 的全部内容复制到 Worker 编辑器。
+   - 保存并部署。
 
-```toml
-[[kv_namespaces]]
-binding = "IP_DATA"
-id = "你的_KV_Namespace_ID"
-```
+2. 绑定 KV 命名空间：
+   - 在 [Workers KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间，名称可用 `IP_DATA`也可任意。
+   - 打开 Worker -> **Settings** -> **Bindings**。
+   - 添加 **KV Namespace** 绑定。
+   - `Variable name` 必须填写 `IP_DATA`。
 
-4. 在 Cloudflare **Workers & Pages → Create → Import a repository** 中选择 fork。
-5. 构建配置建议：
+   ```text
+   IP_DATA
+   ```
 
-```text
-Root directory: /
-Build command: cd app && npm ci && npm run build
-Deploy command: cd app && npx wrangler deploy --config ../wrangler.toml
-```
+   未绑定 `IP_DATA` 时，面板可以打开，但配置保存、IP 池和维护任务不可用。
 
-6. 首次部署后，在 Worker 设置中确认 `IP_DATA` 绑定存在，并按需配置环境变量、Secret 和 cron。
+3. 可选设置面板访问密钥：
+   - 建议设置 `AUTH_KEY`，否则公开 Worker 地址后任何人都可以进入管理面板。
+   - 在 Worker -> **Settings** -> **Variables** 添加变量：
 
-仓库已经提交了生成后的 `worker.js`。即使不在 Cloudflare 构建前端，也可以让部署直接使用这个文件。
+   | 变量名 | 必填 | 说明 |
+   | --- | --- | --- |
+   | `AUTH_KEY` | 可选 | 管理面板访问密钥 |
 
-## 环境变量
+   首次访问时，可以直接在页面中输入 `AUTH_KEY` 的值，也可以直接访问：
 
-环境变量是首次启动和 KV 空缺时的默认值。面板保存后的配置写入 KV 的 `app_config`，不是另一套配置。
+   ```text
+   https://你的-worker-url/?key=你的AUTH_KEY
+   ```
 
-| 变量 | 用途 |
+   登录后 Worker 会写入 HttpOnly Cookie，后续可直接打开面板。
+
+4. 打开面板并进入配置中心：
+   - 打开 Worker 地址。
+   - 进入 **配置中心**。
+   - 填写维护域名、Zone ID、CF Key、管理域名、检测 API、Telegram 等配置。
+   - 保存后配置会写入 KV 的 `app_config`，优先级高于环境变量。
+
+5. 配置定时任务：
+   - 如需自动维护，需要同时开启配置中心里的自动维护开关，并在 Worker 中配置 Cron Triggers。
+   - Worker -> **Triggers** -> **Cron Triggers** 添加，例如：
+
+   ```text
+   0 */3 * * *
+   ```
+
+   表示每 3 小时执行一次自动维护。
+
+</details>
+
+### 🚀 Worker 自动部署
+
+<details>
+<summary><code><strong>「 Worker 自动部署文字教程 」</strong></code></summary>
+
+1. Fork 本仓库并在 Cloudflare 中连接该仓库。（可以顺手点个star）
+
+2. Cloudflare 中创建/连接的 Worker 项目名称需与 [`wrangler.toml`](./wrangler.toml) 里的 `name` 保持一致，例如 `ddns-cf-proxyip`，不然后续更新会冲突。
+
+3. 然后环境变量可选设置面板密码，进入面板配置即可使用。
+
+4. 可打开 **action** 自动同步工作流，这样就可以自动同步上游并更新项目了。
+
+> 本仓库的 [`wrangler.toml`](./wrangler.toml) 会指定 Worker 入口为 `_worker.js`，并声明 `IP_DATA` KV 绑定和每 3 小时一次的 cron 触发器。
+
+
+</details>
+
+---
+
+## 🔑 配置说明
+
+### Cloudflare API Token 与 Zone ID
+
+<details>
+<summary><code><strong>「 Token 与 Zone ID 获取方式 」</strong></code></summary>
+
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
+2. 打开 **My Profile** -> **API Tokens**。
+3. 使用 **Edit zone DNS** 模板创建 Token。
+4. Zone Resources 选择需要维护 DNS 的域名。
+5. 保存 Token。Cloudflare 只会完整显示一次。
+
+同时在域名概览页点击右侧三个点，复制对应`域名`的 **Zone ID**（**区域ID**）。
+
+> API Token 和 Zone ID 是你要维护的域名的 Cloudflare 账号中的。而这个项目可以部署在任意 Cloudflare 账号下。
+
+</details>
+
+### 必需绑定
+
+| 类型 | 名称 | 说明 |
+| --- | --- | --- |
+| KV Namespace Binding | `IP_DATA` | 保存运行配置、IP 池、垃圾桶和域名池绑定 |
+
+### 可选环境变量
+
+这些变量只作为初始默认值。上线后更推荐在面板的配置中心维护，保存后写入 KV。
+
+| 变量名 | 说明 | 默认值 |
+| --- | --- | --- |
+| `AUTH_KEY` | 面板访问密钥 | 空 |
+| `CF_KEY` | Cloudflare API Token | 空 |
+| `CF_ZONEID` | Cloudflare Zone ID | 空 |
+| `CF_BASE_DOMAIN` | 托管域名，例如 `example.com` | 空 |
+| `CHECK_API` | 主 ProxyIP 检测接口 | 空 |
+| `CHECK_API_BACKUP` | 备用检测接口 | `https://checkapi.dvb.kdns.fr/?candidate=` |
+| `DOH_API` | DNS over HTTPS 接口 | `https://cloudflare-dns.com/dns-query` |
+| `TG_TOKEN` | Telegram Bot Token | 空 |
+| `TG_ID` | Telegram Chat ID | 空 |
+| `TG_ENABLED` | Telegram 通知开关 | `true` |
+| `SCHEDULED_ENABLED` | 定时维护开关 | `true` |
+
+> 公共备用检测 API 不保证长期可用，建议自行部署。批量清洗在首轮检测进行期间，失败项或接口异常项会立即在当前检测槽位内复检，不等待所有首轮项目结束；单项探测和维护仍在同一个检测任务内依次尝试主、备用接口。配置中心显式清空并保存主/备用接口后，该接口会被禁用；旧配置中缺少的字段仍使用环境默认值。
+
+### 配置中心填写项
+
+| 配置区域 | 主要内容 |
 | --- | --- |
-| `AUTH_KEY` | API 与面板访问密钥 |
-| `CF_KEY` | Cloudflare API Token |
-| `CF_ZONEID` | 默认 Cloudflare Zone ID |
-| `CF_BASE_DOMAIN` | 默认区域域名 |
-| `PROBE_MODE` | `external-api`、`cmliu-check` 或 `socket` |
-| `CHECK_API` | 主检测接口 |
-| `CHECK_API_BACKUP` | 备用检测接口 |
-| `CHECK_TIMEOUT` | 单次探针超时，默认 15000 ms |
-| `SOCKET_PROBE_IPV4_URL` | Socket 模式 IPv4 探针 |
-| `SOCKET_PROBE_IPV6_URL` | Socket 模式 IPv6 探针 |
-| `DOH_API` | DNS over HTTPS 地址 |
-| `REMOTE_LOAD_TIMEOUT` | 远程 IP 池加载超时 |
-| `TG_TOKEN` | Telegram Bot Token |
-| `TG_ID` | Telegram Chat ID |
-| `TG_ENABLED` | 是否启用 Telegram |
-| `SCHEDULED_ENABLED` | 是否启用 cron 维护 |
+| 维护域名配置 | 维护的域名、Zone ID、CF Key。 |
+| 管理域名 | 前缀、记录类型、端口、最小活跃数。 |
+| 出口筛选 | IPv4、IPv6、双栈、国家、ASN。 |
+| 检测接口 | 主检测 API、备用检测 API。 |
+| 通知与任务 | Telegram 配置、Telegram 通知开关、定时维护开关。 |
 
-敏感值建议放到 Cloudflare Secret 或面板配置中。仓库中不要提交真实 Token、Zone ID、Chat ID 或 KV Namespace ID。
+---
 
-## 检测模式
+## 🧭 使用说明
 
-### `external-api`
+### 检测并发与超时
 
-`CHECK_API` 是检测接口模板，可以包含 `{proxyip}`。主接口异常时按同样规则尝试 `CHECK_API_BACKUP`。
+配置中心的数值设置保存到 KV `app_config.settings`，不需要新增环境变量：
 
-### `cmliu-check`
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `CONCURRENT_CHECKS` | `32` | 浏览器批量检测并发，范围 1–128。主检测完成一个立即补下一个；需要复检时复用该槽位串行执行，检测 API 总并发不超过此值。 |
+| `BACKEND_CONCURRENT_CHECKS` | `4` | 单次 Worker 内维护、补货预检及域名状态检测并发，范围 1–6。独立于浏览器并发，避免在一次调用内堆积大量外部连接。 |
+| `CHECK_TIMEOUT` | `15000` | 单个外部检测接口请求的超时，单位 ms，范围 500–30000；不是单纯的 TCP 延迟阈值。 |
 
-`CHECK_API` 和 `CHECK_API_BACKUP` 填 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP) 的 Worker 根地址，程序会请求：
+- 批量检测不会启动独立复检队列，也不存在额外的复检并发；每个槽位按 `主检测 → 必要时复检` 串行处理，慢项只占用自己的槽位，不会阻塞其他槽位。
+- 保留**纯超时淘汰慢 IP**的策略：所有接口尝试均超时且没有接口故障时，判定不可用。配置两个接口时，每个接口分别受该超时限制；任一接口确认成功仍保留。
+- HTTP 错误、网络异常、非 JSON 或无法识别的结果属于接口异常。若没有得到可信的成功/失败结果，则保留待确认；维护不据此删除记录或移入垃圾桶。
+- 批量清洗先检测有效主接口；需要备用确认或接口异常重试时，在当前槽位内立即复检，每项最多一轮，不等待首轮全量结束。没有备用接口时，明确失败和纯超时不重复检测；接口异常最多重试一次。浏览器请求异常时，复检重新请求完整主/备用检测。
+- 域名解析最多并发 `min(4, CONCURRENT_CHECKS)`，与 IP 检测分别排队。现成 IP 不等待域名解析，解析后的地址追加到检测队列，并按地址和端口全局去重。
+- 停止后保留成功项、未完成项和待确认项；点击继续只处理未完成任务，不重测成功项。最终结果按原输入位置整理，保留备注及有效旧元数据。
+- 存在接口异常、无法解析的域名或无法识别的输入时，清洗不会自动覆盖 IP 池，也不会自动恢复垃圾桶条目。原数据保留在输入框，可检查后重新检测。
+- 维护补货只并发预检少量候选，按完成顺序处理；补够即停止派发并取消剩余预取。DNS/KV 变更仍顺序执行，不并发修改同一份池数据。取消本项目请求不保证外部检测服务也立即停止其内部任务。
+
+### 检测后端与 IPv4 / IPv6 探针
+
+当前版本仍调用外部检测后端，**尚未内置 TCP/TLS 检测引擎**，不会把普通的出口查询误当作 ProxyIP 检测。主/备用接口配置的是“接收候选地址并完成检测的服务”，不是 IPv4/IPv6 出口探针 URL。
+
+使用 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP) 时，可按下文填写 `/check?proxyip={proxyip}`。它的 IPv4/IPv6 探针由该后端负责；仅在本面板填写探针地址不能改变外部后端的行为，因此本版本没有添加不生效的探针配置项。
+
+内置检测需要验证“连接候选 IP、TLS SNI 使用探针域名”的完整链路、运行时限制及 TLS 实现许可证；不能直接复制参考项目的 TLS 代码。未来若接入内置引擎，探针配置还需约定响应字段并验证实际出口 IP 的地址族，不仅是提供两个 URL 输入框。
+
+### 面板使用流程
+
+<details>
+<summary><code><strong>「 从配置到维护 」</strong></code></summary>
+
+1. 确认 **管理域名** 板块已经配置完成：
+   - 在 **配置中心** 中填写需要维护的管理域名。
+   - 确认前缀、记录类型、端口、最小活跃数、出口筛选等配置符合预期。
+   - 保存配置到 KV。
+
+2. 导入 IP 并入库：
+   - 在 **手动输入** 中粘贴 IP 列表。
+
+   ```text
+   1.2.3.4:443
+   5.6.7.8:8080
+   [2606:4700::1]:443
+   ```
+
+   - 也可以从 Excel 复制 `IP地址` 和 `端口` 两列后直接粘贴。
+   - 或输入一个 远程 TXT链接 ，从远程 URL 加载。
+   - 点击 **检测** 验证可用性并规范格式。
+   - 点击 **入库** 保存到当前 IP 池。
+
+3. 绑定域名和 IP 池：
+   - 将需要维护的管理域名绑定到对应 IP 池。
+   - 可以使用默认池，也可以使用自定义池。
+   - IP 池较多时，点击池选择器旁的 **↕️** 按钮，可用上移/下移调整自定义池顺序并保存。默认池固定在最前，垃圾桶固定在最后。
+   - 配置中心的权限配置和管理域名卡片支持点击展开编辑，再次点击当前卡片可收起编辑面板。
+   - 域名池绑定区域也可以点击 **↕️** 按钮调整管理域名的显示顺序；该排序只影响绑定表展示，不改变维护执行顺序。
+
+4. 执行维护：
+   - 点击 **执行维护**。
+   - Worker 会检测当前 DNS 记录，删除失效或不匹配筛选条件的记录，并从绑定的 IP 池中补充可用 IP。
+
+> 点击从**库中移除**则从库中移除输入框中的数据。比如想清空 ip 库，可以从库中加载所有的 ip 至输入框，点击从库中移除则库中所有的 ip 就都清空了。
+
+域名探测输入框中可以输入：
 
 ```text
-/check?proxyip={proxyip}
+example.com
+example.com:8080
+txt@example.com
+1.2.3.4:443
+[2606:4700::1]:443
 ```
 
-### `socket`
+</details>
 
-Worker 通过 `cloudflare:sockets` 直连候选地址，并使用配置的 IPv4 / IPv6 探针验证出口。任一探针成功为 `alive`；只有两族都明确拒绝连接才为 `dead`，其他异常保持 `unknown`。
+---
 
-## HTTP API
+## 🧩 内部设计说明
 
-除 `/api/health` 外，业务接口统一鉴权。配置 `AUTH_KEY` 后可使用：
+下面内容主要用于了解项目内部数据格式、检测接口要求和维护流程。普通部署只需要看前面的快速部署、配置说明和使用说明。
 
-```http
-Authorization: Bearer <key>
-```
+### 检测 API
 
-或：
+<details>
+<summary><code><strong>「 检测 API 返回字段 」</strong></code></summary>
+
+检测接口支持两种形式：
 
 ```text
-?key=<key>
+https://example.com/check?proxyip=
+https://example.com/check?proxyip={proxyip}
 ```
 
-主要接口：
+使用 `{proxyip}` 时，Worker 会替换占位符；否则会把编码后的地址直接拼到 URL 末尾。
 
-```text
-GET    /api/health
-GET    /api/check?proxyip=1.2.3.4:443
-POST   /api/check
-POST   /api/check/batch
-GET    /api/pools
-POST   /api/pools
-PUT    /api/pools/order
-GET    /api/pools/:key
-PUT    /api/pools/:key
-PATCH  /api/pools/:key
-DELETE /api/pools/:key
-POST   /api/pools/trash/restore
-POST   /api/pools/trash/clear
-GET    /api/domain-bindings
-PUT    /api/domain-bindings
-GET    /api/config
-PUT    /api/config
-POST   /api/config/probe/test
-POST   /api/maintenance/run
-POST   /api/remote-load
+Worker 会以 `GET` 请求调用检测接口，请求地址中的 `proxyip` 值为待检测地址，例如 `1.2.3.4:443` 或 `[2606:4700::1]:443`。接口需要返回可识别的检测 JSON 对象（例如含布尔值 `success`）。HTTP 非 2xx、非 JSON、空对象或不符合检测结构的 JSON 视为接口异常；纯超时按上文的慢 IP 淘汰策略处理，配置备用接口时仍会确认。
+
+代码实际消费的返回字段样式如下：
+
+```json
+{
+  "success": true,
+  "proxyIP": "1.2.3.4",
+  "portRemote": "443",
+  "responseTime": 123,
+  "colo": "HKG",
+  "inferred_stack": "v4/v6",
+  "exits": [
+    {
+      "stack": "ipv4",
+      "ip": "203.0.113.10",
+      "colo": "HKG",
+      "country": "HK",
+      "city": "Hong Kong",
+      "asn": 64500,
+      "asOrganization": "Example Network"
+    },
+    {
+      "stack": "ipv6",
+      "ip": "2001:db8::10",
+      "colo": "HKG",
+      "country": "HK",
+      "city": "Hong Kong",
+      "asn": 64501,
+      "asOrganization": "Example Network"
+    }
+  ]
+}
 ```
 
-只有这一套 `/api/*`。
+字段说明：
 
-## KV 数据
-
-| Key | 内容 |
+| 字段 | 用途 |
 | --- | --- |
-| `app_config` | 面板配置、域名区域、维护目标与运行时参数 |
+| `success` | 判断节点是否可用。维护流程和检测清洗只保留可用节点。 |
+| `proxyIP` | 检测清洗后写入 IP 池的地址；缺失时使用请求中的 IP。 |
+| `portRemote` | 检测清洗后写入 IP 池的端口；缺失时使用请求中的端口。 |
+| `responseTime` | 面板、维护日志和通知里展示的检测耗时。 |
+| `colo` | 面板、维护日志和通知里展示的 Cloudflare 机房。 |
+| `inferred_stack` | 节点出口类型，建议返回 `v4`、`v6` 或 `v4/v6`，用于出口筛选和 IP 池第四字段。 |
+| `exits` | 出口详情列表，用于面板展示，并汇总生成 IP 池里的 `asn,country,stack`。 |
+
+`exits` 数组对象字段：
+
+| 字段 | 用途 |
+| --- | --- |
+| `stack` | 单个出口类型，例如 `ipv4` 或 `ipv6`。 |
+| `ip` | 面板展示的出口 IP。 |
+| `colo` | 出口机房。 |
+| `country` | 面板展示、国家筛选和 IP 池第三字段。 |
+| `city` | 面板出口位置展示。 |
+| `asn` | 面板展示、ASN 筛选和 IP 池第二字段。 |
+| `asOrganization` | 面板展示的 ASN 组织名称。 |
+
+</details>
+
+### KV 数据
+
+<details>
+<summary><code><strong>「 KV 数据键与 IP 池格式 」</strong></code></summary>
+
+Worker 会使用以下 KV key：
+
+| Key | 说明 |
+| --- | --- |
+| `app_config` | 面板保存的运行配置 |
 | `ip_pool_default` | 默认 IP 池 |
-| `ip_pool_001`、`ip_pool_002` 等 | 自定义 IP 池 |
+| `ip_pool_001`、`ip_pool_002` ... | 自定义 IP 池，按三位数字递增创建 |
 | `ip_pool_trash` | 垃圾桶 |
-| `domain_pool_mapping` | 域名与 IP 池绑定 |
-| `domain_pool_order` | 域名显示顺序 |
-| `ip_pool_names` | 池 ID 与显示名称 |
-| `ip_pool_order` | 池显示顺序 |
+| `domain_pool_mapping` | 管理域名到 IP 池的绑定 |
+| `domain_pool_order` | 域名池绑定区域中管理域名的显示顺序，JSON 数组；旧数据缺少此键时按配置中的管理域名顺序显示 |
+| `ip_pool_names` | IP 池显示名称，JSON 对象，key 为池 ID，value 为显示名 |
+| `ip_pool_order` | IP 池显示顺序，JSON 数组；旧数据缺少此键时自动按原编号顺序显示 |
 
-IP 池标准格式：
+IP 池的 KV key 不再使用用户输入的名称。新建池时 Worker 自动分配 `ip_pool_###`，用户看到的池名称只保存在 `ip_pool_names` 中。
+
+检测清洗并入库后，IP 池按四字段保存：
 
 ```text
-ip:port,asn,country,stack # 可选备注
+ip:port,asn,country,stack
 ```
 
 示例：
@@ -192,58 +370,45 @@ ip:port,asn,country,stack # 可选备注
 198.51.100.20:443,AS64500/AS64501,JP/US,v4/v6
 ```
 
-旧的两字段、三字段和备注格式仍可直接读取，不需要迁移。更新检测结果时不会用 `null` 或 `unknown` 覆盖已经存在的有效 ASN、国家和出口栈。
+字段缺失时写 `null`。`stack` 取值为 `v4`、`v6` 或 `v4/v6`。旧格式 `ip:port # 注释` 和 `ip:port,asn,country` 仍可读取；新检测结果会按四字段格式写回。
 
-## 开发
+</details>
 
-要求 Node.js 22。
+### 维护流程
 
-```powershell
-cd app
-npm ci
-npm run typecheck
-npm run test
-npm run build
-npm run check:size
-```
+<details>
+<summary><code><strong>「 维护流程 」</strong></code></summary>
 
-完整门禁：
-
-```powershell
-npm run check
-```
-
-`npm run build` 会：
-
-1. 构建 `app/web/`；
-2. 把前端产物打包进 Worker；
-3. 生成仓库根目录 `worker.js`；
-4. 保留本地副本 `app/dist/release/worker.js`。
-
-`worker.js` 是生成文件，不要直接手工修改。源码始终以 `app/` 为准。
-
-架构：
+一次维护流程大致如下：
 
 ```text
-app/
-├─ src/
-│  ├─ contracts/      跨层类型与轻量校验
-│  ├─ domain/         纯业务规则
-│  ├─ application/    用例编排
-│  ├─ ports/          存储、探针、DNS、通知接口
-│  ├─ adapters/       KV、探针、DNS、Telegram、打包资源
-│  ├─ transport/      HTTP 路由、鉴权与错误映射
-│  ├─ jobs/           cron 与手动维护
-│  ├─ config/         环境变量与运行时装配
-│  └─ worker.ts       唯一 Worker 装配入口
-├─ web/               Preact + Vite 前端
-└─ scripts/           构建、清理、体积门禁与 UI 审计
+读取目标配置
+  -> 读取绑定 IP 池
+  -> 查询 Cloudflare DNS 当前记录
+  -> 调用检测 API 校验当前 IP
+  -> 删除失效或不匹配筛选条件的记录
+  -> 从 IP 池挑选候选并实时检测
+  -> 补充到最小活跃数
+  -> 失效池条目移入垃圾桶
+  -> 按条件发送 Telegram 报告
 ```
 
-## 参考
+通知触发条件：
+
+- 手动执行维护。
+- 有 IP 新增或删除。
+- 活跃 IP 数不足且无法补齐。
+- Cloudflare 配置错误。
+
+</details>
+
+---
+
+## 🛠 参考代码
 
 - [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 - [CF-Workers-DD2D](https://github.com/cmliu/CF-Workers-DD2D)
+- [CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)
 
 ## License
 

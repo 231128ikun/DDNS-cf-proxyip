@@ -1,18 +1,18 @@
 name: CI
 
-# 校验唯一一套模块化源码、测试以及仓库根目录的发布文件。
+# 校验模块源码和测试；当前可读部署入口仍是根目录 _worker.js。
 on:
   push:
     paths:
       - 'app/**'
-      - 'worker.js'
+      - '_worker.js'
       - 'wrangler.toml'
       - 'AGENTS.md'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'app/**'
-      - 'worker.js'
+      - '_worker.js'
       - 'wrangler.toml'
       - 'AGENTS.md'
       - '.github/workflows/ci.yml'
@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `npm run check`：类型检查、单元测试、构建根目录 worker.js、体积门禁。
+      # `npm run check`：类型检查、单元测试、构建检查产物、体积门禁。
       # 全部用例使用内存 KV 与 mock fetch，不需要真实密钥或 Cloudflare 绑定。
       - name: Check
         run: npm run check

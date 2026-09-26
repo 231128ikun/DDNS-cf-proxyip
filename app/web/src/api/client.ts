@@ -139,6 +139,11 @@ export class ApiClient {
     return await this.request<OkResponse>('/api/domain-bindings', 'PUT', { mapping }, signal);
   }
 
+  /** 只保存显示顺序；服务端会校验提交的 key 是否与实际目标集合一致。 */
+  async saveDomainBindingOrder(order: readonly string[], signal?: AbortSignal): Promise<OkResponse> {
+    return await this.request<OkResponse>('/api/domain-bindings/order', 'PUT', { order }, signal);
+  }
+
   /** 手动维护与 cron 共用同一个服务端 runner，前端只负责触发并展示结果。 */
   async runMaintenance(signal?: AbortSignal): Promise<MaintenanceRunResponse> {
     return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);

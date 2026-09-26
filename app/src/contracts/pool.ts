@@ -6,6 +6,7 @@ export const TRASH_POOL_KEY = 'ip_pool_trash';
 export const POOL_NAMES_KEY = 'ip_pool_names';
 export const POOL_ORDER_KEY = 'ip_pool_order';
 export const DOMAIN_POOL_MAPPING_KEY = 'domain_pool_mapping';
+export const DOMAIN_POOL_ORDER_KEY = 'domain_pool_order';
 export const NUMBERED_POOL_KEY_RE = /^ip_pool_(\d{3})$/;
 export const MAX_POOL_DISPLAY_NAME_LENGTH = 40;
 export const MAX_POOL_RESTORE_ITEMS = 1_000;

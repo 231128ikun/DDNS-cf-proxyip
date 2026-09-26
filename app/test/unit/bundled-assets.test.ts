@@ -1,18 +1,21 @@
+import { gzipSync } from 'node:zlib';
+
 import { describe, expect, it } from 'vitest';
 
 import { createBundledAssets, type BundledAssetMap } from '../../src/adapters/assets/bundled-assets';
 
 const assets: BundledAssetMap = {
-  '/index.html': { contentType: 'text/html; charset=utf-8', base64: encode('<html>panel</html>') },
-  '/assets/index-abc.js': { contentType: 'text/javascript; charset=utf-8', base64: encode('export const a = 1;') },
+  '/index.html': { contentType: 'text/html; charset=utf-8', base64: encode('<html>panel</html>', false), gzip: false },
+  '/assets/index-abc.js': { contentType: 'text/javascript; charset=utf-8', base64: encode('export const a = 1;', true), gzip: true },
 };
 
 const fetcher = createBundledAssets(assets);
 const request = (path: string, init?: RequestInit) =>
   fetcher.fetch(new Request(`https://panel.example${path}`, init));
 
-function encode(value: string): string {
-  return Buffer.from(value, 'utf8').toString('base64');
+function encode(value: string, gzip: boolean): string {
+  const bytes = Buffer.from(value, 'utf8');
+  return (gzip ? gzipSync(bytes) : bytes).toString('base64');
 }
 
 describe('打包资源适配器', () => {
@@ -21,6 +24,7 @@ describe('打包资源适配器', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
     expect(response.headers.get('cache-control')).toContain('immutable');
+    expect(response.headers.get('content-encoding')).toBeNull();
     await expect(response.text()).resolves.toBe('export const a = 1;');
   });
 

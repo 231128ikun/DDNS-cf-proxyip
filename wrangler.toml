@@ -1,6 +1,6 @@
-# 唯一部署配置：Cloudflare Git 构建和 `wrangler deploy` 都直接读取根目录 worker.js。
+# 当前部署入口：保持原始、可直接阅读和手动复制的 `_worker.js`。
 name = "ddns-cf-proxyip"
-main = "worker.js"
+main = "_worker.js"
 compatibility_date = "2026-09-24"
 
 # 创建/绑定 KV 后，代码中的变量名必须保持为 IP_DATA。

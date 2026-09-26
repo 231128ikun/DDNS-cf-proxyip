@@ -15,7 +15,7 @@ import {
   type ProbeTestRequest,
 } from '../contracts/config';
 import type { CheckPoolRequest, PoolCheckItemResponse, PoolCheckResponse } from '../contracts/pool-check';
-import type { MaintenanceRunResponse, SaveDomainBindingsRequest } from '../contracts/maintenance';
+import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
 import type {
   CreatePoolRequest,
   CreatePoolResponse,
@@ -300,6 +300,22 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     return await mapApplicationInputError(async () => {
       await bindings.save((body.value as SaveDomainBindingsRequest | null)?.mapping);
+      return jsonResponse({ ok: true });
+    });
+  });
+
+  router.put('/api/domain-bindings/order', async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+
+    const bindings = dependencies.domainBindings;
+    if (!bindings) return errorResponse('binding storage unavailable', 503);
+
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse('invalid json', 400);
+
+    return await mapApplicationInputError(async () => {
+      await bindings.saveOrder((body.value as SaveDomainBindingOrderRequest | null)?.order);
       return jsonResponse({ ok: true });
     });
   });

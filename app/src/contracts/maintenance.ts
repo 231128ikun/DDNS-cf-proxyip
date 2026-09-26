@@ -17,6 +17,11 @@ export interface SaveDomainBindingsRequest {
   readonly mapping: Readonly<Record<string, string>>;
 }
 
+/** 域名池绑定的显示顺序；只影响面板排序，不影响维护执行顺序。 */
+export interface SaveDomainBindingOrderRequest {
+  readonly order: readonly string[];
+}
+
 export interface MaintenanceRunResult {
   readonly domain: string;
   readonly mode: TargetMode;

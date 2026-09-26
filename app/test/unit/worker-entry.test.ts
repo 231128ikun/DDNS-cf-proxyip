@@ -6,8 +6,8 @@ import { APP_VERSION, createWorker } from '../../src/worker';
 
 /** 发布 Worker 的装配回归：打包资源提供面板，API 与鉴权能力保持一致。 */
 const assets: BundledAssetMap = {
-  '/index.html': { contentType: 'text/html; charset=utf-8', base64: Buffer.from('<html>panel</html>').toString('base64') },
-  '/assets/index-abc.js': { contentType: 'text/javascript; charset=utf-8', base64: Buffer.from('export const a = 1;').toString('base64') },
+  '/index.html': { contentType: 'text/html; charset=utf-8', base64: Buffer.from('<html>panel</html>').toString('base64'), gzip: false },
+  '/assets/index-abc.js': { contentType: 'text/javascript; charset=utf-8', base64: Buffer.from('export const a = 1;').toString('base64'), gzip: false },
 };
 
 const env: RuntimeEnv = { CHECK_API: 'https://check.example/?proxyip={proxyip}' };

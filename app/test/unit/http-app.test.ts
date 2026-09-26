@@ -454,13 +454,22 @@ describe('HTTP app domain binding and maintenance routes', () => {
   };
 
   function createBindings(stored: Record<string, string> = {}) {
+    let order: readonly string[] = [];
     const repository = {
       read: async () => ({ ...stored }),
       write: async (mapping: Readonly<Record<string, string>>) => {
         stored = { ...mapping };
       },
+      readOrder: async () => [...order],
+      writeOrder: async (next: readonly string[]) => {
+        order = [...next];
+      },
     };
-    return { bindings: new DomainBindings({ load: async () => data }, repository), stored: () => ({ ...stored }) };
+    return {
+      bindings: new DomainBindings({ load: async () => data }, repository),
+      stored: () => ({ ...stored }),
+      order: () => [...order],
+    };
   }
 
   it('lists and updates domain bindings through the shared application service', async () => {
@@ -487,6 +496,31 @@ describe('HTTP app domain binding and maintenance routes', () => {
     expect(stored()).toEqual({ 'a.example.com|A': 'ip_pool_003' });
   });
 
+  it('saves the domain binding display order through the same resource', async () => {
+    const { bindings, order } = createBindings();
+    const app = createHttpApp({
+      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      version: 'test',
+      domainBindings: bindings,
+    });
+
+    const saved = await app.request('/api/domain-bindings/order', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ order: ['a.example.com|A'] }),
+    });
+    expect(saved.status).toBe(200);
+    await expect(saved.json()).resolves.toEqual({ ok: true });
+    expect(order()).toEqual(['a.example.com|A']);
+
+    const stale = await app.request('/api/domain-bindings/order', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ order: ['a.example.com|A', 'missing.example.com|A'] }),
+    });
+    expect(stale.status).toBe(400);
+    await expect(stale.json()).resolves.toEqual({ error: '管理域名列表已变化，请刷新后重试' });
+  });
   it('rejects invalid pool keys and malformed payloads with 400', async () => {
     const app = createHttpApp({
       checkProxy: new CheckProxy(new FakeProbeAdapter()),

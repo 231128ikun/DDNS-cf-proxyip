@@ -1,6 +1,6 @@
 # DDNS Pro Worker 维护规范
 
-本仓库只有一套 DDNS Pro：同一套源码、前端、API、配置和 KV 数据。`app/` 是可维护源码，仓库根目录 `worker.js` 是同一程序生成的发布文件，`wrangler.toml` 是唯一部署配置。禁止再引入任何版本式产品或平行实现。
+本仓库当前处于同一程序的结构迁移期：根目录 `_worker.js` 是唯一运行与部署入口，必须保持可读且行为不变；`app/` 是同一程序的重构源码，只有与 `_worker.js` 的界面、API、配置和 KV 行为完全对齐后才能切换入口。不得把迁移过程命名成 v1/v2，也不得建立平行产品。
 
 ## 1. 总原则
 
@@ -28,10 +28,10 @@
 | `app/src/jobs/` | cron 与手动维护共用的任务入口 |
 | `app/src/config/` | 环境变量解析和运行时适配器装配 |
 | `app/src/worker.ts` | 唯一 Worker 装配入口，`fetch` 与 `scheduled` 都在这里 |
-| `app/web/` | Preact + Vite 浏览器端 |
+| `app/web/` | 重构中的浏览器端，必须对齐当前 `_worker.js` 界面与操作 |
 | `app/scripts/` | 构建、清理、体积门禁和 UI 验收，不进入发布文件 |
-| `worker.js` | 由 `app/` 生成的唯一发布文件，可提交并直接部署 |
-| `wrangler.toml` | Cloudflare Git / Wrangler 部署配置 |
+| `_worker.js` | 当前唯一部署入口，保持手工可读 |
+| `wrangler.toml` | Cloudflare Git / Wrangler 部署配置，入口为 `_worker.js` |
 
 ### 2.1 当前代码入口
 
@@ -47,7 +47,7 @@
 | DNS 维护 | `app/src/application/maintain-managed-target.ts`、`maintain-managed-targets.ts`、`app/src/adapters/dns/cloudflare-dns.ts` |
 | Telegram | `app/src/adapters/notify/` |
 | 浏览器端 | `app/web/src/`，页面入口为 `app.tsx`，请求统一走 `api/client.ts` |
-| 发布构建 | `app/scripts/build-worker.mjs`，输出根目录 `worker.js` |
+| 重构构建检查 | `app/scripts/build-worker.mjs`，输出 `app/dist/release/worker.js`，不覆盖部署入口 |
 
 ## 3. 开始任务前
 
@@ -152,11 +152,11 @@ npm run build
 1. Vite 构建 `app/web/`；
 2. 把前端产物打包进 Worker；
 3. Wrangler 打包唯一的 `app/src/worker.ts` 装配；
-4. 写出仓库根目录 `worker.js`，并保留本地副本 `app/dist/release/worker.js`。
+4. 只输出检查产物 `app/dist/release/worker.js`，不得覆盖部署入口 `_worker.js`。
 
-`worker.js` 是生成文件，不手工修改。生成脚本必须提交，构建结果也提交，这样 Fork 后可以不改源码直接通过 Cloudflare Git 部署。
+当前 `_worker.js` 是唯一发布入口，必须保持手工可读、可直接复制部署。`app/` 只有在界面、API、配置和 KV 行为与 `_worker.js` 完全一致后，才允许作为新的单一发布入口切换。
 
-发布目录只允许 `worker.js`；不得把源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存放入发布目录。
+构建产物、源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存不得写入发布文件目录。
 
 ## 8. 验证要求
 
@@ -196,7 +196,7 @@ UI 改动额外验证桌面与窄屏；涉及 KV、探针或 DNS 改动时增加
 - [ ] 仍然只有一套源码、API、配置和 KV 数据；
 - [ ] 没有新增平行入口或重复业务实现；
 - [ ] 前端仍属于同一个 DDNS Pro；
-- [ ] `worker.js` 由源码构建而不是手改；
+- [ ] `_worker.js` 是当前可读的部署入口，未被构建产物覆盖；
 - [ ] KV、旧池格式和 `unknown` 安全语义未被破坏；
 - [ ] A/AAAA 与 TXT 两种模式都已考虑；
 - [ ] 没有提交密钥、缓存、sourcemap 或测试杂物到发布目录；

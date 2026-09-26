@@ -174,11 +174,13 @@ describe('web API client domain binding and maintenance endpoints', () => {
 
     await expect(client.domainBindings()).resolves.toEqual({ items: [] });
     await client.saveDomainBindings({ 'a.example.com|A': 'ip_pool_002' });
+    await client.saveDomainBindingOrder(['b.example.com|A', 'a.example.com|A']);
     await client.runMaintenance();
 
     expect(calls.map((call) => call.url)).toEqual([
       '/api/domain-bindings',
       '/api/domain-bindings',
+      '/api/domain-bindings/order',
       '/api/maintenance/run',
     ]);
     expect(calls[0]?.init).toMatchObject({ method: 'GET' });
@@ -186,6 +188,10 @@ describe('web API client domain binding and maintenance endpoints', () => {
       method: 'PUT',
       body: JSON.stringify({ mapping: { 'a.example.com|A': 'ip_pool_002' } }),
     });
-    expect(calls[2]?.init).toMatchObject({ method: 'POST' });
+    expect(calls[2]?.init).toMatchObject({
+      method: 'PUT',
+      body: JSON.stringify({ order: ['b.example.com|A', 'a.example.com|A'] }),
+    });
+    expect(calls[3]?.init).toMatchObject({ method: 'POST' });
   });
 });

@@ -20,7 +20,7 @@ const appRoot = new URL('../', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 const assetsDir = fileURLToPath(new URL('dist/web/assets', appRoot));
 const targets = [
-  { label: 'worker.js', path: fileURLToPath(new URL('worker.js', repoRoot)), budget: BUDGETS.worker },
+  { label: 'app/dist/release/worker.js', path: fileURLToPath(new URL('app/dist/release/worker.js', repoRoot)), budget: BUDGETS.worker },
 ];
 
 for (const file of readdirSync(assetsDir)) {

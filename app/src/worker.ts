@@ -20,7 +20,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import { runMaintenanceJob } from './jobs/maintenance-job';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.09.25-21.37';
+export const APP_VERSION = '2026.09.26-10.21';
 
 /** 批量检测并发：与维护流程一样显式限制，避免打满子请求与 CPU。 */
 const BATCH_CHECK_CONCURRENCY = 8;

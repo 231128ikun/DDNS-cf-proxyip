@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
@@ -30,6 +30,9 @@ export interface DashboardActions {
   readonly restoreTrash: () => void;
   readonly clearTrash: () => void;
   readonly bindPool: (key: string, poolKey: string) => void;
+  /** 上/下移一条绑定；顺序由服务端整体校验后保存。 */
+  readonly moveBinding: (index: number, delta: number) => void;
+  readonly refreshBindings: () => void;
   readonly runMaintenance: () => void;
 }
 
@@ -89,26 +92,9 @@ export function DashboardPage({
   onPoolChange,
 }: DashboardPageProps) {
   const [filterHelpOpen, setFilterHelpOpen] = useState(false);
-  const [poolMenuOpen, setPoolMenuOpen] = useState(false);
-  const poolMenuRef = useRef<HTMLDetailsElement>(null);
+  const [sortingBindings, setSortingBindings] = useState(false);
   const busy = poolBusy !== null;
   const inTrash = poolKey === TRASH_POOL_KEY;
-
-  useEffect(() => {
-    if (!poolMenuOpen) return undefined;
-    const closeOnPointerDown = (event: PointerEvent) => {
-      if (!poolMenuRef.current?.contains(event.target as Node)) setPoolMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setPoolMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', closeOnPointerDown);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnPointerDown);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [poolMenuOpen]);
 
   return (
     <div id="page-dashboard" class="page-panel active" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -188,17 +174,14 @@ export function DashboardPage({
                     </option>
                   ))}
                 </select>
-                <details ref={poolMenuRef} class="pool-menu" open={poolMenuOpen} onToggle={(event) => setPoolMenuOpen(event.currentTarget.open)}>
-                  <summary class="btn btn-sm btn-outline-secondary pool-menu-trigger" aria-label="IP 池管理"><Icon name="settings" /> 池管理</summary>
-                  <div class="pool-menu-panel" onClick={() => setPoolMenuOpen(false)}>
-                    <button type="button" class="pool-menu-item" disabled={busy} onClick={actions.createPool}>新建池</button>
-                    <button type="button" class="pool-menu-item" disabled={busy || inTrash} onClick={actions.renamePool}>重命名当前池</button>
-                    <button type="button" class="pool-menu-item" disabled={busy || inTrash} onClick={() => actions.movePool(-1)}>上移当前池</button>
-                    <button type="button" class="pool-menu-item" disabled={busy || inTrash} onClick={() => actions.movePool(1)}>下移当前池</button>
-                    <button type="button" class="pool-menu-item pool-menu-item-danger" disabled={busy || inTrash} onClick={actions.deletePool}>删除当前池</button>
-                    <button type="button" class="pool-menu-item" disabled={busy || inTrash} onClick={actions.cleanPool}>一键洗库</button>
-                  </div>
-                </details>
+                <div class="pool-actions" role="group" aria-label="IP 池操作">
+                  <button class="btn btn-sm btn-outline-primary pool-action" type="button" title="新建池" aria-label="新建 IP 池" disabled={busy} onClick={actions.createPool}><Icon name="plus" /> 新建</button>
+                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="重命名当前池" aria-label="重命名当前 IP 池" disabled={busy || inTrash} onClick={actions.renamePool}>重命名</button>
+                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="上移当前池" aria-label="上移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(-1)}>↑ 上移</button>
+                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="下移当前池" aria-label="下移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(1)}>↓ 下移</button>
+                  <button class="btn btn-sm btn-outline-danger pool-action" type="button" title="删除当前池" aria-label="删除当前 IP 池" disabled={busy || inTrash} onClick={actions.deletePool}>删除</button>
+                  <button class="btn btn-sm btn-outline-secondary pool-action" type="button" title="一键洗库" aria-label="一键清洗当前 IP 池" disabled={busy || inTrash} onClick={actions.cleanPool}>洗库</button>
+                </div>
               </div>
             </div>
 
@@ -347,6 +330,114 @@ export function DashboardPage({
               )}
             </div>
           </div>
+            <details class="card p-4 mb-3 domain-binding-card">
+              <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
+                <div class="domain-binding-title">
+                  <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 域名池绑定</h2>
+                  {bindings.status === 'ready' && <span class="text-secondary small">{bindings.data.items.length} 个目标</span>}
+                </div>
+                <div class="domain-binding-actions">
+                  {bindings.status === 'ready' && bindings.data.items.length > 1 && (
+                    <button
+                      class={`btn btn-sm btn-outline-primary binding-refresh binding-sort${sortingBindings ? ' active' : ''}`}
+                      type="button"
+                      title="调整域名池绑定的显示顺序"
+                      aria-pressed={sortingBindings}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSortingBindings((current) => !current);
+                      }}
+                    >
+                      ↑ {sortingBindings ? '完成' : '排序'}
+                    </button>
+                  )}
+                  <button
+                    class="btn btn-sm btn-outline-primary binding-refresh"
+                    type="button"
+                    title="刷新域名池绑定"
+                    disabled={bindings.status === 'loading'}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      actions.refreshBindings();
+                    }}
+                  >
+                    <Icon name="refresh" /> 刷新
+                  </button>
+                </div>
+              </summary>
+              {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
+              {bindings.status === 'error' && <p class="text-danger small mb-0">{bindings.message}</p>}
+              {bindings.status === 'ready' && (
+                bindings.data.items.length === 0 ? (
+                  <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
+                ) : (
+                  <div class="domain-binding-table-wrap">
+                    <table class={`table table-sm mb-0${sortingBindings ? ' binding-sorting' : ''}`}>
+                      <thead>
+                        <tr>
+                          <th>域名</th>
+                          <th>IP 池</th>
+                          {sortingBindings && <th class="domain-binding-order-col">顺序</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bindings.data.items.map((item, index) => (
+                          <tr key={item.key}>
+                            <td>
+                              <div class="domain-binding-domain">
+                                <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
+                                <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <select
+                                class="form-select form-select-sm domain-binding-select"
+                                value={item.poolKey}
+                                disabled={!item.enabled}
+                                aria-label={`${item.domain} 绑定的 IP 池`}
+                                onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
+                              >
+                                {poolOptions(pools, item.poolKey).filter((pool) => isUserPoolKey(pool.key)).map((pool) => (
+                                  <option key={pool.key} value={pool.key}>{pool.name}</option>
+                                ))}
+                              </select>
+                            </td>
+                            {sortingBindings && (
+                              <td class="domain-binding-order-col">
+                                <div class="domain-binding-order-actions">
+                                  <button
+                                    type="button"
+                                    class="binding-order-btn"
+                                    title={`上移 ${item.domain}`}
+                                    aria-label={`上移 ${item.domain}`}
+                                    disabled={index === 0}
+                                    onClick={() => actions.moveBinding(index, -1)}
+                                  >
+                                    ↑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="binding-order-btn"
+                                    title={`下移 ${item.domain}`}
+                                    aria-label={`下移 ${item.domain}`}
+                                    disabled={index === bindings.data.items.length - 1}
+                                    onClick={() => actions.moveBinding(index, 1)}
+                                  >
+                                    ↓
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+            </details>
         </div>
 
         <div class="col-lg-5">
@@ -372,65 +463,12 @@ export function DashboardPage({
               disabled={maintenanceBusy}
               onClick={actions.runMaintenance}
             >
-              <Icon name="refresh" /> {maintenanceBusy ? '维护中…' : '立即维护'}
+              <Icon name="refresh" /> {maintenanceBusy ? '维护中…' : '执行全部维护'}
             </button>
             <MaintenanceSummary state={maintenance} />
-            <p class="text-secondary small mb-0">
-              自动维护已接入 cron 定时、Telegram 通知与 Cloudflare DNS 写入；请先绑定 IP_DATA，并用测试域名验证。
-            </p>
           </div>
         </div>
       </div>
-
-      <details class="card p-4 domain-binding-card">
-        <summary class="domain-binding-header">
-          <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 域名池绑定</h2>
-          <span class="text-secondary small">{bindings.status === 'ready' && `${bindings.data.items.length} 个目标`}</span>
-        </summary>
-        {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
-        {bindings.status === 'error' && <p class="text-danger small mb-0">{bindings.message}</p>}
-        {bindings.status === 'ready' && (
-          bindings.data.items.length === 0 ? (
-            <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
-          ) : (
-            <div class="domain-binding-table-wrap">
-              <table class="table table-sm mb-0">
-                <thead>
-                  <tr>
-                    <th>域名</th>
-                    <th>IP 池</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bindings.data.items.map((item) => (
-                    <tr key={item.key}>
-                      <td>
-                        <div class="domain-binding-domain">
-                          <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
-                          <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <select
-                          class="form-select form-select-sm domain-binding-select"
-                          value={item.poolKey}
-                          disabled={!item.enabled}
-                          aria-label={`${item.domain} 绑定的 IP 池`}
-                          onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
-                        >
-                          {poolOptions(pools, item.poolKey).filter((pool) => isUserPoolKey(pool.key)).map((pool) => (
-                            <option key={pool.key} value={pool.key}>{pool.name}</option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
-        )}
-      </details>
     </div>
   );
 }

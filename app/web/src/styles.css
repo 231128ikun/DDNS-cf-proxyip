@@ -395,7 +395,7 @@
         .config-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            gap: 8px 10px;
         }
         .config-grid .span-2 {
             grid-column: 1 / -1;
@@ -403,18 +403,44 @@
         .field {
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 3px;
             min-width: 0;
         }
         .field > span {
             font-size: 13px;
             font-weight: 700;
+            line-height: 1.3;
             color: #1d1d1f;
         }
         .field > small {
             color: #6b7280;
-            font-size: 12px;
-            line-height: 1.4;
+            font-size: 11px;
+            line-height: 1.25;
+        }
+        .config-grid .form-control-sm,
+        .config-grid .form-select-sm {
+            min-height: 32px;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .config-grid .form-select-sm {
+            padding-right: 28px;
+        }
+        .probe-test-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+        }
+        .probe-test-row .form-control {
+            flex: 1 1 200px;
+            min-width: 0;
+        }
+        .probe-test-result {
+            min-height: 0;
+            margin-top: 1px;
+            line-height: 1.3;
         }
         .section-header {
             display: flex;
@@ -502,9 +528,13 @@
             box-shadow: 0 8px 24px rgba(0,0,0,.06);
             transform: translateY(-1px);
         }
+        .config-mini-card.selected {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(0,122,255,.1);
+        }
         .config-mini-card h5 {
             margin: 0;
-            font-size: 18px;
+            font-size: 17px;
             line-height: 1.25;
             word-break: break-all;
         }
@@ -523,7 +553,12 @@
         .config-mini-card .actions .btn {
             min-height: 32px;
             padding: 6px 10px;
-            font-size: 13px;
+            font-size: 12px;
+        }
+        .config-mini-card .actions .btn .ui-icon {
+            width: 14px;
+            height: 14px;
+            flex-basis: 14px;
         }
         .config-empty-state {
             padding: 18px;
@@ -541,8 +576,8 @@
         }
         .config-edit-panel {
             display: none;
-            margin-top: 12px;
-            padding: 14px;
+            margin-top: 10px;
+            padding: 12px;
             border: 1px solid #dbe3f0;
             border-radius: 10px;
             background: #fff;
@@ -550,78 +585,99 @@
         .config-edit-panel.active {
             display: block;
         }
+        .config-edit-heading {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 4px 10px;
+            margin-bottom: 8px;
+        }
+        .config-edit-heading h3 {
+            margin: 0;
+            font-size: 14px;
+        }
+        .config-edit-heading small {
+            color: #6b7280;
+            font-size: 11px;
+        }
         .config-edit-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
+            gap: 8px;
         }
         .config-edit-actions {
             display: flex;
             justify-content: flex-end;
             gap: 8px;
-            margin-top: 12px;
+            margin-top: 10px;
         }
         .pool-tools {
             display: flex;
             gap: 6px;
             align-items: center;
             flex-wrap: wrap;
+            justify-content: flex-end;
+            min-width: 0;
         }
         .pool-tools .form-select {
-            width: 160px;
-            border-radius: 8px;
+            width: 128px;
+            flex: 0 1 128px;
+            min-height: 32px;
+            padding: 4px 28px 4px 8px;
+            border-radius: 9px;
+            font-size: 13px;
         }
-        .pool-menu {
-            position: relative;
+        .pool-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
         }
-        .pool-menu-trigger {
-            list-style: none;
+        .pool-action {
+            min-height: 32px;
+            padding: 5px 8px;
+            border-radius: 9px;
+            gap: 4px;
+            font-size: 12px;
+            font-weight: 600;
             white-space: nowrap;
         }
-        .pool-menu-trigger::-webkit-details-marker {
-            display: none;
+        .pool-action .ui-icon {
+            width: 14px;
+            height: 14px;
+            flex-basis: 14px;
         }
-        .pool-menu-panel {
-            position: absolute;
-            right: 0;
-            top: calc(100% + 6px);
-            z-index: 30;
-            min-width: 176px;
+        .pool-action-icon {
+            width: 32px;
+            flex: 0 0 32px;
+            padding: 0;
+        }
+        .domain-binding-header-actions {
             display: flex;
-            flex-direction: column;
-            gap: 2px;
-            padding: 6px;
-            background: #fff;
-            border: 1px solid #dbe3f0;
-            border-radius: 10px;
-            box-shadow: 0 10px 24px rgba(15,23,42,0.14);
+            align-items: center;
+            gap: 6px;
         }
-        .pool-menu-item {
-            display: block;
-            width: 100%;
-            padding: 7px 10px;
-            border: none;
-            border-radius: 7px;
-            background: transparent;
-            color: #334155;
-            font-size: 13px;
-            font-weight: 500;
-            text-align: left;
-            cursor: pointer;
+        .binding-refresh {
+            min-height: 32px;
+            padding: 4px 8px;
+            border-radius: 9px;
+            gap: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
         }
-        .pool-menu-item:hover {
-            background: #f1f5f9;
-        }
-        .pool-menu-item-danger {
-            color: var(--danger);
+        .binding-refresh .ui-icon {
+            width: 15px;
+            height: 15px;
+            flex-basis: 15px;
         }
         .domain-binding-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 8px;
-            /* 折叠标题本身是点击目标，按规范不小于 32px。 */
-            min-height: 32px;
+            /* 与旧版一致，同时满足折叠标题的最小点击高度。 */
+            min-height: 40px;
             cursor: pointer;
             margin-bottom: 0;
             list-style: none;
@@ -633,6 +689,12 @@
             margin-bottom: 1rem;
         }
         .domain-binding-header .card-title {
+            min-width: 0;
+        }
+        .domain-binding-title {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
             min-width: 0;
         }
         .domain-binding-actions {
@@ -727,6 +789,50 @@
         .domain-binding-select {
             width: 100%;
             min-width: 0;
+        }
+        /* 排序模式多出一列：域名/池列等宽，顺序列固定宽度，避免与默认两列规则冲突。 */
+        .domain-binding-table-wrap .table.binding-sorting th:first-child,
+        .domain-binding-table-wrap .table.binding-sorting td:first-child {
+            width: 48%;
+        }
+        .domain-binding-table-wrap .table.binding-sorting th:last-child,
+        .domain-binding-table-wrap .table.binding-sorting td:last-child {
+            width: 96px;
+        }
+        .domain-binding-order-col {
+            text-align: center;
+        }
+        .domain-binding-order-actions {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        .binding-order-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border: 1px solid #d7dce5;
+            border-radius: 9px;
+            background: #fff;
+            color: #3b4252;
+            cursor: pointer;
+        }
+        .binding-order-btn:hover:not(:disabled) {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .binding-order-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .binding-order-btn .ui-icon {
+            width: 15px;
+            height: 15px;
+            flex-basis: 15px;
         }
 
         .maintenance-summary {
@@ -869,7 +975,7 @@
         .config-section-title {
             font-size: 16px;
             font-weight: 600;
-            margin: 20px 0 8px;
+            margin: 16px 0 7px;
         }
         .endpoint-list {
             display: grid;
@@ -920,7 +1026,7 @@
             content: '收起';
         }
         .config-details-body {
-            padding-top: 16px;
+            padding-top: 12px;
         }
         #page-config button:disabled {
             opacity: .55;
@@ -1279,9 +1385,18 @@
             .pool-tools {
                 width: 100%;
                 display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
+                grid-template-columns: minmax(0, 1fr);
+                gap: 6px;
             }
             .pool-tools .form-select {
+                width: 100%;
+            }
+            .pool-actions {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 5px;
+            }
+            .pool-action {
                 width: 100%;
             }
             .domain-binding-table-wrap {
@@ -1404,23 +1519,23 @@
         .ddns-lookup-form .form-control-sm {
             min-height: 32px;
             padding: 4px 8px;
-            border-radius: 8px;
+            border-radius: 9px;
             font-size: 13px;
         }
         .ddns-lookup-form .btn-sm {
             flex: 0 0 auto;
-            gap: 4px;
+            gap: 5px;
             min-height: 32px;
             padding: 4px 8px;
-            border-radius: 8px;
+            border-radius: 9px;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             white-space: nowrap;
         }
         .ddns-lookup-form .btn-sm .ui-icon {
-            width: 14px;
-            height: 14px;
-            flex-basis: 14px;
+            width: 15px;
+            height: 15px;
+            flex-basis: 15px;
         }
         .ddns-probe-alive {
             color: #087443;

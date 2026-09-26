@@ -26,8 +26,12 @@ interface ConfigPageProps {
   readonly notify: (message: string, type?: 'success' | 'error') => void;
 }
 
+interface ZoneDraft extends ZoneConfig {
+  readonly hasApiKey?: boolean;
+}
+
 interface ConfigForm {
-  readonly zones: readonly ZoneConfig[];
+  readonly zones: readonly ZoneDraft[];
   readonly targets: readonly TargetConfig[];
   readonly checkApi: string;
   readonly checkApiBackup: string;
@@ -74,6 +78,8 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
   const [saving, setSaving] = useState(false);
   const [probeTarget, setProbeTarget] = useState('');
   const [probeTest, setProbeTest] = useState<RequestState<ProbeResponse>>({ status: 'idle' });
+  const [editingZone, setEditingZone] = useState<number | null>(null);
+  const [editingTarget, setEditingTarget] = useState<number | null>(null);
 
   const applyResponse = useCallback((response: ConfigResponse): void => {
     setLoad({ status: 'ready', data: response });
@@ -81,6 +87,8 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
     setSecrets(response.config.secrets);
     setDrafts(EMPTY_DRAFTS);
     setClearing(NO_CLEARING);
+    setEditingZone(null);
+    setEditingTarget(null);
   }, []);
 
   const reload = useCallback((signal?: AbortSignal): void => {
@@ -103,18 +111,35 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
     setForm((current) => (current ? { ...current, ...partial } : current));
   };
 
-  const patchZone = (index: number, partial: Partial<ZoneConfig>): void => {
+  const patchZone = (index: number, partial: Partial<ZoneDraft>): void => {
     setForm((current) => current ? { ...current, zones: current.zones.map((zone, position) => position === index ? { ...zone, ...partial } : zone) } : current);
   };
 
   const addZone = (): void => {
-    setForm((current) => current && current.zones.length < MAX_ZONES
-      ? { ...current, zones: [...current.zones, { name: '', label: '', baseDomain: '', zoneId: '', apiKey: '' }] }
-      : current);
+    if (!form || form.zones.length >= MAX_ZONES) return;
+    const index = form.zones.length;
+    setForm({
+      ...form,
+      zones: [...form.zones, { name: '', label: '', baseDomain: '', zoneId: '', apiKey: '', hasApiKey: false }],
+    });
+    setEditingZone(index);
   };
 
   const removeZone = (index: number): void => {
-    setForm((current) => current ? { ...current, zones: current.zones.filter((_, position) => position !== index) } : current);
+    setForm((current) => current ? {
+      ...current,
+      zones: current.zones.filter((_, position) => position !== index),
+      targets: current.targets.map((target) => ({
+        ...target,
+        zoneIndex: target.zoneIndex === index
+          ? (current.zones.length > 1 ? 0 : null)
+          : target.zoneIndex !== null && target.zoneIndex > index
+            ? target.zoneIndex - 1
+            : target.zoneIndex,
+      })),
+    } : current);
+    setEditingZone((current) => current === null ? null : current === index ? null : current > index ? current - 1 : current);
+    setEditingTarget((current) => current === null ? null : current === index ? null : current > index ? current - 1 : current);
   };
 
   const patchTarget = (index: number, partial: Partial<TargetConfig>): void => {
@@ -122,13 +147,21 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
   };
 
   const addTarget = (): void => {
-    setForm((current) => current && current.targets.length < MAX_TARGETS
-      ? { ...current, targets: [...current.targets, createEmptyTarget(current.settings.DEFAULT_MIN_ACTIVE)] }
-      : current);
+    if (!form) return;
+    if (form.zones.length === 0) {
+      notify('请先添加权限配置，再创建管理域名', 'error');
+      return;
+    }
+    if (form.targets.length >= MAX_TARGETS) return;
+    const index = form.targets.length;
+    const target = { ...createEmptyTarget(form.settings.DEFAULT_MIN_ACTIVE), zoneIndex: 0 };
+    setForm({ ...form, targets: [...form.targets, target] });
+    setEditingTarget(index);
   };
 
   const removeTarget = (index: number): void => {
     setForm((current) => current ? { ...current, targets: current.targets.filter((_, position) => position !== index) } : current);
+    setEditingTarget((current) => current === null ? null : current === index ? null : current > index ? current - 1 : current);
   };
 
   const handleSave = (): void => {
@@ -175,15 +208,18 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
   }
   if (load.status !== 'ready' || !form) return null;
 
+  const activeZone = editingZone === null ? null : form.zones[editingZone] ?? null;
+  const activeTarget = editingTarget === null ? null : form.targets[editingTarget] ?? null;
+
   return (
     <div id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config">
-      <details class="card p-4 mb-3 config-details" open>
+      <details class="card p-4 mb-3 config-details">
         <summary class="config-details-summary">
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
           <div class="config-toolbar">
             <span class={`status-badge ${load.data.source === 'kv' ? 'ok' : 'warn'}`}>{sourceLabel(load.data.source)}</span>
-            <button class="btn btn-sm btn-outline-secondary" type="button" disabled={saving} onClick={() => applyResponse(load.data)}>还原改动</button>
-            <button class="btn btn-sm btn-success config-save-btn" type="button" disabled={saving} onClick={handleSave}>
+            <button class="btn btn-sm btn-outline-secondary" type="button" disabled={saving} onClick={(event) => { event.preventDefault(); applyResponse(load.data); }}>还原改动</button>
+            <button class="btn btn-sm btn-success config-save-btn" type="button" disabled={saving} onClick={(event) => { event.preventDefault(); handleSave(); }}>
               <Icon name="save" /> {saving ? '保存中…' : '保存到 KV'}
             </button>
           </div>
@@ -201,7 +237,6 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
             </label>
           </div>
 
-          <h3 class="config-section-title">检测接口</h3>
           <div class="config-grid mb-3">
             <label class="field">
               <span>检测接口形态</span>
@@ -249,18 +284,9 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
               <small>页脚和通知中展示，可留空。</small>
               <input class="form-control form-control-sm" value={form.projectUrl} onInput={(event) => patch({ projectUrl: event.currentTarget.value })} />
             </label>
-          </div>
-
-          <h3 class="config-section-title">运行时设置</h3>
-          <div class="config-grid mb-3">
             {SETTINGS_FIELDS.map(([key, label, help]) => (
               <NumberField key={key} id={`cfg-${key}`} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
             ))}
-          </div>
-
-          <h3 class="config-section-title">密钥</h3>
-          <p class="text-secondary small">密钥只写入 KV，接口只回传“是否已配置”，不会回显明文。</p>
-          <div class="config-grid mb-3">
             <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空表示关闭面板鉴权，回退到环境变量 AUTH_KEY。" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
             <SecretField id="cfg-api-token" label={SECRET_LABELS.apiKey} help="兼容旧配置的顶层 Cloudflare API Token；优先使用权限配置中的 Token。" configured={secrets.apiKey} value={drafts.apiKey} clearing={clearing.apiKey} onValue={(value) => setDrafts((current) => ({ ...current, apiKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, apiKey: !current.apiKey }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 TG 通知时必填。" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
@@ -269,108 +295,181 @@ export function ConfigPage({ client, notify }: ConfigPageProps) {
               <small>通知接收账号或群组 ID。</small>
               <input class="form-control form-control-sm" value={form.tgId} placeholder="TG_ID" onInput={(event) => patch({ tgId: event.currentTarget.value })} />
             </label>
+            <div class="field span-2">
+              <span>接口自检</span>
+              <small>未保存前也可先用当前配置的探针试一次；结果只用于当前页面。</small>
+              <div class="probe-test-row">
+                <input type="text" class="form-control form-control-sm" placeholder="要测试的域名 / IP:端口" aria-label="探测测试目标" value={probeTarget} onInput={(event) => setProbeTarget(event.currentTarget.value)} />
+                <button class="btn btn-sm btn-outline-primary" type="button" disabled={probeTest.status === 'loading'} onClick={handleTestProbe}>
+                  <Icon name="search" /> {form.probeMode === 'socket' ? '测试双探针' : '测试主接口'}
+                </button>
+              </div>
+              <p class="probe-test-result small mb-0">
+                {probeTest.status === 'idle' && <span class="text-secondary">尚未测试。</span>}
+                {probeTest.status === 'loading' && <span class="text-secondary">正在测试…</span>}
+                {probeTest.status === 'error' && <span class="text-danger">{probeTest.message}</span>}
+                {probeTest.status === 'ready' && (
+                  <span class={probeTest.data.status === 'alive' ? 'text-success' : 'text-warning'}>
+                    {probeStatusLabel(probeTest.data.status)} · 出口 {probeTest.data.exitIp ?? '未知'} · 延迟 {probeTest.data.latencyMs ?? '—'} ms
+                  </span>
+                )}
+              </p>
+            </div>
           </div>
-
-          <h3 class="config-section-title">接口自检</h3>
-          <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-            <input type="text" class="form-control form-control-sm" style="max-width:280px" placeholder="要测试的域名 / IP:端口" aria-label="探测测试目标" value={probeTarget} onInput={(event) => setProbeTarget(event.currentTarget.value)} />
-            <button class="btn btn-sm btn-outline-primary" type="button" disabled={probeTest.status === 'loading'} onClick={handleTestProbe}>
-              <Icon name="search" /> {form.probeMode === 'socket' ? '测试双探针' : '测试主接口'}
-            </button>
-          </div>
-          <p class="small mb-0">
-            {probeTest.status === 'idle' && <span class="text-secondary">未保存前也可先用当前配置的探针试一次。</span>}
-            {probeTest.status === 'loading' && <span class="text-secondary">正在测试…</span>}
-            {probeTest.status === 'error' && <span class="text-danger">{probeTest.message}</span>}
-            {probeTest.status === 'ready' && (
-              <span class={probeTest.data.status === 'alive' ? 'text-success' : 'text-warning'}>
-                {probeStatusLabel(probeTest.data.status)} · 出口 {probeTest.data.exitIp ?? '未知'} · 延迟 {probeTest.data.latencyMs ?? '—'} ms
-              </span>
-            )}
-          </p>
         </div>
       </details>
 
-      <details class="card p-4 mb-3 config-details" open>
-        <summary class="config-details-summary">
+      <div class="card p-4 mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 维护的域名配置</h2>
-          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.zones.length >= MAX_ZONES} onClick={(event) => { event.preventDefault(); addZone(); }}>
+          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.zones.length >= MAX_ZONES} onClick={addZone}>
             <Icon name="plus" /> 添加权限配置
           </button>
-        </summary>
-        <div class="config-details-body">
+        </div>
+        <div class="config-card-grid">
           {form.zones.length === 0 && <div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>}
           {form.zones.map((zone, index) => (
-            <div class="domain-item mb-2" key={index}>
-              <div class="domain-item-head">
-                <strong>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</strong>
-                <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeZone(index)}>删除</button>
+            <div
+              class={`config-mini-card${editingZone === index ? ' selected' : ''}`}
+              key={index}
+              title="点击编辑权限配置"
+              onClick={() => setEditingZone((current) => current === index ? null : index)}
+            >
+              <h5>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</h5>
+              <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>
+              <div class="meta">
+                <span>Zone: {zone.zoneId ? '已填写' : '未填写'}</span>
+                <span>CF Key: {zone.hasApiKey || zone.apiKey ? '已配置' : '未配置'}</span>
               </div>
-              <div class="config-grid">
-                <label class="field"><span>显示名称</span><input class="form-control form-control-sm" value={zone.label} onInput={(event) => patchZone(index, { label: event.currentTarget.value, name: event.currentTarget.value })} /></label>
-                <label class="field"><span>维护域名</span><input class="form-control form-control-sm" value={zone.baseDomain} placeholder="example.com" onInput={(event) => patchZone(index, { baseDomain: event.currentTarget.value })} /></label>
-                <label class="field"><span>Cloudflare Zone ID</span><input class="form-control form-control-sm" value={zone.zoneId} onInput={(event) => patchZone(index, { zoneId: event.currentTarget.value })} /></label>
-                <label class="field"><span>Cloudflare API Token</span><small>留空表示保持原值；新建时留空则不使用独立 Token。</small><input type="password" class="form-control form-control-sm" value={zone.apiKey} autocomplete="new-password" placeholder="留空保持不变" onInput={(event) => patchZone(index, { apiKey: event.currentTarget.value })} /></label>
+              <div class="actions" onClick={(event) => event.stopPropagation()}>
+                <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => setEditingZone(index)}>编辑</button>
+                <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeZone(index)}>删除</button>
               </div>
             </div>
           ))}
         </div>
-      </details>
+        <div id="zone-edit-panel" class={`config-edit-panel${activeZone ? ' active' : ''}`}>
+          {activeZone && editingZone !== null && (
+            <>
+              <div class="config-edit-heading">
+                <h3>编辑权限配置</h3>
+                <small>修改后点击页首“保存到 KV”生效。</small>
+              </div>
+              <div class="config-grid">
+                <label class="field"><span>显示名称</span><input class="form-control form-control-sm" value={activeZone.label} onInput={(event) => patchZone(editingZone, { label: event.currentTarget.value, name: event.currentTarget.value })} /></label>
+                <label class="field"><span>维护域名</span><input class="form-control form-control-sm" value={activeZone.baseDomain} placeholder="example.com" onInput={(event) => patchZone(editingZone, { baseDomain: event.currentTarget.value })} /></label>
+                <label class="field"><span>Cloudflare Zone ID</span><input class="form-control form-control-sm" value={activeZone.zoneId} onInput={(event) => patchZone(editingZone, { zoneId: event.currentTarget.value })} /></label>
+                <label class="field"><span>Cloudflare API Token</span><small>留空表示保持原值；新建时留空则不使用独立 Token。</small><input type="password" class="form-control form-control-sm" value={activeZone.apiKey} autocomplete="new-password" placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : '未配置'} onInput={(event) => patchZone(editingZone, { apiKey: event.currentTarget.value })} /></label>
+              </div>
+              <div class="config-edit-actions"><button class="btn btn-sm btn-outline-secondary" type="button" onClick={() => setEditingZone(null)}>收起</button></div>
+            </>
+          )}
+        </div>
+      </div>
 
-      <details class="card p-4 mb-3 config-details" open>
-        <summary class="config-details-summary">
+      <div class="card p-4 mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <h2 class="card-title m-0 fw-bold"><Icon name="activity" /> 管理域名</h2>
-          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={(event) => { event.preventDefault(); addTarget(); }}>
+          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
             <Icon name="plus" /> 添加管理域名
           </button>
-        </summary>
-        <div class="config-details-body">
+        </div>
+        <div class="config-card-grid">
           {form.targets.length === 0 && <div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>}
           {form.targets.map((target, index) => (
-            <div class="domain-item mb-2" key={index}>
-              <div class="domain-item-head">
-                <div>
-                  <span class={`record-badge ${target.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{target.mode}</span>
-                  <strong>{target.domain || '未设置域名'}</strong>
-                  <span class={`status-dot ${target.enabled ? 'on' : 'off'}`}>{target.enabled ? '启用' : '停用'}</span>
-                </div>
+            <div
+              class={`config-mini-card${editingTarget === index ? ' selected' : ''}`}
+              key={index}
+              title="点击编辑管理域名"
+              onClick={() => setEditingTarget((current) => current === index ? null : index)}
+            >
+              <h5>{targetDisplayDomain(target)}</h5>
+              <div class="meta">
+                <span class={`record-badge ${target.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{target.mode}</span>
+                <span>{target.mode === 'TXT' ? 'TXT 列表' : `端口 ${target.port}`}</span>
+                <span>{exitFilterLabel(target.exitFilter)}</span>
+                <span>{zoneDisplayName(form.zones, target.zoneIndex)}</span>
+                <span>{target.enabled ? '维护开启' : '维护关闭'}</span>
+              </div>
+              <div class="meta">
+                <span>活跃数 {target.minActive}</span>
+                {target.country && <span>国家 {target.country}</span>}
+                {target.asn && <span>ASN {target.asn}</span>}
+              </div>
+              <div class="actions" onClick={(event) => event.stopPropagation()}>
+                <label class="switch" title="单独控制这个域名是否参与维护">
+                  <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
+                  <span class="switch-slider" />
+                </label>
+                <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => setEditingTarget(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeTarget(index)}>删除</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div id="target-edit-panel" class={`config-edit-panel${activeTarget ? ' active' : ''}`}>
+          {activeTarget && editingTarget !== null && (
+            <>
+              <div class="config-edit-heading">
+                <h3>编辑管理域名</h3>
+                <small>修改后点击页首“保存到 KV”生效。</small>
               </div>
               <div class="config-grid">
                 <label class="field">
                   <span>记录模式</span>
-                  <select class="form-select form-select-sm" value={target.mode} onChange={(event) => patchTarget(index, { mode: readTargetMode(event.currentTarget.value) })}>
+                  <select class="form-select form-select-sm" value={activeTarget.mode} onChange={(event) => patchTarget(editingTarget, { mode: readTargetMode(event.currentTarget.value) })}>
                     <option value="A">A / AAAA</option><option value="TXT">TXT</option>
                   </select>
                 </label>
                 <label class="field">
                   <span>权限配置</span>
-                  <select class="form-select form-select-sm" value={target.zoneIndex === null ? '' : String(target.zoneIndex)} onChange={(event) => patchTarget(index, { zoneIndex: event.currentTarget.value === '' ? null : Number(event.currentTarget.value) })}>
+                  <select class="form-select form-select-sm" value={activeTarget.zoneIndex === null ? '' : String(activeTarget.zoneIndex)} onChange={(event) => patchTarget(editingTarget, { zoneIndex: event.currentTarget.value === '' ? null : Number(event.currentTarget.value) })}>
                     <option value="">使用顶层凭据</option>
                     {form.zones.map((zone, zoneIndex) => <option value={zoneIndex} key={zoneIndex}>{zone.label || zone.baseDomain || `权限配置 ${zoneIndex + 1}`}</option>)}
                   </select>
                 </label>
-                <label class="field"><span>域名前缀</span><input class="form-control form-control-sm" value={target.prefix} placeholder="proxy" onInput={(event) => patchTarget(index, { prefix: event.currentTarget.value })} /></label>
-                <label class="field"><span>基础域名</span><input class="form-control form-control-sm" value={target.baseDomain} placeholder="example.com" onInput={(event) => patchTarget(index, { baseDomain: event.currentTarget.value })} /></label>
-                <label class="field"><span>完整域名</span><input class="form-control form-control-sm" value={target.domain} onInput={(event) => patchTarget(index, { domain: event.currentTarget.value })} /></label>
-                <NumberField id={`target-port-${index}`} label={target.mode === 'TXT' ? '端口（TXT 固定任意）' : '端口'} help={target.mode === 'TXT' ? 'TXT 模式不限制端口。' : 'A/AAAA 使用；1-65535。'} value={target.mode === 'TXT' ? 'any' : String(target.port)} min={1} max={65535} onChange={(value) => patchTarget(index, { port: Number(value) })} />
-                <NumberField id={`target-min-${index}`} label="最少可用数" help="维护后低于此数量会提示补货不足。" value={String(target.minActive)} min={0} max={100} onChange={(value) => patchTarget(index, { minActive: Number(value) })} />
+                <label class="field"><span>域名前缀</span><input class="form-control form-control-sm" value={activeTarget.prefix} placeholder="proxy" onInput={(event) => patchTarget(editingTarget, { prefix: event.currentTarget.value })} /></label>
+                <label class="field"><span>基础域名</span><input class="form-control form-control-sm" value={activeTarget.baseDomain} placeholder="example.com" onInput={(event) => patchTarget(editingTarget, { baseDomain: event.currentTarget.value })} /></label>
+                <label class="field"><span>完整域名</span><input class="form-control form-control-sm" value={activeTarget.domain} onInput={(event) => patchTarget(editingTarget, { domain: event.currentTarget.value })} /></label>
+                <NumberField id={`target-port-${editingTarget}`} label={activeTarget.mode === 'TXT' ? '端口（TXT 固定任意）' : '端口'} help={activeTarget.mode === 'TXT' ? 'TXT 模式不限制端口。' : 'A/AAAA 使用；1-65535。'} value={activeTarget.mode === 'TXT' ? 'any' : String(activeTarget.port)} min={1} max={65535} onChange={(value) => patchTarget(editingTarget, { port: Number(value) })} />
+                <NumberField id={`target-min-${editingTarget}`} label="最少可用数" help="维护后低于此数量会提示补货不足。" value={String(activeTarget.minActive)} min={0} max={100} onChange={(value) => patchTarget(editingTarget, { minActive: Number(value) })} />
                 <label class="field">
                   <span>出口栈筛选</span>
-                  <select class="form-select form-select-sm" value={target.exitFilter} onChange={(event) => patchTarget(index, { exitFilter: readExitFilter(event.currentTarget.value) })}>
+                  <select class="form-select form-select-sm" value={activeTarget.exitFilter} onChange={(event) => patchTarget(editingTarget, { exitFilter: readExitFilter(event.currentTarget.value) })}>
                     <option value="any">不限</option><option value="v4">仅 IPv4</option><option value="v6">仅 IPv6</option><option value="dual">双栈</option>
                   </select>
                 </label>
-                <label class="field"><span>国家筛选</span><input class="form-control form-control-sm" value={target.country} placeholder="US,HK 或留空" onInput={(event) => patchTarget(index, { country: event.currentTarget.value })} /></label>
-                <label class="field"><span>ASN 筛选</span><input class="form-control form-control-sm" value={target.asn} placeholder="AS13335 或留空" onInput={(event) => patchTarget(index, { asn: event.currentTarget.value })} /></label>
-                <label class="field checkbox-field"><span>维护开关</span><label class="switch"><input type="checkbox" checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} /><span class="switch-slider" /><span>{target.enabled ? '启用' : '停用'}</span></label></label>
+                <label class="field"><span>国家筛选</span><input class="form-control form-control-sm" value={activeTarget.country} placeholder="US,HK 或留空" onInput={(event) => patchTarget(editingTarget, { country: event.currentTarget.value })} /></label>
+                <label class="field"><span>ASN 筛选</span><input class="form-control form-control-sm" value={activeTarget.asn} placeholder="AS13335 或留空" onInput={(event) => patchTarget(editingTarget, { asn: event.currentTarget.value })} /></label>
+                <label class="field checkbox-field"><span>维护开关</span><label class="switch"><input type="checkbox" checked={activeTarget.enabled} onChange={(event) => patchTarget(editingTarget, { enabled: event.currentTarget.checked })} /><span class="switch-slider" /><span>{activeTarget.enabled ? '启用' : '停用'}</span></label></label>
               </div>
-            </div>
-          ))}
+              <div class="config-edit-actions"><button class="btn btn-sm btn-outline-secondary" type="button" onClick={() => setEditingTarget(null)}>收起</button></div>
+            </>
+          )}
         </div>
-      </details>
+      </div>
     </div>
   );
+}
+
+function targetDisplayDomain(target: TargetConfig): string {
+  const explicit = target.domain.trim();
+  if (explicit) return explicit;
+  if (target.prefix.trim() && target.baseDomain.trim()) return `${target.prefix.trim()}.${target.baseDomain.trim()}`;
+  return target.baseDomain.trim() || '等待生成';
+}
+
+function zoneDisplayName(zones: readonly ZoneDraft[], zoneIndex: number | null): string {
+  if (zoneIndex === null) return '顶层凭据';
+  const zone = zones[zoneIndex];
+  return zone ? zone.label || zone.name || zone.baseDomain || `权限配置 ${zoneIndex + 1}` : '权限配置未找到';
+}
+
+function exitFilterLabel(value: TargetConfig['exitFilter']): string {
+  if (value === 'v4') return 'IPv4 出口';
+  if (value === 'v6') return 'IPv6 出口';
+  if (value === 'dual') return '双栈出口';
+  return '任意出口';
 }
 
 function NumberField({
@@ -453,7 +552,7 @@ function SecretField({
 
 function formFromConfig(config: PublicAppConfig): ConfigForm {
   return {
-    zones: config.zones.map((zone) => ({ ...zone, apiKey: '' })),
+    zones: config.zones.map((zone) => ({ ...zone, apiKey: '', hasApiKey: zone.hasApiKey })),
     targets: config.targets.map((target) => ({ ...target })),
     checkApi: config.checkApi,
     checkApiBackup: config.checkApiBackup,
