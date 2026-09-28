@@ -1,15 +1,17 @@
+import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
 import type { HealthResponse } from '../../../src/contracts/probe';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
 
 interface HeroProps {
   readonly health: RequestState<HealthResponse>;
+  readonly bindings: RequestState<DomainBindingsResponse>;
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
   readonly onOpenConfig: () => void;
 }
 
-export function Hero({ health, usageOpen, onToggleUsage, onOpenConfig }: HeroProps) {
+export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig }: HeroProps) {
   return (
     <div class="container hero">
       <h1><Icon name="globe" /> DDNS Pro 多域名管理</h1>
@@ -45,11 +47,59 @@ export function Hero({ health, usageOpen, onToggleUsage, onOpenConfig }: HeroPro
       <div class="domain-selector">
         <button class="target-summary target-summary-button" type="button" onClick={onOpenConfig}>
           <span id="current-target-summary-content">
-            <span class="target-summary-domain">维护域名与 Cloudflare 权限</span>
-            <span class="target-summary-meta">前往配置中心添加或调整</span>
+            <TargetSummary state={bindings} />
           </span>
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * 顶部维护目标摘要。
+ *
+ * 这里只陈述"实际读到了什么"：绑定还没读完、接口失败、或一条都没配，
+ * 都按各自的事实提示，绝不把"读不到"说成"权限没配"。
+ */
+function TargetSummary({ state }: { readonly state: RequestState<DomainBindingsResponse> }) {
+  if (state.status === 'loading' || state.status === 'idle') {
+    return (
+      <>
+        <span class="target-summary-domain">正在读取维护域名…</span>
+        <span class="target-summary-meta">稍候即可</span>
+      </>
+    );
+  }
+  if (state.status === 'error') {
+    return (
+      <>
+        <span class="target-summary-domain">维护域名读取失败</span>
+        <span class="target-summary-meta text-danger">{state.message}</span>
+      </>
+    );
+  }
+
+  const item = state.data.items[0];
+  if (!item) {
+    return (
+      <>
+        <span class="target-summary-domain">未配置维护域名</span>
+        <span class="target-summary-meta">点击前往配置中心添加</span>
+      </>
+    );
+  }
+
+  const extra = state.data.items.length - 1;
+  return (
+    <>
+      <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
+      <span class="target-summary-meta">
+        <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
+        <span>{item.mode === 'TXT' ? 'TXT 记录' : 'A/AAAA 记录'}</span>
+        <span>{item.poolName}</span>
+        {extra > 0 && <span>等 {state.data.items.length} 个目标</span>}
+        {!item.enabled && <span class="text-warning">维护关闭</span>}
+      </span>
+    </>
   );
 }

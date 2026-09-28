@@ -3,8 +3,10 @@ import { CheckPoolText } from '../../src/application/check-pool';
 import { DomainBindings } from '../../src/application/domain-bindings';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { PoolService } from '../../src/application/pool-service';
+import { ProbeSelfTest } from '../../src/application/probe-self-test';
 import { RemotePoolLoader } from '../../src/application/remote-pool-loader';
-import { createDefaultConfig, type AppConfig, type ConfigResponse } from '../../src/contracts/config';
+import { createDefaultConfig, type AppConfig, type ConfigResponse, type ProbeConfig } from '../../src/contracts/config';
+import type { ProbeTestResponse } from '../../src/contracts/probe';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
 import { alive, type ProbeResult } from '../../src/domain/probe-result';
 import type { MaintenanceJobResult } from '../../src/jobs/maintenance-job';
@@ -235,12 +237,26 @@ describe('HTTP app config routes', () => {
 
   function createConfigApp(config: AppConfig) {
     const gateway = createConfigGateway(config);
+    const selfTest = createSelfTestFactory();
     const app = createHttpApp({
       checkProxy: new CheckProxy(new FakeProbeAdapter()),
       version: 'test',
       config: gateway,
+      probeSelfTest: new ProbeSelfTest(selfTest.create),
     });
-    return { app, gateway };
+    return { app, gateway, selfTest };
+  }
+
+  /** 自检要逐条覆盖四条链路，所以工厂必须能按传入配置造出不同探针并留下调用痕迹。 */
+  function createSelfTestFactory() {
+    const seen: ProbeConfig[] = [];
+    return {
+      seen,
+      create: (config: ProbeConfig): ProbeAdapter => {
+        seen.push(config);
+        return new FakeProbeAdapter();
+      },
+    };
   }
 
   const stored: AppConfig = {
@@ -342,7 +358,7 @@ describe('HTTP app config routes', () => {
     expect((await createApp().request('/api/config')).status).toBe(503);
   });
 
-  it('runs the configured probe for the self-test route', async () => {
+  it('reports one row per probe chain for the self-test route', async () => {
     const { app } = createConfigApp(stored);
     const response = await app.request('/api/config/probe/test', {
       method: 'POST',
@@ -350,8 +366,35 @@ describe('HTTP app config routes', () => {
       body: JSON.stringify({ proxyip: '203.0.113.10:443' }),
     });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: 'alive', exitIp: '198.51.100.8' });
 
+    const body = (await response.json()) as ProbeTestResponse;
+    // 内部双探针 + 外部复检主备，共四条链路逐条给结论。
+    expect(body.items.map((item) => item.id)).toEqual([
+      'internal-ipv4',
+      'internal-ipv6',
+      'external-primary',
+      'external-backup',
+    ]);
+    expect(body.items.filter((item) => item.configured).length).toBeGreaterThan(0);
+    // 未配置的链路必须标为"未配置"，不能伪装成一次失败。
+    expect(body.items.every((item) => item.configured || !item.result)).toBe(true);
+  });
+
+  it('tests the unsaved draft instead of the stored config', async () => {
+    const { app, selfTest } = createConfigApp(stored);
+    const response = await app.request('/api/config/probe/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ proxyip: '203.0.113.10:443', draft: { checkApi: 'https://draft.example/?ip={ip}' } }),
+    });
+    expect(response.status).toBe(200);
+
+    // 草稿必须真的被拼进主复检链路的探针配置，而不是退回已保存的地址。
+    expect(selfTest.seen.some((config) => config.endpoints[0]?.urlTemplate === 'https://draft.example/?ip={ip}')).toBe(true);
+  });
+
+  it('rejects a self-test request without a target', async () => {
+    const { app } = createConfigApp(stored);
     // 该路由只校验 proxyip 非空，地址语义由领域层决定。
     const invalid = await app.request('/api/config/probe/test', {
       method: 'POST',

@@ -1,22 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
-import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../src/contracts/maintenance';
-import {
-  DEFAULT_POOL_KEY,
-  NUMBERED_POOL_KEY_RE,
-  isUserPoolKey,
-  type PoolsResponse,
-} from '../../src/contracts/pool';
+import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
+import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckResponse } from '../../src/contracts/pool-check';
-import type { HealthResponse, ProbeResponse } from '../../src/contracts/probe';
+import type { ProbeResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
-import { errorMessage, isAbort } from './api/errors';
+import { errorMessage } from './api/errors';
 import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
 import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
 import type { RequestState } from './state/request-state';
+import { useResource } from './state/use-resource';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 
@@ -31,14 +27,11 @@ export function App() {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
-  const [health, setHealth] = useState<RequestState<HealthResponse>>({ status: 'loading' });
   const [lookup, setLookup] = useState('');
   const [check, setCheck] = useState<RequestState<ProbeResponse>>({ status: 'idle' });
   const [ipText, setIpText] = useState('');
   const [filterText, setFilterText] = useState('');
   const [remoteUrl, setRemoteUrl] = useState('');
-  const [pools, setPools] = useState<RequestState<PoolsResponse>>({ status: 'loading' });
-  const [bindings, setBindings] = useState<RequestState<DomainBindingsResponse>>({ status: 'loading' });
   const [maintenance, setMaintenance] = useState<RequestState<MaintenanceRunResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
@@ -55,61 +48,28 @@ export function App() {
     setToast({ message, type });
   }, []);
 
-  const refreshHealth = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    setHealth({ status: 'loading' });
-    try {
-      const data = await client.health(signal);
-      setHealth({ status: 'ready', data });
-    } catch (error) {
-      if (isAbort(error)) return;
-      setHealth({ status: 'error', message: errorMessage(error) });
-    }
-  }, [client]);
+  // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
+  const [health, refreshHealth] = useResource((signal) => client.health(signal));
+  const [pools, refreshPools] = useResource((signal) => client.pools(signal));
+  const [config, refreshConfig] = useResource((signal) => client.config(signal));
+  const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal));
 
-  const refreshPools = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    setPools({ status: 'loading' });
-    try {
-      const data = await client.pools(signal);
-      setPools({ status: 'ready', data });
-      setPoolKey((current) => (data.pools.some((pool) => pool.key === current) ? current : DEFAULT_POOL_KEY));
-    } catch (error) {
-      if (isAbort(error)) return;
-      setPools({ status: 'error', message: errorMessage(error) });
-    }
-  }, [client]);
+  // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
+  useEffect(() => {
+    if (pools.status !== 'ready') return;
+    setPoolKey((current) => (pools.data.pools.some((pool) => pool.key === current) ? current : DEFAULT_POOL_KEY));
+  }, [pools]);
 
-  const refreshBindings = useCallback(async (signal?: AbortSignal): Promise<void> => {
-    setBindings({ status: 'loading' });
-    try {
-      const data = await client.domainBindings(signal);
-      setBindings({ status: 'ready', data });
-    } catch (error) {
-      if (isAbort(error)) return;
-      setBindings({ status: 'error', message: errorMessage(error) });
-    }
-  }, [client]);
-
+  /**
+   * 首屏把配置、维护域名、IP 池和健康度并行拉完，同时预取配置中心分块，
+   * 所以点过去时数据和代码都已就绪，不会再等一轮网络往返。
+   */
   useEffect(() => {
     const controller = new AbortController();
     void refreshHealth(controller.signal);
-    return () => controller.abort();
-  }, [refreshHealth]);
-
-  useEffect(() => {
-    const controller = new AbortController();
     void refreshPools(controller.signal);
-    return () => controller.abort();
-  }, [refreshPools]);
-
-  useEffect(() => {
-    const controller = new AbortController();
     void refreshBindings(controller.signal);
-    return () => controller.abort();
-  }, [refreshBindings]);
-
-  /** 配置页按需加载，避免首页携带整页表单；静态资源仍由同一 Worker 托管。 */
-  useEffect(() => {
-    if (page !== 'config' || ConfigPage) return;
+    void refreshConfig(controller.signal);
     let cancelled = false;
     void import('./components/config-page')
       .then((module) => {
@@ -120,10 +80,9 @@ export function App() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [page, ConfigPage, notify]);
-
-
+  }, [notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
 
   useEffect(() => {
     if (!toast) return;
@@ -348,7 +307,7 @@ export function App() {
   const handleBindPool = async (key: string, nextPoolKey: string): Promise<void> => {
     if (bindings.status !== 'ready') return;
     const items = bindings.data.items.map((item) => (item.key === key ? { ...item, poolKey: nextPoolKey } : item));
-    setBindings({ status: 'ready', data: { items } });
+    patchBindings(() => ({ items }));
     const mapping: Record<string, string> = {};
     for (const item of items) mapping[item.key] = item.poolKey;
     try {
@@ -370,7 +329,7 @@ export function App() {
     const [moved] = items.splice(index, 1);
     if (!moved) return;
     items.splice(next, 0, moved);
-    setBindings({ status: 'ready', data: { items } });
+    patchBindings(() => ({ items }));
 
     try {
       await client.saveDomainBindingOrder(items.map((item) => item.key));
@@ -427,6 +386,7 @@ export function App() {
     <>
       <Hero
         health={health}
+        bindings={bindings}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
         onOpenConfig={() => setPage('config')}
@@ -460,7 +420,7 @@ export function App() {
             onPoolChange={setPoolKey}
           />
         ) : ConfigPage ? (
-          <ConfigPage client={client} notify={notify} />
+          <ConfigPage client={client} notify={notify} initialConfig={config} onReload={refreshConfig} />
         ) : (
           <p class="text-secondary text-center py-4">正在加载配置中心…</p>
         )}

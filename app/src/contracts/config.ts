@@ -55,8 +55,11 @@ export interface ExternalApiEndpoint {
   readonly urlTemplate: string;
 }
 
+/** 主检测链路：内部 socket 双探针先行，外部接口作为复检；两者都会参与同一次判定。 */
+export type ProbePrimary = 'internal' | 'external';
+
 export interface ProbeConfig {
-  readonly mode: ProbeMode;
+  readonly primary: ProbePrimary;
   readonly endpoints: readonly ExternalApiEndpoint[];
   readonly fallbackToNext: boolean;
   readonly timeoutMs: number;
@@ -181,10 +184,6 @@ export interface ConfigResponse {
 export type ConfigUpdateRequest =
   Omit<Partial<AppConfig>, 'settings'> & { readonly settings?: Partial<RuntimeSettings> };
 
-export interface ProbeTestRequest {
-  readonly proxyip?: string;
-  readonly urlTemplate?: string;
-}
 
 export const CONFIG_KEYS = [
   'apiKey', 'zoneId', 'zones', 'targets', 'checkApi', 'checkApiBackup', 'dohApi', 'authKey',
@@ -251,7 +250,7 @@ export function toProbeConfig(config: AppConfig): ProbeConfig {
   if (config.checkApi.trim()) endpoints.push({ name: 'primary', urlTemplate: config.checkApi.trim() });
   if (config.checkApiBackup.trim()) endpoints.push({ name: 'backup', urlTemplate: config.checkApiBackup.trim() });
   return {
-    mode: config.probeMode,
+    primary: config.probeMode === 'socket' ? 'internal' : 'external',
     endpoints,
     fallbackToNext: true,
     timeoutMs: config.settings.CHECK_TIMEOUT,

@@ -1,3 +1,4 @@
+import { CompositeProbeAdapter } from '../adapters/probe/composite';
 import { ExternalApiProbeAdapter } from '../adapters/probe/external-api';
 import { SocketProbeAdapter, type SocketConnect } from '../adapters/probe/socket';
 import { UnconfiguredProbeAdapter } from '../adapters/probe/unconfigured';
@@ -85,21 +86,30 @@ export interface ProbeAdapterDeps {
   readonly connect?: SocketConnect;
 }
 
+/**
+ * 运行时探针装配：配置里有哪些链路就建哪些适配器，两条都在时级联判定，
+ * 只有一条时就是单条链路。缺少 connect 属于部署错误，按"未配置"处理而不是报 dead。
+ */
 export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAdapterDeps = {}): ProbeAdapter {
-  if (config.mode === 'socket') {
-    // 两族探针都留空时按"未配置"处理；缺少 connect 属于部署错误，同样不能报 dead。
-    if (!deps.connect || (!config.ipv4ProbeUrl && !config.ipv6ProbeUrl)) return new UnconfiguredProbeAdapter();
-    return new SocketProbeAdapter({
-      ipv4Url: config.ipv4ProbeUrl,
-      ipv6Url: config.ipv6ProbeUrl,
-      timeoutMs: config.timeoutMs,
-      readLimitBytes: config.readLimitBytes,
-      connect: deps.connect,
-    });
-  }
+  const internal = createInternalAdapter(config, deps);
+  const external = createExternalAdapter(config, deps);
+  if (internal && external) return new CompositeProbeAdapter({ internal, external, primary: config.primary });
+  return internal ?? external ?? new UnconfiguredProbeAdapter();
+}
 
-  if (config.endpoints.length === 0) return new UnconfiguredProbeAdapter();
+function createInternalAdapter(config: ProbeConfig, deps: ProbeAdapterDeps): ProbeAdapter | null {
+  if (!deps.connect || (!config.ipv4ProbeUrl && !config.ipv6ProbeUrl)) return null;
+  return new SocketProbeAdapter({
+    ipv4Url: config.ipv4ProbeUrl,
+    ipv6Url: config.ipv6ProbeUrl,
+    timeoutMs: config.timeoutMs,
+    readLimitBytes: config.readLimitBytes,
+    connect: deps.connect,
+  });
+}
 
+function createExternalAdapter(config: ProbeConfig, deps: ProbeAdapterDeps): ProbeAdapter | null {
+  if (config.endpoints.length === 0) return null;
   return new ExternalApiProbeAdapter({
     endpoints: config.endpoints.map(({ name, urlTemplate }) => ({ name, urlTemplate })),
     timeoutMs: config.timeoutMs,

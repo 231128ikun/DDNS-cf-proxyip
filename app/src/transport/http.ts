@@ -3,16 +3,14 @@ import { CheckProxy } from '../application/check-proxy';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import { DomainBindingsInputError, type DomainBindings } from '../application/domain-bindings';
 import { PoolInputError, type PoolService } from '../application/pool-service';
+import { ProbeSelfTest, type ProbeSelfTestResult } from '../application/probe-self-test';
 import type { RemoteLoadFailure, RemotePoolLoader } from '../application/remote-pool-loader';
-import { createProbeAdapterFromConfig } from '../config/runtime';
 import {
   createDefaultConfig,
   parseAppConfig,
   toPublicConfig,
-  toProbeConfig,
   type AppConfig,
   type ConfigResponse,
-  type ProbeTestRequest,
 } from '../contracts/config';
 import type { CheckPoolRequest, PoolCheckItemResponse, PoolCheckResponse } from '../contracts/pool-check';
 import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
@@ -29,6 +27,7 @@ import type {
   SavePoolRequest,
 } from '../contracts/pool';
 import type { HealthResponse, ProbeResponse } from '../contracts/probe';
+import { parseProbeTestRequest, type ProbeTestResponse } from '../contracts/probe';
 import { parseCheckProxyInput } from '../contracts/probe';
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
@@ -49,6 +48,8 @@ export interface HttpAppDependencies {
   readonly checkPool?: CheckPoolText;
   /** 配置读写入口；未绑定 KV 时为空，接口返回 503。 */
   readonly config?: ConfigGateway;
+  /** 接口自检用例：逐条验证内部探针与外部复检链路，本身不接触 KV 与 sockets。 */
+  readonly probeSelfTest?: ProbeSelfTest;
   /** 服务端远程加载器，前端不允许直接访问第三方地址。 */
   readonly remotePoolLoader?: RemotePoolLoader;
   /** 域名池绑定读写；未绑定 KV 时为空。 */
@@ -364,28 +365,24 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const denied = guard(context);
     if (denied) return denied;
 
+    const selfTest = dependencies.probeSelfTest;
+    if (!selfTest) return errorResponse('probe self test unavailable', 503);
+
     const body = await readJsonBody(context.request);
     if (!body.ok) return errorResponse('invalid json', 400);
 
-    const input = body.value as ProbeTestRequest | null;
-    const parsed = parseCheckProxyInput(input?.proxyip);
-    if (!parsed.ok) return errorResponse('invalid proxyip', 400);
+    const parsed = parseProbeTestRequest(body.value);
+    if (!parsed.ok) return errorResponse(parsed.message, 400);
 
-    const template = input?.urlTemplate?.trim();
-    const defaultConfig = createDefaultConfig();
-    const checker = template
-      ? new CheckProxy(
-          createProbeAdapterFromConfig(toProbeConfig({
-            ...defaultConfig,
-            checkApi: template,
-            checkApiBackup: '',
-            probeMode: 'external-api',
-          })),
-        )
-      : dependencies.checkProxy;
-
-    const result = await checker.execute(parsed.value, { signal: context.request.signal });
-    return jsonResponse(toProbeResponse(result));
+    // 草稿只覆盖探针字段，其余沿用当前生效配置，所以自检口径和真正跑检测时完全一致。
+    const config = dependencies.config
+      ? (await dependencies.config.resolve()).config
+      : createDefaultConfig();
+    const result = await selfTest.execute(
+      { proxyip: parsed.value.proxyip, config, ...(parsed.value.draft ? { draft: parsed.value.draft } : {}) },
+      { signal: context.request.signal },
+    );
+    return jsonResponse(toProbeTestResponse(result));
   });
 
   router.post('/api/remote-load', async (context) => {
@@ -487,6 +484,20 @@ function toMaintenanceResponse(run: MaintenanceJobResult['run']): MaintenanceRun
 function toProbeResponse(result: ProbeResult): ProbeResponse {
   const { target: _target, ...response } = result;
   return response;
+}
+
+/** 自检结果只回传面板要展示的字段，绝不回显被检测目标或任何凭据。 */
+function toProbeTestResponse(result: ProbeSelfTestResult): ProbeTestResponse {
+  return {
+    proxyip: result.proxyip,
+    items: result.items.map((item) => ({
+      id: item.id,
+      label: item.label,
+      configured: item.configured,
+      ...(item.result ? { result: toProbeResponse(item.result) } : {}),
+      ...(item.error ? { error: item.error } : {}),
+    })),
+  };
 }
 
 function toPoolCheckResponse(report: PoolCheckReport): PoolCheckResponse {
