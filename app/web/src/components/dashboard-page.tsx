@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
@@ -6,7 +6,8 @@ import type { HealthResponse, ProbeResponse } from '../../../src/contracts/probe
 import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
 import { countPoolTextLines } from '../../../src/domain/pool-text';
 import type { RequestState } from '../state/request-state';
-import { Icon } from './icon';
+import { Icon, type IconName } from './icon';
+import { probeStatusLabel } from './probe-status';
 
 /** IP 池写操作的忙碌标记：比起给每个按钮单独维护 loading 状态更省代码。 */
 export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
@@ -115,25 +116,21 @@ export function DashboardPage({
             <button
               class="btn btn-info btn-sm"
               type="submit"
-              title="探测任意域名或IP"
-              aria-label="探测任意域名或 IP"
               disabled={check.status === 'loading'}
             >
-              <Icon name="search" />
+              <Icon name="search" /> {check.status === 'loading' ? '探测中…' : '探测'}
             </button>
             <button
-              class="btn btn-primary btn-sm"
+              class="btn btn-outline-secondary btn-sm"
               type="button"
               onClick={actions.refresh}
-              title="刷新 Worker 状态与 IP 池列表"
-              aria-label="刷新 Worker 状态与 IP 池列表"
             >
-              <Icon name="refresh" />
+              <Icon name="refresh" /> 刷新
             </button>
           </form>
         </div>
 
-        <div id="status-display" class="scroll-box" style="max-height:320px">
+        <div id="status-display" class="scroll-box status-display">
           <div class="table-responsive">
             <table class="table text-center mb-0 status-table">
               <thead class="status-table-head">
@@ -174,14 +171,7 @@ export function DashboardPage({
                     </option>
                   ))}
                 </select>
-                <div class="pool-actions" role="group" aria-label="IP 池操作">
-                  <button class="btn btn-sm btn-outline-primary" type="button" title="新建池" aria-label="新建 IP 池" disabled={busy} onClick={actions.createPool}><Icon name="plus" /></button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" title="重命名当前池" aria-label="重命名当前 IP 池" disabled={busy || inTrash} onClick={actions.renamePool}><Icon name="settings" /></button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" title="上移当前池" aria-label="上移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(-1)}>↑</button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" title="下移当前池" aria-label="下移当前 IP 池" disabled={busy || inTrash} onClick={() => actions.movePool(1)}>↓</button>
-                  <button class="btn btn-sm btn-outline-danger" type="button" title="删除当前池" aria-label="删除当前 IP 池" disabled={busy || inTrash} onClick={actions.deletePool}><Icon name="trash" /></button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" title="一键洗库" aria-label="一键清洗当前 IP 池" disabled={busy || inTrash} onClick={actions.cleanPool}><Icon name="refresh" /></button>
-                </div>
+                <PoolActionMenu busy={busy} inTrash={inTrash} actions={actions} />
               </div>
             </div>
 
@@ -193,7 +183,6 @@ export function DashboardPage({
                   class="form-control form-control-sm flex-grow-1"
                   placeholder="远程TXT URL"
                   aria-label="远程 TXT URL"
-                  style="border-radius:8px"
                   value={remoteUrl}
                   onInput={(event) => onRemoteUrlChange(event.currentTarget.value)}
                   onKeyDown={(event) => {
@@ -201,9 +190,8 @@ export function DashboardPage({
                   }}
                 />
                 <button
-                  class="btn btn-sm btn-outline-primary"
+                  class="btn btn-sm btn-outline-primary text-nowrap"
                   type="button"
-                  style="white-space:nowrap"
                   title="从远程URL加载"
                   aria-label="从远程 URL 加载"
                   disabled={poolBusy === 'remote-load'}
@@ -214,20 +202,14 @@ export function DashboardPage({
                 <button
                   class="btn btn-sm btn-outline-secondary"
                   type="button"
-                  style="white-space:nowrap"
-                  title="加载当前池到输入框"
-                  aria-label="从当前 IP 池加载到输入框"
                   disabled={loadingPool}
                   onClick={actions.loadPool}
                 >
                   <Icon name="database" /> {loadingPool ? '读取中…' : '从库'}
                 </button>
                 <button
-                  class="btn btn-sm btn-outline-danger"
+                  class="btn btn-sm btn-outline-danger text-nowrap"
                   type="button"
-                  style="white-space:nowrap"
-                  title="清空输入框"
-                  aria-label="清空 IP 输入框"
                   disabled={!ipText}
                   onClick={() => onIpTextChange('')}
                 >
@@ -237,13 +219,12 @@ export function DashboardPage({
 
               <textarea
                 id="ip-input"
-                class="form-control mb-2"
+                class="form-control ip-input mb-2"
                 rows={6}
                 value={ipText}
                 aria-label="IP 池文本"
                 onInput={(event) => onIpTextChange(event.currentTarget.value)}
                 placeholder={`支持格式：\n1.2.3.4:443\n1.2.3.4 (默认443端口)\nexample.com:8443 (检测时解析为IP)\n1.2.3.4:443 #HK 香港节点 (带注释)`}
-                style="border-radius:12px;font-family:'SF Mono',monospace;font-size:12px"
               />
 
               <div class="mb-2 filter-toolbar">
@@ -252,7 +233,6 @@ export function DashboardPage({
                     type="text"
                     id="universal-filter"
                     class="form-control form-control-sm"
-                    style="border-radius:8px"
                     placeholder="筛选"
                     aria-label="筛选条件"
                     value={filterText}
@@ -270,7 +250,7 @@ export function DashboardPage({
                   </button>
                   <button class="btn btn-sm btn-outline-success" type="button" title="保留匹配的IP" disabled={busy} onClick={() => actions.applyFilter('keep')}>保留</button>
                   <button class="btn btn-sm btn-outline-danger" type="button" title="排除匹配的IP" disabled={busy} onClick={() => actions.applyFilter('exclude')}>排除</button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" title="去除重复IP" disabled={busy} onClick={actions.dedupe}>去重</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" disabled={busy} onClick={actions.dedupe}>去重</button>
                 </div>
                 <div id="filter-help" class="filter-help" hidden={!filterHelpOpen}>
                   支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4</code>、<code>stack:v6</code>、<code>stack:dual</code>（双栈，等同 v4/v6）、普通关键词。<br />
@@ -307,8 +287,6 @@ export function DashboardPage({
                 <button
                   class="btn btn-outline-secondary btn-sm"
                   type="button"
-                  title="从库中移除输入框中的IP"
-                  aria-label="从库中移除输入框中的 IP"
                   disabled={busy || !ipText.trim()}
                   onClick={actions.removeLines}
                 >
@@ -341,8 +319,6 @@ export function DashboardPage({
                     <button
                       class={`btn btn-sm btn-outline-primary${sortingBindings ? ' active' : ''}`}
                       type="button"
-                      title={sortingBindings ? '完成绑定排序' : '调整绑定显示顺序'}
-                      aria-label={sortingBindings ? '完成绑定排序' : '调整绑定显示顺序'}
                       aria-pressed={sortingBindings}
                       onClick={(event) => {
                         event.preventDefault();
@@ -350,13 +326,12 @@ export function DashboardPage({
                         setSortingBindings((current) => !current);
                       }}
                     >
-                      <Icon name="settings" />
+                      {sortingBindings ? '完成排序' : '调整顺序'}
                     </button>
                   )}
                   <button
-                    class="btn btn-sm btn-outline-primary"
+                    class="btn btn-sm btn-outline-secondary"
                     type="button"
-                    title="刷新域名池绑定"
                     disabled={bindings.status === 'loading'}
                     onClick={(event) => {
                       event.preventDefault();
@@ -364,7 +339,7 @@ export function DashboardPage({
                       actions.refreshBindings();
                     }}
                   >
-                    <Icon name="refresh" />
+                    <Icon name="refresh" /> 刷新
                   </button>
                 </div>
               </summary>
@@ -448,15 +423,14 @@ export function DashboardPage({
               <Console health={health} check={check} pools={pools} batch={batch} />
             </div>
             <div
-              class="progress mb-3"
-              style="height:12px; background:#2c2c2e; border-radius:6px;"
+              class="progress batch-progress mb-3"
               role="progressbar"
               aria-label="批量检测进度"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={batchProgress(batch)}
             >
-              <div class="progress-bar" style={`width:${batchProgress(batch)}%; background:var(--success);`} />
+              <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch)}%` }} />
             </div>
             <button
               class="btn btn-dark w-100 mb-3"
@@ -470,6 +444,85 @@ export function DashboardPage({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * IP 池的六个动作收进一个菜单：原来一排纯图标按钮既挤又难认，
+ * 改成"文字 + 小图标"后既可读也留出了键盘可达的名称。
+ */
+function PoolActionMenu({
+  busy,
+  inTrash,
+  actions,
+}: {
+  readonly busy: boolean;
+  readonly inTrash: boolean;
+  readonly actions: DashboardActions;
+}) {
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: MouseEvent): void => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  // 菜单项执行后立刻收起，避免停留在"已关掉的菜单"上。
+  const run = (action: () => void): void => {
+    setOpen(false);
+    action();
+  };
+
+  // 菜单项形状完全一致，用一张表描述：图标、文案、是否要求已选中池、是否危险、执行动作。
+  const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
+    ['plus', '新建池', false, false, actions.createPool],
+    ['settings', '重命名当前池', true, false, actions.renamePool],
+    ['up', '上移当前池', true, false, () => actions.movePool(-1)],
+    ['down', '下移当前池', true, false, () => actions.movePool(1)],
+    ['refresh', '一键洗库', true, false, actions.cleanPool],
+    ['trash', '删除当前池', true, true, actions.deletePool],
+  ];
+
+  return (
+    <div class="action-menu" ref={container}>
+      <button
+        class="btn btn-sm btn-outline-secondary action-menu-trigger"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        IP 池操作 <Icon name="chevron" />
+      </button>
+      {open && (
+        <div class="action-menu-panel" role="menu" aria-label="IP 池操作">
+          {items.map(([icon, label, needsPool, danger, action]) => (
+            <button
+              key={label}
+              class={`action-menu-item${danger ? ' danger' : ''}`}
+              type="button"
+              role="menuitem"
+              disabled={busy || (needsPool && inTrash)}
+              onClick={() => run(action)}
+            >
+              <Icon name={icon} /> {label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -511,8 +564,7 @@ function EmptyStatusRow({ text }: { readonly text: string }) {
 }
 
 function ProbeBadge({ status }: { readonly status: ProbeResponse['status'] }) {
-  const label = status === 'alive' ? '可用' : status === 'dead' ? '失效' : '未知';
-  return <span class={`record-badge ddns-probe-${status}`}>{label}</span>;
+  return <span class={`record-badge ddns-probe-${status}`}>{probeStatusLabel(status)}</span>;
 }
 
 function Console({
@@ -603,12 +655,6 @@ function formatExits(result: ProbeResponse): string {
       .join(' / ');
   }
   return result.exitIp ?? '未返回出口信息';
-}
-
-function probeStatusLabel(status: ProbeResponse['status']): string {
-  if (status === 'alive') return '可用';
-  if (status === 'dead') return '失效';
-  return '未知';
 }
 
 function configSourceLabel(source: HealthResponse['configSource']): string {

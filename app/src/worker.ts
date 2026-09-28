@@ -13,10 +13,12 @@ import { MaintainManagedTarget } from './application/maintain-managed-target';
 import { MaintainManagedTargets } from './application/maintain-managed-targets';
 import { PoolService } from './application/pool-service';
 import { RemotePoolLoader } from './application/remote-pool-loader';
+import { ProbeSelfTest } from './application/probe-self-test';
 import type { SocketConnect } from './adapters/probe/socket';
 import { createProbeAdapterFromConfig, loadEnvConfig, type ProbeAdapterDeps, type RuntimeEnv } from './config/runtime';
-import { toProbeConfig, type AppConfig } from './contracts/config';
+import { toProbeConfig, type AppConfig, type ProbeConfig } from './contracts/config';
 import type { MaintenanceSource } from './ports/maintenance-source';
+import type { ProbeAdapter } from './ports/probe';
 import { runMaintenanceJob } from './jobs/maintenance-job';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
@@ -44,7 +46,9 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
     async fetch(request, env, executionContext): Promise<Response> {
       const configService = createConfigService(env);
       const resolved = await configService.resolve();
-      const checkProxy = new CheckProxy(createProbeAdapterFromConfig(toProbeConfig(resolved.config), probeDeps(overrides)));
+      const probeDeps = probeAdapterDeps(overrides);
+      const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config, probeDeps);
+      const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
       // 面板密钥以统一配置为准，未配置时仍兼容环境变量 AUTH_KEY。
       const authKey = resolved.config.authKey || env.AUTH_KEY?.trim();
       // 同一份 KV 存储实例既服务维护 runner，也服务域名绑定读写，避免两套读取顺序。
@@ -61,6 +65,7 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
         version: APP_VERSION,
         configSource: resolved.source,
         config: configService,
+        probeSelfTest: new ProbeSelfTest(createProbe),
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
         ...(authKey ? { authKey } : {}),
         ...(assets ? { assets } : {}),
@@ -101,7 +106,7 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
 }
 
 /** `exactOptionalPropertyTypes` 下不能把 `connect: undefined` 直接传给适配器，这里收口一次。 */
-function probeDeps(overrides: WorkerOverrides): ProbeAdapterDeps {
+function probeAdapterDeps(overrides: WorkerOverrides): ProbeAdapterDeps {
   return overrides.connect ? { connect: overrides.connect } : {};
 }
 
@@ -130,7 +135,7 @@ export function createMaintenanceRunner(
   const maintenanceSource = source ?? new KvMaintenanceSource(kv);
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
-      probe: createProbeAdapterFromConfig(toProbeConfig(config), probeDeps(overrides)),
+      probe: createProbeAdapterFromConfig(toProbeConfig(config), probeAdapterDeps(overrides)),
       pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
       dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
     }),

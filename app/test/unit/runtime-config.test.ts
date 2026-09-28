@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { CompositeProbeAdapter } from '../../src/adapters/probe/composite';
 import type { SocketConnect } from '../../src/adapters/probe/socket';
 import { createProbeAdapterFromConfig, loadEnvConfig } from '../../src/config/runtime';
 import { createDefaultConfig, toProbeConfig, type ProbeConfig } from '../../src/contracts/config';
 import { parseProxyTarget } from '../../src/domain/proxy-target';
+import { alive, dead, unknown, type ProbeStatus } from '../../src/domain/probe-result';
+import type { ProbeAdapter } from '../../src/ports/probe';
 
 const target = parseProxyTarget('203.0.113.10:443');
 if (!target) throw new Error('test target is invalid');
@@ -14,6 +17,20 @@ const unusedConnect: SocketConnect = () => {
 
 function probeConfig(overrides: Partial<ProbeConfig> = {}): ProbeConfig {
   return { ...toProbeConfig(createDefaultConfig()), ...overrides };
+}
+
+/** 只记录调用顺序并回放固定结论，用来断言级联判定顺序而不做真实网络访问。 */
+function stubAdapter(name: string, status: ProbeStatus, calls: string[]): ProbeAdapter {
+  return {
+    name,
+    async probe(probeTarget) {
+      calls.push(name);
+      const message = name === 'external' ? '外部复检接口超时' : '内部检测没有结论';
+      const details = { message, ...(status === 'alive' ? { exitIp: '203.0.113.20', exitFamily: 'ipv4' as const } : {}) };
+      if (status === 'unknown') return unknown(probeTarget, 'TIMEOUT', message, details);
+      return { alive, dead }[status](probeTarget, details);
+    },
+  };
 }
 
 describe('runtime configuration', () => {
@@ -73,13 +90,68 @@ describe('runtime configuration', () => {
   });
 
   it('selects the socket adapter only when connect and a probe URL are available', () => {
-    expect(createProbeAdapterFromConfig(probeConfig({ mode: 'socket' }), { connect: unusedConnect }).name).toBe('socket');
-    // 缺少 connect 属于部署错误，必须退化成"未配置"而不是把节点判死。
-    expect(createProbeAdapterFromConfig(probeConfig({ mode: 'socket' })).name).toBe('unconfigured');
+    expect(createProbeAdapterFromConfig(probeConfig({ primary: 'internal', endpoints: [] }), { connect: unusedConnect }).name).toBe(
+      'socket',
+    );
+    // 缺少 connect 属于部署错误：只剩外部复检可用时退回单链路，一条都没有才是"未配置"。
+    expect(createProbeAdapterFromConfig(probeConfig({ primary: 'internal' })).name).toBe('external-api');
     expect(
-      createProbeAdapterFromConfig(probeConfig({ mode: 'socket', ipv4ProbeUrl: '', ipv6ProbeUrl: '' }), {
-        connect: unusedConnect,
-      }).name,
+      createProbeAdapterFromConfig(probeConfig({ primary: 'internal', ipv4ProbeUrl: '', ipv6ProbeUrl: '', endpoints: [] })).name,
     ).toBe('unconfigured');
+    expect(
+      createProbeAdapterFromConfig(
+        probeConfig({ primary: 'internal', ipv4ProbeUrl: '', ipv6ProbeUrl: '', endpoints: [] }),
+        { connect: unusedConnect },
+      ).name,
+    ).toBe('unconfigured');
+  });
+
+  it('cascades the internal probe into the external recheck when both are configured', async () => {
+    const calls: string[] = [];
+    const internal = stubAdapter('internal', 'unknown', calls);
+    const external = stubAdapter('external', 'alive', calls);
+    const adapter = new CompositeProbeAdapter({ internal, external, primary: 'internal' });
+
+    await expect(adapter.probe(target)).resolves.toMatchObject({ status: 'alive', exitIp: '203.0.113.20' });
+    expect(calls).toEqual(['internal', 'external']);
+  });
+
+  it('keeps the primary result when it already proves the node is alive', async () => {
+    const calls: string[] = [];
+    const internal = stubAdapter('internal', 'alive', calls);
+    const external = stubAdapter('external', 'dead', calls);
+    const adapter = new CompositeProbeAdapter({ internal, external, primary: 'internal' });
+
+    await expect(adapter.probe(target)).resolves.toMatchObject({ status: 'alive' });
+    // 主链路已经能证明可用，就不再打外部接口，省一次子请求。
+    expect(calls).toEqual(['internal']);
+  });
+
+  it('never upgrades two probe failures into dead', async () => {
+    const calls: string[] = [];
+    const internal = stubAdapter('internal', 'unknown', calls);
+    const external = stubAdapter('external', 'unknown', calls);
+    const adapter = new CompositeProbeAdapter({ internal, external, primary: 'internal' });
+
+    const result = await adapter.probe(target);
+    expect(result.status).toBe('unknown');
+    expect(result.message).toContain('外部复检接口超时');
+  });
+
+  it('reports dead only when one trusted probe explicitly rejects the node', async () => {
+    const calls: string[] = [];
+    const internal = stubAdapter('internal', 'unknown', calls);
+    const external = stubAdapter('external', 'dead', calls);
+    const adapter = new CompositeProbeAdapter({ internal, external, primary: 'internal' });
+
+    await expect(adapter.probe(target)).resolves.toMatchObject({ status: 'dead' });
+  });
+
+  it('builds a composite adapter when both the socket and the external probe are available', () => {
+    const config = probeConfig({ primary: 'internal' });
+    expect(config.endpoints.length).toBeGreaterThan(0);
+    expect(createProbeAdapterFromConfig(config, { connect: unusedConnect }).name).toBe('composite');
+    // 只留外部接口时退回单链路，不做无意义的级联。
+    expect(createProbeAdapterFromConfig({ ...config, ipv4ProbeUrl: '', ipv6ProbeUrl: '' }).name).toBe('external-api');
   });
 });

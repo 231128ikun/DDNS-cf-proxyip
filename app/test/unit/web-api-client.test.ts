@@ -132,14 +132,20 @@ describe('web API client config and remote load endpoints', () => {
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
 
-    await client.testProbe({ proxyip: '203.0.113.10:443', urlTemplate: 'https://api.example/?ip={ip}' });
+    await client.testProbe({
+      proxyip: '203.0.113.10:443',
+      draft: { checkApi: 'https://api.example/?ip={ip}', checkApiBackup: '' },
+    });
     await client.remoteLoad('https://example.com/pool.txt');
 
     expect(calls[0]).toMatchObject({
       url: '/api/config/probe/test',
       init: {
         method: 'POST',
-        body: JSON.stringify({ proxyip: '203.0.113.10:443', urlTemplate: 'https://api.example/?ip={ip}' }),
+        body: JSON.stringify({
+          proxyip: '203.0.113.10:443',
+          draft: { checkApi: 'https://api.example/?ip={ip}', checkApiBackup: '' },
+        }),
       },
     });
     expect(calls[1]).toMatchObject({
