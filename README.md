@@ -1,5 +1,8 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
+> [!WARNING]
+> **重构状态：进行中（WIP）** 本分支的模块化重构尚未完成，不能直接视为稳定版本或用于正式部署。详细说明见 [REFACTOR_STATUS.md](./REFACTOR_STATUS.md)。
+
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
 项目不依赖自建服务器，核心代码是单文件 Worker：[`_worker.js`](./_worker.js)。
