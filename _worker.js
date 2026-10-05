@@ -672,12 +672,11 @@ async function handleSavePoolOrder(body, env) {
         return badRequest({ success: false, error: '排序数据格式无效' });
     }
 
+    // 池集合始终以服务端为准：只采纳提交顺序里仍然存在的池，
+    // 缺失的池由 normalizePoolOrder 按默认顺序补回，避免一次并发改动就整次拒绝保存。
     const actualPools = await listPoolKeys(env);
     const actualSet = new Set(actualPools);
-    const submitted = [...new Set(order)];
-    if (submitted.length !== actualPools.length || submitted.some(poolKey => !actualSet.has(poolKey))) {
-        return badRequest({ success: false, error: '池列表已变化，请刷新后重试' });
-    }
+    const submitted = [...new Set(order)].filter(poolKey => actualSet.has(poolKey));
 
     const normalized = normalizePoolOrder(submitted, actualPools);
     await writePoolOrder(env, normalized);
@@ -1315,9 +1314,6 @@ function buildManagedDomain(prefix, baseDomain) {
     if (!cleanBase) return '';
     return cleanPrefix ? `${cleanPrefix}.${cleanBase}` : cleanBase;
 }
-
-
-
 
 function normalizeZoneConfig(zone) {
     if (!zone || typeof zone !== 'object') return null;
@@ -2928,7 +2924,6 @@ function renderAppStyles() {
         .d-flex { display: flex !important; }
         .flex-wrap { flex-wrap: wrap !important; }
         .flex-grow-1 { flex-grow: 1 !important; }
-        .gap-1 { gap: .25rem !important; }
         .gap-2 { gap: .5rem !important; }
         .align-items-center { align-items: center !important; }
         .justify-content-between { justify-content: space-between !important; }
@@ -3359,6 +3354,73 @@ function renderAppStyles() {
         .pool-tools .form-select {
             width: 160px;
             border-radius: 8px;
+        }
+
+        .action-menu {
+            position: relative;
+            flex: 0 0 auto;
+        }
+        .action-menu-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+        .action-menu-caret {
+            font-size: 10px;
+            line-height: 1;
+            transition: transform 0.15s ease;
+        }
+        .action-menu-trigger[aria-expanded='true'] .action-menu-caret {
+            transform: rotate(180deg);
+        }
+        .action-menu-panel {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            z-index: 40;
+            display: grid;
+            min-width: 176px;
+            padding: 4px;
+            gap: 2px;
+            background: #fff;
+            border: 1px solid #e8edf5;
+            border-radius: 10px;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+        }
+        .action-menu-panel[hidden] {
+            display: none;
+        }
+        .action-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 7px 9px;
+            border: 0;
+            border-radius: 7px;
+            background: transparent;
+            color: inherit;
+            font-size: 13px;
+            text-align: left;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .action-menu-item:hover:not(:disabled),
+        .action-menu-item:focus-visible {
+            background: #f2f5fa;
+        }
+        .action-menu-item:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .action-menu-item.danger {
+            color: var(--danger);
+        }
+        .action-menu-icon {
+            width: 16px;
+            flex: 0 0 16px;
+            text-align: center;
         }
         .domain-binding-header {
             display: flex;
@@ -3825,12 +3887,6 @@ function renderAppStyles() {
             margin-bottom: 16px;
             color: #1d1d1f;
         }
-        .custom-modal-content {
-            font-size: 14px;
-            color: #4b5563;
-            margin-bottom: 20px;
-            line-height: 1.6;
-        }
         .custom-modal-stats {
             background: #f5f5f7;
             border-radius: 10px;
@@ -3952,7 +4008,20 @@ function renderAppStyles() {
             .pool-tools {
                 width: 100%;
                 display: grid;
-                grid-template-columns: minmax(0, 1fr) repeat(5, 38px);
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .action-menu {
+                width: 100%;
+            }
+            .action-menu-trigger {
+                width: 100%;
+                justify-content: space-between;
+            }
+            .action-menu-panel {
+                right: auto;
+                left: 0;
+                width: 100%;
             }
             .pool-tools .form-select {
                 width: 100%;
@@ -4172,7 +4241,7 @@ function renderConfigPage() {
         <div class="card p-4 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h6 class="m-0 fw-bold">🌐 维护的域名配置</h6>
-                <button class="btn btn-sm btn-outline-primary config-add-action" onclick="addZoneConfigRow()">➕ 添加权限配置</button>
+                <button class="btn btn-sm btn-outline-primary" onclick="addZoneConfigRow()">➕ 添加权限配置</button>
             </div>
             <div id="zone-config-list" class="config-card-grid"></div>
             <div id="zone-edit-panel" class="config-edit-panel"></div>
@@ -4181,7 +4250,7 @@ function renderConfigPage() {
         <div class="card p-4 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h6 class="m-0 fw-bold">🧭 管理域名</h6>
-                <button class="btn btn-sm btn-outline-primary config-add-action" onclick="addTargetConfigRow()">➕ 添加管理域名</button>
+                <button class="btn btn-sm btn-outline-primary" onclick="addTargetConfigRow()">➕ 添加管理域名</button>
             </div>
             <div id="target-config-list" class="config-card-grid"></div>
             <div id="target-edit-panel" class="config-edit-panel"></div>
@@ -4243,11 +4312,30 @@ function renderDashboardPage() {
                         <select id="pool-selector" class="form-select form-select-sm" onchange="switchPool()">
                             <option value="${POOL_DEFAULT_KEY}">默认池</option>
                         </select>
-                        <button class="btn btn-sm" onclick="createNewPool()" title="新建池" style="padding:6px 8px">➕</button>
-                        <button class="btn btn-sm" onclick="renameCurrentPool()" title="重命名池" style="padding:6px 8px">✏️</button>
-                        <button class="btn btn-sm" onclick="openPoolOrderDialog()" title="自定义池排序" style="padding:6px 8px">↕️</button>
-                        <button class="btn btn-sm" onclick="deleteCurrentPool()" title="删除池" style="padding:6px 8px">🗑️</button>
-                        <button class="btn btn-sm" onclick="oneClickClean()" title="一键洗库" style="padding:6px 8px">🧹</button>
+
+                        <div class="action-menu" id="pool-action-menu">
+                            <button class="btn btn-sm btn-outline-secondary action-menu-trigger" type="button" id="pool-action-trigger"
+                                aria-expanded="false" aria-controls="pool-action-panel" onclick="togglePoolActionMenu(event)">
+                                📦 池操作 <span class="action-menu-caret">▾</span>
+                            </button>
+                            <div class="action-menu-panel" id="pool-action-panel" aria-label="池操作" hidden>
+                                <button class="action-menu-item" type="button" onclick="runPoolMenuAction('create')">
+                                    <span class="action-menu-icon">➕</span>新建池
+                                </button>
+                                <button class="action-menu-item" type="button" id="pool-menu-rename" onclick="runPoolMenuAction('rename')">
+                                    <span class="action-menu-icon">✏️</span>重命名当前池
+                                </button>
+                                <button class="action-menu-item" type="button" onclick="runPoolMenuAction('order')">
+                                    <span class="action-menu-icon">↕️</span>自定义池排序
+                                </button>
+                                <button class="action-menu-item" type="button" onclick="runPoolMenuAction('clean')">
+                                    <span class="action-menu-icon">🧹</span>一键洗库
+                                </button>
+                                <button class="action-menu-item danger" type="button" id="pool-menu-delete" onclick="runPoolMenuAction('delete')">
+                                    <span class="action-menu-icon">🗑️</span>删除当前池
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -4483,6 +4571,7 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
         if (!availablePools.includes(currentPool)) currentPool = POOL_DEFAULT_KEY;
         updatePoolSelector();
         updateDomainBindingTable();
+        updatePoolActionButtons();
     }
 
     // ===== Form / toast / navigation helpers =====
@@ -4675,8 +4764,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                 <div class="meta"><span>\${escapeHTML(zone.baseDomain || '未设置维护域名')}</span></div>
                 <div class="meta"><span>Zone: \${escapeHTML(zone.zoneId ? '已填写' : '未填写')}</span><span>CF Key: \${escapeHTML(zone.apiKey ? '已填写' : '未填写')}</span></div>
                 <div class="actions" onclick="event.stopPropagation()">
-                    <button class="btn btn-outline-primary btn-sm config-edit-action" onclick="editZoneConfig(\${index})">编辑</button>
-                    <button class="btn btn-outline-danger btn-sm config-edit-action" onclick="deleteZoneConfig(\${index})">删除</button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="editZoneConfig(\${index})">编辑</button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteZoneConfig(\${index})">删除</button>
                 </div>
             </div>
         \`;
@@ -4812,8 +4901,8 @@ function renderClientScript({ targetsJson, settingsJson, appConfigJson, authEnab
                         <input type="checkbox" \${enabled ? 'checked' : ''} onchange="toggleTargetEnabled(\${index}, this.checked)">
                         <span class="switch-slider"></span>
                     </label>
-                    <button class="btn btn-outline-primary btn-sm config-edit-action" onclick="editTargetConfig(\${index})">编辑</button>
-                    <button class="btn btn-outline-danger btn-sm config-edit-action" onclick="deleteTargetConfig(\${index})">删除</button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="editTargetConfig(\${index})">编辑</button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteTargetConfig(\${index})">删除</button>
                 </div>
             </div>
         \`;
@@ -6335,6 +6424,59 @@ ${combineCheckAttempts.toString()}
         );
     }
 
+    const POOL_MENU_ACTIONS = {
+        create: () => createNewPool(),
+        rename: () => renameCurrentPool(),
+        order: () => openPoolOrderDialog(),
+        clean: () => oneClickClean(),
+        delete: () => deleteCurrentPool()
+    };
+    const isProtectedPool = poolKey => poolKey === POOL_DEFAULT_KEY || poolKey === POOL_TRASH_KEY;
+
+    function setPoolActionMenuOpen(open) {
+        const panel = byId('pool-action-panel');
+        const trigger = byId('pool-action-trigger');
+        if (!panel || !trigger) return;
+        panel.hidden = !open;
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function closePoolActionMenu() {
+        setPoolActionMenuOpen(false);
+    }
+
+    function togglePoolActionMenu(event) {
+        if (event) event.stopPropagation();
+        const panel = byId('pool-action-panel');
+        if (panel) setPoolActionMenuOpen(panel.hidden);
+    }
+
+    function runPoolMenuAction(action) {
+        setPoolActionMenuOpen(false);
+        const run = POOL_MENU_ACTIONS[action];
+        if (run) run();
+    }
+
+    // 系统池不能删除、垃圾桶不能重命名：提前置灰菜单项并写明原因，避免点进去才报错。
+    function updatePoolActionButtons() {
+        const trashSelected = currentPool === POOL_TRASH_KEY;
+        const renameItem = byId('pool-menu-rename');
+        if (renameItem) {
+            renameItem.disabled = trashSelected;
+            renameItem.title = trashSelected
+                ? getPoolName(currentPool) + ' 是系统池，不能重命名'
+                : '重命名当前池';
+        }
+        const deleteItem = byId('pool-menu-delete');
+        if (deleteItem) {
+            const undeletable = isProtectedPool(currentPool);
+            deleteItem.disabled = undeletable;
+            deleteItem.title = undeletable
+                ? getPoolName(currentPool) + ' 是系统池，无法删除'
+                : '删除当前池';
+        }
+    }
+
     function switchPool() {
         currentPool = byId('pool-selector').value;
         log(\`📦 切换到: \${getPoolName(currentPool)}\`, 'info');
@@ -6342,6 +6484,7 @@ ${combineCheckAttempts.toString()}
         const trashActions = byId('trash-actions');
         if (trashActions) trashActions.hidden = currentPool !== POOL_TRASH_KEY;
 
+        updatePoolActionButtons();
         showPoolInfo();
     }
 
@@ -6704,10 +6847,20 @@ ${combineCheckAttempts.toString()}
         });
         updateFilterPreview();
         switchDomain();
+
+        updatePoolActionButtons();
         Promise.all([
             showPoolInfo(),
             loadDomainPoolMapping()
         ]).catch(e => log('⚠️ 初始化部分失败', 'error'));
+
+        document.addEventListener('click', e => {
+            const menu = byId('pool-action-menu');
+            if (menu && !menu.contains(e.target)) closePoolActionMenu();
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closePoolActionMenu();
+        });
     });
 </script>`;
 }
