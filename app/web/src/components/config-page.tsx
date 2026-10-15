@@ -1,25 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
-  MAX_SOCKET_READ_LIMIT_BYTES,
   MAX_TARGETS,
   MAX_ZONES,
-  MIN_SOCKET_READ_LIMIT_BYTES,
   SETTINGS_LIMITS,
   type ConfigResponse,
   type ConfigUpdateRequest,
-  type ProbeMode,
   type PublicAppConfig,
   type RuntimeSettings,
   type TargetConfig,
   type ZoneConfig,
 } from '../../../src/contracts/config';
 import type { ExitFilter, TargetMode } from '../../../src/domain/managed-target';
-import type { ProbeTestDraft, ProbeTestItemResponse, ProbeTestResponse } from '../../../src/contracts/probe';
 import { ApiClient } from '../api/client';
 import { errorMessage, isAbort } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
-import { probeStatusLabel } from './probe-status';
 
 interface ConfigPageProps {
   readonly client: ApiClient;
@@ -42,10 +37,6 @@ interface ConfigForm {
   readonly projectUrl: string;
   readonly zoneId: string;
   readonly tgId: string;
-  readonly probeMode: ProbeMode;
-  readonly socketProbeIpv4Url: string;
-  readonly socketProbeIpv6Url: string;
-  readonly socketReadLimitBytes: string;
   readonly settings: Readonly<Record<keyof RuntimeSettings, string>>;
   readonly scheduledEnabled: boolean;
   readonly tgEnabled: boolean;
@@ -62,14 +53,6 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   apiKey: 'Cloudflare API Token',
   tgToken: 'Telegram Bot Token',
 };
-/**
- * 主检测链路。cmliu-check 是旧配置遗留的只读形态：仍可读可保存，
- * 但界面上并入"外部复检"，不再把原始枚举值直接抛给用户。
- */
-const PROBE_MODE_OPTIONS: readonly { readonly value: ProbeMode; readonly label: string; readonly help: string }[] = [
-  { value: 'socket', label: '内部检测优先', help: '先用自建 socket 探针给结论，不通时再交给外部复检。' },
-  { value: 'external-api', label: '外部复检优先', help: '先用外部接口给结论，异常时再回落到内部检测。' },
-];
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string])[] = [
   ['CONCURRENT_CHECKS', '前端批量检测并发', '单次批量检测的并发上限。'],
   ['BACKEND_CONCURRENT_CHECKS', '后端检测并发', '维护和补货预检使用。'],
@@ -89,8 +72,6 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
   const [clearing, setClearing] = useState<SecretClearing>(NO_CLEARING);
   const [saving, setSaving] = useState(false);
-  const [probeTarget, setProbeTarget] = useState('');
-  const [probeTest, setProbeTest] = useState<RequestState<ProbeTestResponse>>({ status: 'idle' });
   const [editingZone, setEditingZone] = useState<number | null>(null);
   const [editingTarget, setEditingTarget] = useState<number | null>(null);
 
@@ -225,30 +206,6 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
       .finally(() => setSaving(false));
   };
 
-  /**
-   * 接口自检把当前表单里的未保存草稿一起发过去，
-   * 所以"刚填完还没保存"也能立刻试一次，而不必先回写 KV。
-   */
-  const handleTestProbe = (): void => {
-    const target = probeTarget.trim();
-    if (!target) {
-      notify('请输入要测试的域名或 IP:端口', 'error');
-      return;
-    }
-    const draft: ProbeTestDraft = {
-      probeMode: form?.probeMode ?? 'external-api',
-      checkApi: form?.checkApi.trim() ?? '',
-      checkApiBackup: form?.checkApiBackup.trim() ?? '',
-      socketProbeIpv4Url: form?.socketProbeIpv4Url.trim() ?? '',
-      socketProbeIpv6Url: form?.socketProbeIpv6Url.trim() ?? '',
-      ...(form && /^\d+$/.test(form.socketReadLimitBytes.trim()) ? { socketReadLimitBytes: Number(form.socketReadLimitBytes.trim()) } : {}),
-    };
-    setProbeTest({ status: 'loading' });
-    client.testProbe({ proxyip: target, draft })
-      .then((data) => setProbeTest({ status: 'ready', data }))
-      .catch((error: unknown) => setProbeTest({ status: 'error', message: errorMessage(error) }));
-  };
-
   if (load.status === 'loading') return <div class="card p-4"><p class="text-secondary mb-0">正在读取配置…</p></div>;
   if (load.status === 'error') {
     return (
@@ -295,35 +252,6 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             </label>
           </div>
 
-          <fieldset class="probe-config-block">
-            <legend class="probe-config-legend">主检测链路</legend>
-            <div class="segmented" role="radiogroup" aria-label="主检测链路">
-              {PROBE_MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={form.probeMode === option.value}
-                  class={`segmented-option${form.probeMode === option.value ? ' active' : ''}`}
-                  onClick={() => patch({ probeMode: option.value })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p class="probe-config-help mb-0">{PROBE_MODE_OPTIONS.find((option) => option.value === form.probeMode)?.help}</p>
-          </fieldset>
-
-          <section class="probe-config-block" aria-label="内部检测">
-            <h3 class="probe-config-title">内部检测<span class="probe-config-tag">两个 socket 探针</span></h3>
-            <p class="probe-config-help">任一族连通即判定可用。</p>
-            <div class="config-grid">
-              <TextField id="cfg-probe-v4" label="IPv4 探针地址" value={form.socketProbeIpv4Url} placeholder="https://ipv4.example.com/" onValue={(value) => patch({ socketProbeIpv4Url: value })} />
-              <TextField id="cfg-probe-v6" label="IPv6 探针地址" value={form.socketProbeIpv6Url} placeholder="https://ipv6.example.com/" onValue={(value) => patch({ socketProbeIpv6Url: value })} />
-              <NumberField id="cfg-probe-read-limit" label="探针读取上限(字节)" help={`${MIN_SOCKET_READ_LIMIT_BYTES}-${MAX_SOCKET_READ_LIMIT_BYTES}。`} value={form.socketReadLimitBytes} min={MIN_SOCKET_READ_LIMIT_BYTES} max={MAX_SOCKET_READ_LIMIT_BYTES} onChange={(value) => patch({ socketReadLimitBytes: value })} />
-            </div>
-          </section>
-
           <section class="probe-config-block" aria-label="外部复检">
             <h3 class="probe-config-title">外部复检<span class="probe-config-tag">可配置复检接口</span></h3>
             <p class="probe-config-help">主链路无结论时复检；{'{proxyip}'} 为被检测地址占位符。</p>
@@ -343,26 +271,6 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             <SecretField id="cfg-api-token" label={SECRET_LABELS.apiKey} help="旧配置兼容项，优先用权限配置里的 Token。" configured={secrets.apiKey} value={drafts.apiKey} clearing={clearing.apiKey} onValue={(value) => setDrafts((current) => ({ ...current, apiKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, apiKey: !current.apiKey }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启通知时必填。" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
-            <div class="field span-2">
-              <span>接口自检</span>
-              <small>逐条试内部两个探针与外部两个复检接口，可用未保存的草稿。</small>
-              <div class="probe-test-row">
-                <input type="text" class="form-control form-control-sm" placeholder="要测试的域名 / IP:端口" aria-label="探测测试目标" value={probeTarget} onInput={(event) => setProbeTarget(event.currentTarget.value)} />
-                <button class="btn btn-sm btn-outline-primary" type="button" disabled={probeTest.status === 'loading'} onClick={handleTestProbe}>
-                  <Icon name="search" /> {probeTest.status === 'loading' ? '自检中…' : '开始自检'}
-                </button>
-              </div>
-              {probeTest.status === 'idle' && <p class="probe-test-result mb-0"><span class="text-secondary">尚未自检。</span></p>}
-              {probeTest.status === 'loading' && <p class="probe-test-result mb-0"><span class="text-secondary">正在逐条检测四个接口…</span></p>}
-              {probeTest.status === 'error' && <p class="probe-test-result mb-0"><span class="text-danger">{probeTest.message}</span></p>}
-              {probeTest.status === 'ready' && (
-                <ul class="probe-test-list" aria-label="接口自检结果">
-                  {probeTest.data.items.map((item) => (
-                    <ProbeTestRow key={item.id} item={item} />
-                  ))}
-                </ul>
-              )}
-            </div>
           </div>
         </div>
       </details>
@@ -648,10 +556,6 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
     projectUrl: config.projectUrl,
     zoneId: config.zoneId,
     tgId: config.tgId,
-    probeMode: config.probeMode,
-    socketProbeIpv4Url: config.socketProbeIpv4Url,
-    socketProbeIpv6Url: config.socketProbeIpv6Url,
-    socketReadLimitBytes: String(config.socketReadLimitBytes),
     // 字段清单只有 SETTINGS_FIELDS 一份，这里按它派生，避免再维护第二份键名表。
     settings: Object.fromEntries(SETTINGS_FIELDS.map(([key]) => [key, String(config.settings[key])])) as ConfigForm['settings'],
     scheduledEnabled: config.scheduledEnabled,
@@ -693,15 +597,6 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
     tgEnabled: form.tgEnabled,
     settings,
     projectUrl: form.projectUrl.trim(),
-    probeMode: form.probeMode,
-    socketProbeIpv4Url: form.socketProbeIpv4Url.trim(),
-    socketProbeIpv6Url: form.socketProbeIpv6Url.trim(),
-    socketReadLimitBytes: readInteger(
-      form.socketReadLimitBytes,
-      '探针读取上限',
-      MIN_SOCKET_READ_LIMIT_BYTES,
-      MAX_SOCKET_READ_LIMIT_BYTES,
-    ),
   };
 }
 
@@ -788,31 +683,6 @@ function readExitFilter(value: string): ExitFilter {
 /** 保存按钮出现与否只取决于"表单与已落库基线是否一致"，因此这里只需要一个稳定的比较值。 */
 function snapshot(form: ConfigForm, drafts: SecretDrafts, clearing: SecretClearing): string {
   return JSON.stringify([form, drafts, clearing]);
-}
-
-function probeTestStateLabel(item: ProbeTestItemResponse): { readonly label: string; readonly tone: string } {
-  if (item.error) return { label: item.error, tone: 'text-danger' };
-  if (!item.configured) return { label: '未配置', tone: 'text-secondary' };
-  if (!item.result) return { label: '无结论', tone: 'text-warning' };
-  const tone = item.result.status === 'alive' ? 'text-success' : item.result.status === 'dead' ? 'text-danger' : 'text-warning';
-  return { label: probeStatusLabel(item.result.status), tone };
-}
-
-/** 一行一条链路：能用的信息尽量在这一行说清，失败原因直接跟在状态后面。 */
-function ProbeTestRow({ item }: { readonly item: ProbeTestItemResponse }) {
-  const state = probeTestStateLabel(item);
-  const detail = item.result?.message;
-  return (
-    <li class="probe-test-item">
-      <span class="probe-test-name">{item.label}</span>
-      <span class={`probe-test-state ${state.tone}`}>
-        {state.label}
-        {item.result?.exitIp && <span class="probe-test-exit">出口 {item.result.exitIp}</span>}
-        {item.result?.latencyMs !== undefined && <span class="probe-test-exit">{item.result.latencyMs} ms</span>}
-      </span>
-      {detail && state.tone !== 'text-danger' && <span class="probe-test-detail">{detail}</span>}
-    </li>
-  );
 }
 
 function sourceLabel(source: ConfigResponse['source']): string {

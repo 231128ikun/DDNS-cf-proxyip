@@ -7,13 +7,7 @@ import type {
   PoolsResponse,
   RestoreTrashResponse,
 } from '../../../src/contracts/pool';
-import type {
-  ApiErrorResponse,
-  HealthResponse,
-  ProbeResponse,
-  ProbeTestRequest,
-  ProbeTestResponse,
-} from '../../../src/contracts/probe';
+import type { ApiErrorResponse, HealthResponse, ProbeResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
@@ -118,11 +112,6 @@ export class ApiClient {
   /** 未提交的密钥字段由服务端沿用旧值，前端只提交用户改动的密钥。 */
   async saveConfig(config: ConfigUpdateRequest, signal?: AbortSignal): Promise<ConfigResponse> {
     return await this.request<ConfigResponse>('/api/config', 'PUT', config, signal);
-  }
-
-  /** 接口自检：一次跑满内部双探针与外部复检，逐条返回结论。 */
-  async testProbe(request: ProbeTestRequest, signal?: AbortSignal): Promise<ProbeTestResponse> {
-    return await this.request<ProbeTestResponse>('/api/config/probe/test', 'POST', request, signal);
   }
 
   /** 远程加载由 Worker 代理，前端不直接访问第三方地址，避免绕过 SSRF 校验。 */

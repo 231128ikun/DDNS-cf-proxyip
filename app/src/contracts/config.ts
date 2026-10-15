@@ -2,18 +2,10 @@ import type { ExitFilter, TargetMode } from '../domain/managed-target';
 import { normalizeAsn, normalizeCountry } from '../domain/pool-entry';
 import { asRecord, parseFail, parseOk, type ParseResult } from './parse';
 
-export const PROBE_MODES = ['external-api', 'cmliu-check', 'socket'] as const;
-export type ProbeMode = (typeof PROBE_MODES)[number];
-
 export const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 export const MIN_PROBE_TIMEOUT_MS = 500;
 export const MAX_PROBE_TIMEOUT_MS = 30_000;
 export const MAX_ENDPOINT_URL_LENGTH = 2_048;
-export const DEFAULT_SOCKET_PROBE_IPV4_URL = 'https://ipv4.090227.xyz/';
-export const DEFAULT_SOCKET_PROBE_IPV6_URL = 'https://ipv6.090227.xyz/';
-export const DEFAULT_SOCKET_READ_LIMIT_BYTES = 65_536;
-export const MIN_SOCKET_READ_LIMIT_BYTES = 1_024;
-export const MAX_SOCKET_READ_LIMIT_BYTES = 262_144;
 export const MAX_SECRET_LENGTH = 512;
 export const MAX_ZONE_ID_LENGTH = 64;
 export const MAX_ZONES = 20;
@@ -25,47 +17,16 @@ export const MAX_MIN_ACTIVE = 100;
 export const MAX_PROBE_ENDPOINTS = 2;
 export const TARGET_MODES = ['A', 'TXT'] as const;
 
-/** socket 适配器只需要解析后的 endpoint、Host 和 path。 */
-export interface SocketProbeUrl {
-  readonly endpoint: string;
-  readonly hostHeader: string;
-  readonly path: string;
-}
-
-export function parseSocketProbeUrl(value: string): SocketProbeUrl | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== 'https:' || !url.hostname) return null;
-    const port = url.port ? Number(url.port) : 443;
-    return {
-      endpoint: url.hostname,
-      hostHeader: port === 443 ? url.hostname : `${url.hostname}:${port}`,
-      path: `${url.pathname || '/'}${url.search}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** 运行时探针配置；不是 KV 数据模型，只由 AppConfig 派生。 */
 export interface ExternalApiEndpoint {
   readonly name: string;
   readonly urlTemplate: string;
 }
 
-/** 主检测链路：内部 socket 双探针先行，外部接口作为复检；两者都会参与同一次判定。 */
-export type ProbePrimary = 'internal' | 'external';
-
 export interface ProbeConfig {
-  readonly primary: ProbePrimary;
   readonly endpoints: readonly ExternalApiEndpoint[];
   readonly fallbackToNext: boolean;
   readonly timeoutMs: number;
-  readonly ipv4ProbeUrl: string;
-  readonly ipv6ProbeUrl: string;
-  readonly readLimitBytes: number;
 }
 
 export interface RuntimeSettings {
@@ -138,10 +99,6 @@ export interface AppConfig {
   readonly tgEnabled: boolean;
   readonly settings: RuntimeSettings;
   readonly projectUrl: string;
-  readonly probeMode: ProbeMode;
-  readonly socketProbeIpv4Url: string;
-  readonly socketProbeIpv6Url: string;
-  readonly socketReadLimitBytes: number;
 }
 
 export interface PublicZoneConfig {
@@ -164,10 +121,6 @@ export interface PublicAppConfig {
   readonly tgEnabled: boolean;
   readonly settings: RuntimeSettings;
   readonly projectUrl: string;
-  readonly probeMode: ProbeMode;
-  readonly socketProbeIpv4Url: string;
-  readonly socketProbeIpv6Url: string;
-  readonly socketReadLimitBytes: number;
   readonly secrets: {
     readonly apiKey: boolean;
     readonly authKey: boolean;
@@ -187,8 +140,7 @@ export type ConfigUpdateRequest =
 
 export const CONFIG_KEYS = [
   'apiKey', 'zoneId', 'zones', 'targets', 'checkApi', 'checkApiBackup', 'dohApi', 'authKey',
-  'tgToken', 'tgId', 'scheduledEnabled', 'tgEnabled', 'settings', 'projectUrl', 'probeMode',
-  'socketProbeIpv4Url', 'socketProbeIpv6Url', 'socketReadLimitBytes',
+  'tgToken', 'tgId', 'scheduledEnabled', 'tgEnabled', 'settings', 'projectUrl',
 ] as const;
 
 export function createDefaultConfig(): AppConfig {
@@ -207,10 +159,6 @@ export function createDefaultConfig(): AppConfig {
     tgEnabled: true,
     settings: { ...DEFAULT_RUNTIME_SETTINGS },
     projectUrl: '',
-    probeMode: 'external-api',
-    socketProbeIpv4Url: DEFAULT_SOCKET_PROBE_IPV4_URL,
-    socketProbeIpv6Url: DEFAULT_SOCKET_PROBE_IPV6_URL,
-    socketReadLimitBytes: DEFAULT_SOCKET_READ_LIMIT_BYTES,
   };
 }
 
@@ -233,10 +181,6 @@ export function toPublicConfig(config: AppConfig): PublicAppConfig {
     tgEnabled: config.tgEnabled,
     settings: config.settings,
     projectUrl: config.projectUrl,
-    probeMode: config.probeMode,
-    socketProbeIpv4Url: config.socketProbeIpv4Url,
-    socketProbeIpv6Url: config.socketProbeIpv6Url,
-    socketReadLimitBytes: config.socketReadLimitBytes,
     secrets: {
       apiKey: config.apiKey.length > 0,
       authKey: config.authKey.length > 0,
@@ -250,13 +194,9 @@ export function toProbeConfig(config: AppConfig): ProbeConfig {
   if (config.checkApi.trim()) endpoints.push({ name: 'primary', urlTemplate: config.checkApi.trim() });
   if (config.checkApiBackup.trim()) endpoints.push({ name: 'backup', urlTemplate: config.checkApiBackup.trim() });
   return {
-    primary: config.probeMode === 'socket' ? 'internal' : 'external',
     endpoints,
     fallbackToNext: true,
     timeoutMs: config.settings.CHECK_TIMEOUT,
-    ipv4ProbeUrl: config.socketProbeIpv4Url,
-    ipv6ProbeUrl: config.socketProbeIpv6Url,
-    readLimitBytes: config.socketReadLimitBytes,
   };
 }
 
@@ -273,10 +213,6 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
   const apiKey = zones[0]?.apiKey || text(record.apiKey, base.apiKey, MAX_SECRET_LENGTH);
   const zoneId = zones[0]?.zoneId || text(record.zoneId, base.zoneId, MAX_ZONE_ID_LENGTH);
 
-  const probeMode = PROBE_MODES.includes(record.probeMode as ProbeMode)
-    ? record.probeMode as ProbeMode
-    : base.probeMode;
-
   return parseOk({
     apiKey,
     zoneId,
@@ -292,15 +228,6 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     tgEnabled: booleanValue(record.tgEnabled, base.tgEnabled),
     settings,
     projectUrl: text(record.projectUrl, base.projectUrl, MAX_ENDPOINT_URL_LENGTH),
-    probeMode,
-    socketProbeIpv4Url: probeUrl(record.socketProbeIpv4Url, base.socketProbeIpv4Url),
-    socketProbeIpv6Url: probeUrl(record.socketProbeIpv6Url, base.socketProbeIpv6Url),
-    socketReadLimitBytes: integerValue(
-      record.socketReadLimitBytes,
-      base.socketReadLimitBytes,
-      MIN_SOCKET_READ_LIMIT_BYTES,
-      MAX_SOCKET_READ_LIMIT_BYTES,
-    ),
   });
 }
 
@@ -430,12 +357,4 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
   if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true;
   if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false;
   return fallback;
-}
-
-function probeUrl(value: unknown, fallback: string): string {
-  if (value === undefined) return fallback;
-  if (typeof value !== 'string') return fallback;
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return parseSocketProbeUrl(trimmed) ? trimmed : fallback;
 }

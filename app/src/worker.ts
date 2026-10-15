@@ -13,13 +13,11 @@ import { MaintainManagedTarget } from './application/maintain-managed-target';
 import { MaintainManagedTargets } from './application/maintain-managed-targets';
 import { PoolService } from './application/pool-service';
 import { RemotePoolLoader } from './application/remote-pool-loader';
-import { ProbeSelfTest } from './application/probe-self-test';
-import type { SocketConnect } from './adapters/probe/socket';
-import { createProbeAdapterFromConfig, loadEnvConfig, type ProbeAdapterDeps, type RuntimeEnv } from './config/runtime';
+import { createProbeAdapterFromConfig, loadEnvConfig, type RuntimeEnv } from './config/runtime';
 import { toProbeConfig, type AppConfig, type ProbeConfig } from './contracts/config';
+import { runMaintenanceJob } from './jobs/maintenance-job';
 import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
-import { runMaintenanceJob } from './jobs/maintenance-job';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
 export const APP_VERSION = '2026.09.26-10.21';
@@ -29,24 +27,16 @@ const BATCH_CHECK_CONCURRENCY = 8;
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
-/** 运行时只注入 `cloudflare:sockets`。 */
-export interface WorkerOverrides {
-  /** `cloudflare:sockets` 的 connect；缺失时 socket 模式按“未配置”处理，不会误判节点失效。 */
-  readonly connect?: SocketConnect;
-
-}
-
 /**
  * Worker 入口装配：配置、探针、存储、维护 runner 只有这一份组装顺序，
  * `fetch` 与 `scheduled` 共用它，禁止在构建入口再复制一份。
  */
-export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<RuntimeEnv> {
+export function createWorker(): ExportedHandler<RuntimeEnv> {
   const handler: ExportedHandler<RuntimeEnv> = {
     async fetch(request, env, executionContext): Promise<Response> {
       const configService = createConfigService(env);
       const resolved = await configService.resolve();
-      const probeDeps = probeAdapterDeps(overrides);
-      const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config, probeDeps);
+      const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
       // 面板密钥以统一配置为准，未配置时仍兼容环境变量 AUTH_KEY。
       const authKey = resolved.config.authKey || env.AUTH_KEY?.trim();
@@ -54,7 +44,7 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
       const maintenance = kv && maintenanceSource
-        ? createMaintenanceRunner(kv, resolved.config, overrides, maintenanceSource)
+        ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
 
       const dependencies: HttpAppDependencies = {
@@ -63,7 +53,6 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
         version: APP_VERSION,
         configSource: resolved.source,
         config: configService,
-        probeSelfTest: new ProbeSelfTest(createProbe),
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
         ...(authKey ? { authKey } : {}),
         ...(kv
@@ -95,16 +84,11 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
       }
 
       const source = new KvMaintenanceSource(env.IP_DATA);
-      executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, overrides, source).run(false));
+      executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, source).run(false));
     },
   };
 
   return handler;
-}
-
-/** `exactOptionalPropertyTypes` 下不能把 `connect: undefined` 直接传给适配器，这里收口一次。 */
-function probeAdapterDeps(overrides: WorkerOverrides): ProbeAdapterDeps {
-  return overrides.connect ? { connect: overrides.connect } : {};
 }
 
 /**
@@ -126,13 +110,12 @@ export function createConfigService(env: RuntimeEnv): ConfigService {
 export function createMaintenanceRunner(
   kv: KVNamespace,
   config: AppConfig,
-  overrides: WorkerOverrides = {},
   source?: MaintenanceSource,
 ): MaintenanceRunner {
   const maintenanceSource = source ?? new KvMaintenanceSource(kv);
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
-      probe: createProbeAdapterFromConfig(toProbeConfig(config), probeAdapterDeps(overrides)),
+      probe: createProbeAdapterFromConfig(toProbeConfig(config)),
       pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
       dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
     }),
@@ -153,4 +136,3 @@ export function createMaintenanceRunner(
     }),
   };
 }
-

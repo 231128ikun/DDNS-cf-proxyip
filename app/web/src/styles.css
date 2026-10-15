@@ -443,61 +443,6 @@
         .config-grid .form-select-sm {
             padding-right: 28px;
         }
-        .probe-test-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 6px;
-        }
-        .probe-test-row .form-control {
-            flex: 1 1 200px;
-            min-width: 0;
-        }
-        .probe-test-result {
-            min-height: 0;
-            margin-top: 1px;
-            line-height: 1.3;
-        }
-        /* 自检结果一行一条链路：名称、结论、原因分层，避免四行文案挤成一段。 */
-        .probe-test-list {
-            display: grid;
-            gap: 4px;
-            margin: 8px 0 0;
-            padding: 0;
-            list-style: none;
-        }
-        .probe-test-item {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: baseline;
-            gap: 4px 10px;
-            padding: 6px 9px;
-            border-radius: 8px;
-            background: var(--hover);
-            font-size: 13px;
-        }
-        .probe-test-name {
-            min-width: 132px;
-            font-weight: 600;
-        }
-        .probe-test-state {
-            display: inline-flex;
-            flex-wrap: wrap;
-            align-items: baseline;
-            gap: 8px;
-            font-weight: 600;
-        }
-        .probe-test-exit {
-            font-weight: 400;
-            opacity: 0.85;
-        }
-        .probe-test-detail {
-            flex: 1 1 100%;
-            min-width: 0;
-            color: var(--secondary);
-            font-size: 12px;
-            word-break: break-word;
-        }
         .section-header {
             display: flex;
             flex-wrap: wrap;
@@ -1090,14 +1035,13 @@
         .batch-progress-bar {
             background: var(--success);
         }
-        /* 探针配置只分"内部检测 / 外部复检"两块，各自成组，视觉上不再是一整片平铺表单。 */
+        /* 探针配置只剩"外部复检"一块，自成一组，不再是一整片平铺表单。 */
         .probe-config-block {
             margin: 0 0 14px;
             padding: 12px 14px 4px;
             border: 1px solid var(--border);
             border-radius: 12px;
         }
-        .probe-config-legend,
         .probe-config-title {
             display: flex;
             align-items: center;
@@ -1106,8 +1050,6 @@
             padding: 0;
             font-size: 14px;
             font-weight: 700;
-            float: none;
-            width: auto;
         }
         .probe-config-tag {
             padding: 1px 7px;
@@ -1121,27 +1063,6 @@
             margin: 0 0 10px;
             color: var(--secondary);
             font-size: 12px;
-        }
-        .segmented {
-            display: inline-flex;
-            gap: 2px;
-            margin-bottom: 6px;
-            padding: 2px;
-            border-radius: 10px;
-            background: var(--hover);
-        }
-        .segmented-option {
-            padding: 8px 12px;
-            border: 0;
-            border-radius: 8px;
-            background: transparent;
-            color: inherit;
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .segmented-option.active {
-            background: var(--primary);
-            color: #fff;
         }
         .config-section-title {
             font-size: 16px;
