@@ -1,6 +1,7 @@
 import type { CheckPoolText, PoolCheckItem, PoolCheckReport } from '../application/check-pool';
 import { CheckProxy } from '../application/check-proxy';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
+import type { CleanPool } from '../application/clean-pool';
 import { DomainBindingsInputError, type DomainBindings } from '../application/domain-bindings';
 import { PoolInputError, type PoolService } from '../application/pool-service';
 import type { RemoteLoadFailure, RemotePoolLoader } from '../application/remote-pool-loader';
@@ -40,6 +41,8 @@ export interface HttpAppDependencies {
   readonly authKey?: string;
   /** 未绑定 KV 时为空；此时 IP 池相关接口返回 503。 */
   readonly pools?: PoolService;
+  /** 一键洗库用例；与维护流程共用同一个垃圾桶写入实现。 */
+  readonly cleanPool?: CleanPool;
   readonly checkPool?: CheckPoolText;
   /** 配置读写入口；未绑定 KV 时为空，接口返回 503。 */
   readonly config?: ConfigGateway;
@@ -196,6 +199,23 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
       const input = body.value as RestoreTrashRequest | null;
       const result = await pools.restoreTrash(input?.addresses, input?.restoreToSource, input?.targetPool);
       const response: RestoreTrashResponse = result;
+      return jsonResponse(response);
+    });
+  });
+
+  /**
+   * 一键洗库：读池、批量检测、有效项写回、失效项入桶，全部在服务端一次完成。
+   * 面板不再自己拼这几步——main 上「垃圾桶被绕过统一入口直接追加」的 bug 就出在那里。
+   */
+  router.post('/api/pools/:key/clean', async (context) => {
+    const denied = guard(context);
+    if (denied) return denied;
+
+    const cleanPool = dependencies.cleanPool;
+    if (!cleanPool) return errorResponse('pool storage unavailable', 503);
+
+    return await mapApplicationInputError(async () => {
+      const response = await cleanPool.execute(context.params.key!, { signal: context.request.signal });
       return jsonResponse(response);
     });
   });

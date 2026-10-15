@@ -1,5 +1,6 @@
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type {
+  CleanPoolResponse,
   CreatePoolResponse,
   PoolContentResponse,
   PoolSaveMode,
@@ -81,6 +82,10 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
+  /** 一键洗库：读池、批量检测、有效项写回、失效项入桶全部在服务端一次完成。 */
+  async cleanPool(key: string, signal?: AbortSignal): Promise<CleanPoolResponse> {
+    return await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', undefined, signal);
+  }
   async savePoolOrder(order: readonly string[], signal?: AbortSignal): Promise<OkResponse> {
     return await this.request<OkResponse>('/api/pools/order', 'PUT', { order }, signal);
   }

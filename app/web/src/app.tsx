@@ -5,7 +5,7 @@ import type { PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { ProbeResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
-import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
+import { countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
 import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
@@ -272,14 +272,19 @@ export function App() {
     });
   };
 
+  /**
+   * 一键洗库：检测与淘汰都在服务端完成，垃圾桶只经过统一入口，
+   * 面板不再自己拼「读池 → 检测 → 写回 → 入桶」这几步。
+   */
   const handleCleanPool = (): void => {
     void runPoolAction('clean-pool', async () => {
+      const report = await client.cleanPool(poolKey);
+      // 服务端已经重写过池内容，回读一次让输入框和库保持一致。
       const { content } = await client.readPool(poolKey);
-      const cleaned = cleanPoolText(content);
-      const before = countPoolTextLines(content);
-      if (cleaned === content.trim()) return `${before} 条内容已规范，无需洗库`;
-      const result = await client.savePool(poolKey, cleaned, 'replace');
-      return `洗库完成：${before} 条 → ${result.count} 条`;
+      setIpText(content);
+      if (report.skipped) return `${report.unknown} 条未确认，本次未写回也未入桶`;
+      const trashed = report.trashed > 0 ? `，移入垃圾桶 ${report.trashed} 条` : '';
+      return `洗库完成：保留 ${report.kept} 条${trashed}`;
     });
   };
 

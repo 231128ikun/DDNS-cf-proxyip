@@ -94,3 +94,15 @@ export interface RestoreTrashResponse {
   readonly restored: number;
   readonly restoredByPool: Readonly<Record<string, number>>;
 }
+
+/** 一键洗库的结果：面板只关心数量，不回传整池内容。 */
+export interface CleanPoolResponse {
+  readonly ok: true;
+  readonly poolKey: string;
+  readonly checked: number;
+  readonly kept: number;
+  readonly trashed: number;
+  /** 探针异常或无法识别的行数；大于 0 时整池不写回也不入桶。 */
+  readonly unknown: number;
+  readonly skipped: boolean;
+}

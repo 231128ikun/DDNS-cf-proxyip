@@ -6,6 +6,7 @@ import { KvMaintenanceSource } from './adapters/storage/kv-maintenance-source';
 import { KvPoolCatalog } from './adapters/storage/kv-pool-catalog';
 import { KvPoolRepository } from './adapters/storage/kv-pool-repository';
 import { CheckPoolText } from './application/check-pool';
+import { CleanPool } from './application/clean-pool';
 import { CheckProxy } from './application/check-proxy';
 import { ConfigService } from './application/config-service';
 import { DomainBindings } from './application/domain-bindings';
@@ -47,21 +48,17 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
 
+      const checkPool = new CheckPoolText(checkProxy, BATCH_CHECK_CONCURRENCY);
+
       const dependencies: HttpAppDependencies = {
         checkProxy,
-        checkPool: new CheckPoolText(checkProxy, BATCH_CHECK_CONCURRENCY),
+        checkPool,
         version: APP_VERSION,
         configSource: resolved.source,
         config: configService,
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
         ...(authKey ? { authKey } : {}),
-        ...(kv
-          ? {
-              pools: new PoolService(new KvPoolCatalog(kv)),
-              domainBindings: new DomainBindings(maintenanceSource!, new KvDomainBindingRepository(kv)),
-              ...(maintenance ? { maintenance } : {}),
-            }
-          : {}),
+        ...(kv ? createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance) : {}),
       };
 
       return createHttpApp(dependencies).fetch(request, env, executionContext);
@@ -89,6 +86,32 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
   };
 
   return handler;
+}
+
+/**
+ * 池相关依赖只在绑定 KV 时装配：洗库与维护共用同一个垃圾桶仓库，
+ * 「垃圾桶只有一个写入入口」在装配层也成立。
+ */
+function createPoolDependencies(
+  kv: KVNamespace,
+  checkPool: CheckPoolText,
+  config: AppConfig,
+  maintenanceSource: MaintenanceSource,
+  maintenance: MaintenanceRunner | null,
+): Pick<HttpAppDependencies, 'pools' | 'cleanPool' | 'domainBindings' | 'maintenance'> {
+  const catalog = new KvPoolCatalog(kv);
+  const pools = new PoolService(catalog);
+  return {
+    pools,
+    cleanPool: new CleanPool({
+      pools,
+      catalog,
+      trash: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
+      checkPool,
+    }),
+    domainBindings: new DomainBindings(maintenanceSource, new KvDomainBindingRepository(kv)),
+    ...(maintenance ? { maintenance } : {}),
+  };
 }
 
 /**
