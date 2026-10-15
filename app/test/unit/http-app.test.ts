@@ -545,6 +545,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
         insufficient: false,
         errors: ['a.example.com: 模拟维护失败'],
         probeErrors: 0,
+        poolStats: { before: {}, after: {}, pools: [], changed: false },
       },
       notification: null,
     };

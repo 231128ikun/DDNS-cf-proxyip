@@ -82,6 +82,7 @@ IP_DATA
 - `domain_pool_order`：域名显示顺序；
 - `ip_pool_names`：池 ID 与显示名称；
 - `ip_pool_order`：池显示顺序。
+- pool_stats_baseline：距上次成功通知的各池数量基线，只在维护通知成功发送后更新。
 
 IP 池标准格式：
 

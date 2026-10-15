@@ -377,6 +377,7 @@ Worker 会使用以下 KV key：
 | `domain_pool_order` | 域名池绑定区域中管理域名的显示顺序，JSON 数组；旧数据缺少此键时按配置中的管理域名顺序显示 |
 | `ip_pool_names` | IP 池显示名称，JSON 对象，key 为池 ID，value 为显示名 |
 | `ip_pool_order` | IP 池显示顺序，JSON 数组；旧数据缺少此键时自动按原编号顺序显示 |
+| pool_stats_baseline | 距上次成功通知的各池数量基线，JSON 对象；只在维护通知成功发送后更新 |
 
 IP 池的 KV key 不再使用用户输入的名称。新建池时 Worker 自动分配 `ip_pool_###`，用户看到的池名称只保存在 `ip_pool_names` 中。
 

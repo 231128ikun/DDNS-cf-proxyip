@@ -15,7 +15,9 @@ import type {
   MaintenanceSourceData,
   MaintenanceTargetConfig,
 } from '../../src/ports/maintenance-source';
+import type { MaintenanceStatsRepository } from '../../src/ports/maintenance-stats';
 import type { Notifier, NotifyResult } from '../../src/ports/notifier';
+import type { PoolSummary } from '../../src/contracts/pool';
 import { runMaintenanceJob } from '../../src/jobs/maintenance-job';
 
 const fallbackZone: DnsZone = { zoneId: 'zone-fallback', apiToken: 'token-fallback' };
@@ -82,6 +84,30 @@ class StubNotifier implements Notifier {
   async send(text: string): Promise<NotifyResult> {
     this.messages.push(text);
     return this.result;
+  }
+}
+
+class StubStats implements MaintenanceStatsRepository {
+  private currentCalls = 0;
+  saved: Record<string, number> | null = null;
+
+  constructor(
+    private readonly snapshots: readonly (readonly PoolSummary[])[],
+    private readonly baseline: Readonly<Record<string, number>> | null = null,
+  ) {}
+
+  async current(): Promise<readonly PoolSummary[]> {
+    const index = Math.min(this.currentCalls, this.snapshots.length - 1);
+    this.currentCalls += 1;
+    return this.snapshots[index] ?? [];
+  }
+
+  async loadBaseline() {
+    return this.baseline ? { ...this.baseline } : null;
+  }
+
+  async saveBaseline(counts: Readonly<Record<string, number>>) {
+    this.saved = { ...counts };
   }
 }
 
@@ -197,7 +223,14 @@ describe('MaintainManagedTargets', () => {
 });
 
 describe('shouldNotifyMaintenance', () => {
-  const quiet = { results: [], changed: false, insufficient: false, errors: [], probeErrors: 0 };
+  const quiet = {
+    results: [],
+    changed: false,
+    insufficient: false,
+    errors: [],
+    probeErrors: 0,
+    poolStats: { before: {}, after: {}, pools: [], changed: false },
+  };
 
   it('always notifies for manual maintenance', () => {
     expect(shouldNotifyMaintenance(quiet, true)).toBe(true);
@@ -212,6 +245,7 @@ describe('shouldNotifyMaintenance', () => {
     ['insufficient', { insufficient: true }],
     ['execution errors', { errors: ['x'] }],
     ['probe errors', { probeErrors: 1 }],
+    ['pool count changes', { poolStats: { before: {}, after: { ip_pool_trash: 1 }, pools: [], changed: true } }],
   ])('notifies scheduled maintenance when there are %s', (_label, patch) => {
     expect(shouldNotifyMaintenance({ ...quiet, ...patch }, false)).toBe(true);
   });
@@ -223,6 +257,8 @@ describe('runMaintenanceJob', () => {
     readonly isManual: boolean;
     readonly report?: (command: MaintainManagedTargetCommand) => MaintenanceReport;
     readonly fail?: boolean;
+    readonly stats?: StubStats;
+    readonly notifyResult?: NotifyResult;
   }) {
     const source = new StubSource(options.data ?? emptyData({ targets: [config('edge.example.com')] }));
     const maintainer = new StubMaintainer(async (command) => {
@@ -230,8 +266,12 @@ describe('runMaintenanceJob', () => {
       return options.report?.(command) ?? createReport({ target: command.target });
     });
     const runner = new MaintainManagedTargets({ maintainer });
-    const notifier = new StubNotifier();
-    return { source, runner, notifier, isManual: options.isManual };
+    const notifier = new StubNotifier(options.notifyResult ?? { sent: true, reason: 'sent' });
+    const stats = options.stats ?? new StubStats([[
+      { key: 'ip_pool_default', name: '默认池', count: 0 },
+      { key: 'ip_pool_trash', name: '垃圾桶', count: 0 },
+    ]]);
+    return { source, runner, notifier, stats, isManual: options.isManual };
   }
 
   it('notifies on a manual run even when nothing changed', async () => {
@@ -241,6 +281,7 @@ describe('runMaintenanceJob', () => {
       source: job.source,
       maintainer: job.runner,
       notifier: job.notifier,
+      stats: job.stats,
       fallbackZone,
       isManual: job.isManual,
     });
@@ -258,6 +299,7 @@ describe('runMaintenanceJob', () => {
       source: job.source,
       maintainer: job.runner,
       notifier: job.notifier,
+      stats: job.stats,
       fallbackZone,
       isManual: false,
     });
@@ -276,6 +318,7 @@ describe('runMaintenanceJob', () => {
       source: job.source,
       maintainer: job.runner,
       notifier: job.notifier,
+      stats: job.stats,
       fallbackZone,
       isManual: false,
     });
@@ -292,11 +335,93 @@ describe('runMaintenanceJob', () => {
       source: job.source,
       maintainer: job.runner,
       notifier: job.notifier,
+      stats: job.stats,
       fallbackZone,
       isManual: false,
     });
 
     expect(result.run.errors).toEqual(['edge.example.com: boom']);
     expect(job.notifier.messages[0]).toContain('执行错误 1 项');
+  });
+
+  it('uses the notification baseline and saves it only after a successful scheduled notification', async () => {
+    const stats = new StubStats(
+      [
+        [
+          { key: 'ip_pool_default', name: '默认池', count: 1 },
+          { key: 'ip_pool_trash', name: '垃圾桶', count: 0 },
+        ],
+        [
+          { key: 'ip_pool_default', name: '默认池', count: 0 },
+          { key: 'ip_pool_trash', name: '垃圾桶', count: 1 },
+        ],
+      ],
+      { ip_pool_default: 1, ip_pool_trash: 0 },
+    );
+    const job = createJob({ isManual: false, stats });
+
+    const result = await runMaintenanceJob({
+      source: job.source,
+      maintainer: job.runner,
+      notifier: job.notifier,
+      stats: job.stats,
+      fallbackZone,
+      isManual: false,
+    });
+
+    expect(result.run.poolStats).toMatchObject({
+      before: { ip_pool_default: 1, ip_pool_trash: 0 },
+      after: { ip_pool_default: 0, ip_pool_trash: 1 },
+      changed: true,
+    });
+    expect(result.notification).toEqual({ sent: true, reason: 'sent' });
+    expect(job.notifier.messages[0]).toContain('默认池 1 → 0');
+    expect(job.notifier.messages[0]).toContain('垃圾桶 0 → 1');
+    expect(stats.saved).toEqual({ ip_pool_default: 0, ip_pool_trash: 1 });
+  });
+
+  it('falls back to current counts when no baseline exists and stays quiet without changes', async () => {
+    const stats = new StubStats([[{ key: 'ip_pool_default', name: '默认池', count: 2 }]]);
+    const job = createJob({ isManual: false, stats });
+
+    const result = await runMaintenanceJob({
+      source: job.source,
+      maintainer: job.runner,
+      notifier: job.notifier,
+      stats: job.stats,
+      fallbackZone,
+      isManual: false,
+    });
+
+    expect(result.run.poolStats.before).toEqual({ ip_pool_default: 2 });
+    expect(result.notification).toBeNull();
+    expect(stats.saved).toBeNull();
+  });
+
+  it('does not update the baseline when notification fails', async () => {
+    const stats = new StubStats(
+      [
+        [{ key: 'ip_pool_default', name: '默认池', count: 1 }],
+        [{ key: 'ip_pool_default', name: '默认池', count: 0 }],
+      ],
+      { ip_pool_default: 1 },
+    );
+    const job = createJob({
+      isManual: false,
+      stats,
+      notifyResult: { sent: false, reason: 'failed' },
+    });
+
+    const result = await runMaintenanceJob({
+      source: job.source,
+      maintainer: job.runner,
+      notifier: job.notifier,
+      stats: job.stats,
+      fallbackZone,
+      isManual: false,
+    });
+
+    expect(result.notification).toEqual({ sent: false, reason: 'failed' });
+    expect(stats.saved).toBeNull();
   });
 });

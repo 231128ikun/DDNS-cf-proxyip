@@ -1,4 +1,4 @@
-import type { MaintenanceRunSummary, TargetMaintenanceResult } from '../../application/maintain-managed-targets';
+import type { MaintenanceRunReport, TargetMaintenanceResult } from '../../application/maintain-managed-targets';
 import { formatBeijingTimestamp } from '../../util/time';
 
 export interface TelegramMaintenanceMessageOptions {
@@ -8,7 +8,7 @@ export interface TelegramMaintenanceMessageOptions {
 
 /** 只消费维护报告已有字段，不重新计算计划或探测结果。 */
 export function buildTelegramMaintenanceMessage(
-  run: MaintenanceRunSummary,
+  run: MaintenanceRunReport,
   options: TelegramMaintenanceMessageOptions,
 ): string {
   const title = options.isManual ? 'DDNS 手动维护报告' : 'DDNS 自动维护报告';
@@ -19,6 +19,7 @@ export function buildTelegramMaintenanceMessage(
 
   if (run.errors.length > 0) lines.push(`⚠️ <b>执行错误 ${run.errors.length} 项</b>`);
   if (run.probeErrors > 0) lines.push(`⚠️ <b>检测异常 ${run.probeErrors} 次</b>，相关节点未做删除或替换`);
+  lines.push(formatPoolStats(run.poolStats));
   if (run.results.length === 0) lines.push('没有启用中的维护目标。');
 
   for (const result of run.results) {
@@ -28,6 +29,18 @@ export function buildTelegramMaintenanceMessage(
   return lines.join('\n');
 }
 
+function formatPoolStats(stats: MaintenanceRunReport['poolStats']): string {
+  const keys = [...new Set([...Object.keys(stats.before), ...Object.keys(stats.after)])]
+    .filter((key) => (stats.before[key] ?? 0) !== (stats.after[key] ?? 0));
+  if (keys.length === 0) return '📦 IP 池数量无变化';
+
+  const names = new Map(stats.pools.map((pool) => [pool.key, pool.name]));
+  const changes = keys.map((key) => {
+    const name = names.get(key) ?? key;
+    return `${escapeHtml(name)} ${stats.before[key] ?? 0} → ${stats.after[key] ?? 0}`;
+  });
+  return `📦 IP 池数量：${changes.join('，')}`;
+}
 function formatTarget(result: TargetMaintenanceResult): string {
   if (result.error) return `❌ 执行失败：${escapeHtml(result.error)}`;
   if (!result.report) return '❌ 没有维护报告';

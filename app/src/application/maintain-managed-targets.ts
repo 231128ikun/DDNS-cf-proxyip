@@ -3,6 +3,7 @@ import { resolvePoolKey } from '../domain/domain-binding';
 import type { ManagedTarget } from '../domain/managed-target';
 import type { DnsZone } from '../ports/dns-repository';
 import type { MaintenanceSourceData, MaintenanceTargetConfig } from '../ports/maintenance-source';
+import type { MaintenancePoolStats } from '../ports/maintenance-stats';
 import type { MaintainManagedTargetCommand, MaintenanceReport } from './maintain-managed-target';
 
 /** 批量维护只依赖单目标用例，测试可注入桩，不需要接触 KV 或 Cloudflare。 */
@@ -30,6 +31,11 @@ export interface MaintenanceRunSummary {
   readonly errors: readonly string[];
   readonly probeErrors: number;
 }
+
+/** 维护任务补上的池数量对比；efore 是距上次成功通知的基线。 */
+export type MaintenanceRunReport = MaintenanceRunSummary & {
+  readonly poolStats: MaintenancePoolStats;
+};
 
 export class MaintainManagedTargets {
   constructor(private readonly dependencies: MaintainManagedTargetsDependencies) {}
@@ -62,8 +68,13 @@ export class MaintainManagedTargets {
   }
 }
 
-export function shouldNotifyMaintenance(run: MaintenanceRunSummary, isManual: boolean): boolean {
-  return isManual || run.changed || run.insufficient || run.errors.length > 0 || run.probeErrors > 0;
+export function shouldNotifyMaintenance(run: MaintenanceRunReport, isManual: boolean): boolean {
+  return isManual
+    || run.changed
+    || run.insufficient
+    || run.errors.length > 0
+    || run.probeErrors > 0
+    || run.poolStats.changed;
 }
 
 function resolveZone(zones: readonly DnsZone[], config: MaintenanceTargetConfig, fallback: DnsZone): DnsZone {

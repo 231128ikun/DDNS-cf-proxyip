@@ -3,6 +3,7 @@ import { TelegramNotifier } from './adapters/notify/telegram';
 import { KvConfigRepository } from './adapters/storage/kv-config-repository';
 import { KvDomainBindingRepository } from './adapters/storage/kv-domain-binding-repository';
 import { KvMaintenanceSource } from './adapters/storage/kv-maintenance-source';
+import { KvMaintenanceStatsRepository } from './adapters/storage/kv-maintenance-stats-repository';
 import { KvPoolCatalog } from './adapters/storage/kv-pool-catalog';
 import { KvPoolRepository } from './adapters/storage/kv-pool-repository';
 import { CheckPoolText } from './application/check-pool';
@@ -136,6 +137,7 @@ export function createMaintenanceRunner(
   source?: MaintenanceSource,
 ): MaintenanceRunner {
   const maintenanceSource = source ?? new KvMaintenanceSource(kv);
+  const stats = new KvMaintenanceStatsRepository(kv, new KvPoolCatalog(kv));
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
       probe: createProbeAdapterFromConfig(toProbeConfig(config)),
@@ -154,6 +156,7 @@ export function createMaintenanceRunner(
       source: maintenanceSource,
       maintainer,
       notifier,
+      stats,
       fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
       isManual,
     }),
