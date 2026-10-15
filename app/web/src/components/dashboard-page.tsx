@@ -7,6 +7,7 @@ import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '..
 import { countPoolTextLines } from '../../../src/domain/pool-text';
 import type { RequestState } from '../state/request-state';
 import { Icon, type IconName } from './icon';
+import { RecordBadge } from './record-badge';
 import { probeStatusLabel } from './probe-status';
 
 /** IP 池写操作的忙碌标记：比起给每个按钮单独维护 loading 状态更省代码。 */
@@ -363,7 +364,7 @@ export function DashboardPage({
                           <tr key={item.key}>
                             <td>
                               <div class="domain-binding-domain">
-                                <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
+                                <RecordBadge mode={item.mode} />
                                 <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
                               </div>
                             </td>
@@ -680,7 +681,7 @@ function MaintenanceSummary({ state }: { readonly state: RequestState<Maintenanc
       </div>
       {data.results.map((item) => (
         <div key={`${item.domain}|${item.mode}`} class="maintenance-result">
-          <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
+          <RecordBadge mode={item.mode} />
           <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
           <span class="text-secondary">+{item.added} / -{item.deleted}</span>
           {item.probeErrors > 0 && <span class="text-warning">探针异常 {item.probeErrors} 次</span>}

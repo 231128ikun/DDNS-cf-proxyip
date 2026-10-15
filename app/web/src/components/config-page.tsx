@@ -15,6 +15,7 @@ import { ApiClient } from '../api/client';
 import { errorMessage, isAbort } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
+import { RecordBadge } from './record-badge';
 
 interface ConfigPageProps {
   readonly client: ApiClient;
@@ -341,7 +342,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             >
               <h5>{targetDisplayDomain(target)}</h5>
               <div class="meta">
-                <span class={`record-badge ${target.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{target.mode}</span>
+                <RecordBadge mode={target.mode} />
                 <span>{target.mode === 'TXT' ? 'TXT 列表' : `端口 ${target.port}`}</span>
                 <span>{exitFilterLabel(target.exitFilter)}</span>
                 <span>{zoneDisplayName(form.zones, target.zoneIndex)}</span>

@@ -2,6 +2,7 @@ import type { DomainBindingsResponse } from '../../../src/contracts/maintenance'
 import type { HealthResponse } from '../../../src/contracts/probe';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
+import { RecordBadge } from './record-badge';
 
 interface HeroProps {
   readonly health: RequestState<HealthResponse>;
@@ -94,7 +95,7 @@ function TargetSummary({ state }: { readonly state: RequestState<DomainBindingsR
     <>
       <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
       <span class="target-summary-meta">
-        <span class={`record-badge ${item.mode === 'TXT' ? 'record-badge-txt' : 'record-badge-a'}`}>{item.mode}</span>
+        <RecordBadge mode={item.mode} />
         <span>{item.mode === 'TXT' ? 'TXT 记录' : 'A/AAAA 记录'}</span>
         <span>{item.poolName}</span>
         {extra > 0 && <span>等 {state.data.items.length} 个目标</span>}
