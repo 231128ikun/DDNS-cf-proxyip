@@ -43,6 +43,10 @@ jobs:
       - name: Check
         run: npm run check
 
+      # 冒烟检查本地起一个 Worker，确认静态资源与 /api/* 的分工没有被改坏。
+      - name: Deployment shape smoke check
+        run: npm run smoke
+
       # 部署入口是源码，仓库里不应再出现构建产物。
       - name: Reject committed build artifacts
         working-directory: .

@@ -11,6 +11,7 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run test && npm run build && npm run check:size",
     "check:size": "node scripts/check-size.mjs",
+    "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
