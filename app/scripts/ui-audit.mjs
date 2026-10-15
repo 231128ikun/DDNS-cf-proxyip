@@ -3,7 +3,7 @@
  * UI 验收审计：响应式布局 + 对比度 + 点击目标 + 语义/可访问性 + 截图。
  *
  * 用法：
- *   1) 另开一个终端启动本地服务：npm run dev（默认 http://127.0.0.1:8788）
+ *   1) 另开一个终端启动本地服务：npm run dev（默认 http://127.0.0.1:8787）
  *   2) node scripts/ui-audit.mjs
  *
  * 可选参数：--base / --out / --port / --chrome / --keep-open
@@ -20,7 +20,7 @@ const flag = (name, fallback) => {
   const index = args.indexOf(`--${name}`);
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 };
-const BASE = flag("base", "http://127.0.0.1:8788");
+const BASE = flag("base", "http://127.0.0.1:8787");
 const OUT = resolve(flag("out", ".wrangler/tmp/ui-audit"));
 const PORT = Number(flag("port", "9222"));
 const KEEP_OPEN = args.includes("--keep-open");

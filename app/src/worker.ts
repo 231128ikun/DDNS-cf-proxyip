@@ -29,12 +29,11 @@ const BATCH_CHECK_CONCURRENCY = 8;
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
-/** 运行时只注入 `cloudflare:sockets` 与已构建的前端资源。 */
+/** 运行时只注入 `cloudflare:sockets`。 */
 export interface WorkerOverrides {
   /** `cloudflare:sockets` 的 connect；缺失时 socket 模式按“未配置”处理，不会误判节点失效。 */
   readonly connect?: SocketConnect;
-  /** 已内嵌的前端资源；API 测试可不提供。 */
-  readonly assets?: Fetcher;
+
 }
 
 /**
@@ -53,7 +52,6 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
       const authKey = resolved.config.authKey || env.AUTH_KEY?.trim();
       // 同一份 KV 存储实例既服务维护 runner，也服务域名绑定读写，避免两套读取顺序。
       const kv = env.IP_DATA;
-      const assets = overrides.assets;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
       const maintenance = kv && maintenanceSource
         ? createMaintenanceRunner(kv, resolved.config, overrides, maintenanceSource)
@@ -68,7 +66,6 @@ export function createWorker(overrides: WorkerOverrides = {}): ExportedHandler<R
         probeSelfTest: new ProbeSelfTest(createProbe),
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
         ...(authKey ? { authKey } : {}),
-        ...(assets ? { assets } : {}),
         ...(kv
           ? {
               pools: new PoolService(new KvPoolCatalog(kv)),

@@ -23,11 +23,10 @@ class FakeProbeAdapter implements ProbeAdapter {
   }
 }
 
-function createApp(assets?: Fetcher) {
+function createApp() {
   return createHttpApp({
     checkProxy: new CheckProxy(new FakeProbeAdapter()),
     version: 'test',
-    ...(assets ? { assets } : {}),
   });
 }
 
@@ -59,24 +58,14 @@ describe('HTTP app', () => {
     expect(authorized.status).toBe(200);
   });
 
-  it('serves static assets only for non-API routes', async () => {
-    const calls: string[] = [];
-    const assets = {
-      fetch: async (request: Request) => {
-        calls.push(new URL(request.url).pathname);
-        return new Response('<html>app</html>', { headers: { 'Content-Type': 'text/html' } });
-      },
-    } as unknown as Fetcher;
-    const app = createApp(assets);
+  it('returns 404 for unknown routes', async () => {
+    const page = await createApp().request('/dashboard');
+    expect(page.status).toBe(404);
+    await expect(page.json()).resolves.toEqual({ error: 'not found' });
 
-    const page = await app.request('/dashboard');
-    expect(page.status).toBe(200);
-    await expect(page.text()).resolves.toContain('app');
-
-    const api = await app.request('/api/missing');
+    const api = await createApp().request('/api/missing');
     expect(api.status).toBe(404);
     await expect(api.json()).resolves.toEqual({ error: 'not found' });
-    expect(calls).toEqual(['/dashboard']);
   });
 });
 

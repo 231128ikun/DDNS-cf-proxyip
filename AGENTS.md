@@ -1,19 +1,20 @@
 # DDNS Pro Worker 维护规范
 
-本仓库只维护一套程序：`app/` 是可维护源码和唯一实现来源，根目录 `_worker.js` 由 `app/` 构建生成，是唯一运行与部署入口，并保持可读、可直接复制部署。不得把迁移过程命名成 v1/v2，也不得建立平行产品。
+本仓库只维护一套程序：`app/` 是可维护源码和唯一实现来源。浏览器端由 Cloudflare 静态资源直接分发，`/api/*` 由唯一 Worker 处理，仓库不提交任何构建产物。不得把迁移过程命名成 v1/v2，也不得建立平行产品。
 
 ## 1. 总原则
 
 1. **一套程序**：不得新增第二套 API、配置 key、数据格式、前端入口或部署入口。
 2. **能复用就复用**：相同规则只保留一个来源，优先复用纯函数、契约和适配器。
-3. **足够精简**：所有设计都要考虑 Cloudflare Workers 的体积、冷启动、CPU、子请求数、KV 操作和内存。
-4. **精简不等于多拆**：模块和抽象必须对应真实复用点或替换点；没有用途就删除。
-5. **依赖单向**：`transport/jobs -> application -> domain + ports <- adapters`。业务规则不依赖 HTTP、KV、fetch 或页面。
-6. **安全失败**：只有可信探针明确拒绝节点时才标记 `dead`；超时、HTTP 错误、坏 JSON、TLS 错误和未知响应一律为 `unknown`。
-7. **最小依赖**：新增依赖前先尝试复用现有代码。不要为了少量功能引入重型框架或运行时校验库。
-8. **先测后合**：边界规则要有单元测试；不要用修一个坏一个的方式接功能。
-9. **不留死代码**：未使用的文件、导出、组件、样式和兼容分支必须删除，不能以“以后可能用到”为由保留。
-10. **文档描述事实**：不要写计划中的功能，不要保留会造成“两套程序”误解的历史命名。
+3. **一次改动只做一件事**：纯重构、迁移、修 bug、加功能分属不同提交；重构批次不得夹带新功能。
+4. **足够精简**：所有设计都要考虑 Cloudflare Workers 的体积、冷启动、CPU、子请求数、KV 操作和内存。
+5. **精简不等于多拆**：模块和抽象必须对应真实复用点或替换点；没有用途就删除。
+6. **依赖单向**：`transport/jobs -> application -> domain + ports <- adapters`。业务规则不依赖 HTTP、KV、fetch 或页面。
+7. **安全失败**：只有可信探针明确拒绝节点时才标记 `dead`；超时、HTTP 错误、坏 JSON、TLS 错误和未知响应一律为 `unknown`。
+8. **最小依赖**：新增依赖前先尝试复用现有代码。不要为了少量功能引入重型框架或运行时校验库。
+9. **先测后合**：边界规则要有单元测试；不要用修一个坏一个的方式接功能。
+10. **不留死代码**：未使用的文件、导出、组件、样式和兼容分支必须删除，不能以“以后可能用到”为由保留。
+11. **文档描述事实**：不要写计划中的功能，不要保留会造成“两套程序”误解的历史命名。
 
 ## 2. 仓库结构
 
@@ -23,21 +24,22 @@
 | `app/src/domain/` | 地址、目标、探针结果、IP 池等纯业务规则 |
 | `app/src/application/` | 用例编排；不直接访问 `env`、KV 或 `fetch` |
 | `app/src/ports/` | 存储、探针、DNS、通知等接口 |
-| `app/src/adapters/` | KV、Cloudflare DNS、探针、Telegram、打包资源等外部实现 |
+| `app/src/adapters/` | KV、Cloudflare DNS、探针、Telegram 等外部实现 |
 | `app/src/transport/` | HTTP 路由、鉴权、请求校验和错误映射 |
 | `app/src/jobs/` | cron 与手动维护共用的任务入口 |
 | `app/src/config/` | 环境变量解析和运行时适配器装配 |
-| `app/src/worker.ts` | 唯一 Worker 装配入口，`fetch` 与 `scheduled` 都在这里 |
+| `app/src/index.ts` | 唯一 Worker 入口：导入运行时模块并装配 `createWorker` |
+| `app/src/worker.ts` | Worker 装配实现，`fetch` 与 `scheduled` 共用；供测试直接调用 |
 | `app/web/` | 浏览器端源码，与 Worker 由同一次构建生成 |
 | `app/scripts/` | 构建、清理、体积门禁和 UI 验收，不进入发布文件 |
-| `_worker.js` | 由 `app/` 构建生成的唯一部署入口；不得手工维护平行实现 |
-| `wrangler.toml` | Cloudflare Git / Wrangler 部署配置，入口为 `_worker.js` |
+| `app/dist/web/` | 前端构建产物，部署时作为 Workers 静态资源目录；不提交 |
+| `wrangler.toml` | 部署配置：Worker 入口为 `app/src/index.ts`，静态资源目录为 `app/dist/web` |
 
 ### 2.1 当前代码入口
 
 | 任务 | 首选入口 |
 | --- | --- |
-| Worker 装配 | `app/src/worker.ts` |
+| Worker 装配 | `app/src/index.ts`、`app/src/worker.ts` |
 | HTTP 路由与鉴权 | `app/src/transport/http.ts`、`auth.ts`、`router.ts` |
 | 单节点与批量检测 | `app/src/application/check-proxy.ts`、`check-pool.ts` |
 | 探针实现 | `app/src/adapters/probe/`、`app/src/config/runtime.ts` |
@@ -47,7 +49,7 @@
 | DNS 维护 | `app/src/application/maintain-managed-target.ts`、`maintain-managed-targets.ts`、`app/src/adapters/dns/cloudflare-dns.ts` |
 | Telegram | `app/src/adapters/notify/` |
 | 浏览器端 | `app/web/src/`，页面入口为 `app.tsx`，请求统一走 `api/client.ts` |
-| 发布构建 | `app/scripts/build-worker.mjs`，同步生成 `_worker.js` 和 `app/dist/release/worker.js` |
+| 发布构建 | `app/scripts/build-worker.mjs`，构建前端并产出 `app/dist/release/worker.js` 供体积门禁检查 |
 
 ## 3. 开始任务前
 
@@ -114,13 +116,16 @@ DNS 规则：
 - 出口国家、ASN 或栈不匹配可以移出目标 DNS，但不能当作死节点入垃圾桶；
 - 补货候选不能重复添加当前已生效的地址。
 
+垃圾桶只有一条写入入口：所有入桶都必须经过统一的去重、上限截断和注释格式实现，面板、维护流程和恢复流程不得各写一套。
+
 ## 5. 前端规范
 
 - 浏览器端只使用 `app/web/`，不得把大段 HTML、CSS 和脚本塞回 Worker 路由。
 - 请求统一走 `app/web/src/api/client.ts`，不要在页面组件里重复 fetch、鉴权、错误解析代码。
+- 视觉语义只有一个来源：颜色、间距、圆角、字号和阴影由 `app/web/src/styles.css` 的语义变量定义，页面组件只引用语义名，不写孤立尺寸。
+- 可复用的展示单元（状态徽标、卡片、表单行、菜单、弹窗、提示）先抽成组件，再在页面组合；同类控件不得出现两套样式实现。
 - 页面视觉与操作流程保持 DDNS Pro 现有风格；改动应按功能块收敛，不另起一套设计。
 - 高频动作使用“图标 + 文字”；次级、危险和菜单动作以文字为主，避免图标堆叠。
-- 字体、间距、卡片高度和按钮尺寸使用统一语义，不要逐页写孤立尺寸。
 - 必须同时验证桌面和窄屏；文本不能溢出或与操作区重叠。
 - 图标必须有可访问名称，表单控件必须有关联标签，标题层级不能跳级。
 
@@ -139,7 +144,7 @@ npm run audit:ui
 
 不擅自调用真实的 DNS 删除、KV 清空、垃圾桶清空或全量维护接口。真实写操作需要用户明确许可。
 
-## 7. 构建与发布
+## 7. 构建与部署
 
 ```powershell
 cd app
@@ -149,14 +154,17 @@ npm run build
 
 构建流程：
 
-1. Vite 构建 `app/web/`；
-2. 把前端产物打包进 Worker；
-3. Wrangler 打包唯一的 `app/src/worker.ts` 装配；
-4. 同时输出部署入口 `_worker.js` 和检查产物 `app/dist/release/worker.js`。
+1. Vite 构建 `app/web/` 到 `app/dist/web/`；
+2. Wrangler 打包 `app/src/index.ts`，产物 `app/dist/release/worker.js` 只用于体积门禁与检查。
 
-`_worker.js` 是提交到仓库的唯一发布入口，必须保持可读、可直接复制部署。任何功能修改都先改 `app/`，再运行构建同步 `_worker.js`；不得直接修改 `_worker.js` 或另建入口。
+部署形态：
 
-构建产物、源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存不得写入发布文件目录。
+- 面板是 Cloudflare 静态资源（目录 `app/dist/web/`），由边缘直接分发；
+- Worker 只处理 `/api/*`，前端不再打包进 Worker；
+- 通过 `wrangler deploy` 或 Cloudflare Git 集成部署，构建命令为 `cd app && npm ci && npm run build`；
+- 仓库不提交 `_worker.js` 或任何构建产物，也不再提供“复制单个文件到控制台”的部署方式。
+
+构建产物、源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存不得进入版本库，也不得进入静态资源目录。
 
 ## 8. 验证要求
 
@@ -179,7 +187,7 @@ cd app
 npm run check
 ```
 
-`npm run check` 必须依次完成类型检查、单元测试、构建和体积门禁。体积超预算时先删除重复实现、减少依赖或调整设计，不得直接抬高预算掩盖增长。
+`npm run check` 必须依次完成类型检查、单元测试、构建和体积门禁。体积门禁分两条：Worker 打包体积和首屏页面重量（JS 与 CSS 的 gzip 合计）。体积超预算时先删除重复实现、减少依赖或调整设计，不得直接抬高预算掩盖增长。
 
 UI 改动额外验证桌面与窄屏；涉及 KV、探针或 DNS 改动时增加对应模拟测试，不能用静态语法检查代替行为验证。
 
@@ -195,11 +203,11 @@ UI 改动额外验证桌面与窄屏；涉及 KV、探针或 DNS 改动时增加
 
 - [ ] 仍然只有一套源码、API、配置和 KV 数据；
 - [ ] 没有新增平行入口或重复业务实现；
-- [ ] 前端仍属于同一个 DDNS Pro；
-- [ ] `_worker.js` 已由 `app/` 构建同步，且与 `app/dist/release/worker.js` 一致；
-- [ ] KV、旧池格式和 `unknown` 安全语义未被破坏；
+- [ ] 前端仍属于同一个 DDNS Pro，视觉语义只有一套来源；
+- [ ] 没有提交 `_worker.js`、`dist/`、缓存、sourcemap 或测试杂物；
+- [ ] `wrangler.toml` 的 Worker 入口与静态资源目录与实际构建一致；
+- [ ] KV、旧池格式、垃圾桶单一写入入口和 `unknown` 安全语义未被破坏；
 - [ ] A/AAAA 与 TXT 两种模式都已考虑；
-- [ ] 没有提交密钥、缓存、sourcemap 或测试杂物到发布目录；
 - [ ] `npm run check` 通过；
 - [ ] `git diff --check` 通过；
 - [ ] 最终工作区范围已复核。

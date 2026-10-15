@@ -1,84 +1,41 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { extname, join, relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
 /**
- * 把 `app/` 源码构建成部署入口 `_worker.js` 和检查产物 `app/dist/release/worker.js`。
+ * 构建检查产物：
+ *   1. 用 Vite 构建 `app/web/` 到 `app/dist/web/`，该目录就是部署时的静态资源目录；
+ *   2. 用 Wrangler 打包 `app/src/index.ts` 到 `app/dist/release/worker.js`，只用于体积门禁。
  *
- * 构建顺序：
- *   1. 用 Vite 构建 `app/web/`；
- *   2. 把前端产物 gzip 后编码为 Worker 内置资源表；
- *   3. 用 Wrangler 打包唯一的 `createWorker()` 入口。
- *
- * 根目录 `_worker.js` 是提交到仓库的唯一部署入口，由本脚本同步生成。
- * `_worker.js` 与检查产物都不手工编辑；可维护源码始终以 `app/` 为准。
+ * 部署入口由 `wrangler.toml` 指向源码，仓库不提交任何构建产物，
+ * 因此这里不再生成第二份“可复制部署”的单文件。
  */
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const appRoot = join(root, 'app');
 const webDir = join(appRoot, 'dist', 'web');
 const outDir = join(appRoot, 'dist', 'release');
-const buildDir = join(appRoot, 'dist', 'bundle-build');
-const generatedDir = join(buildDir, 'generated');
-const bundleDir = join(buildDir, 'bundle');
 const releaseWorkerPath = join(outDir, 'worker.js');
-const deployWorkerPath = join(root, '_worker.js');
 
-/** 前端产物只支持明确列出的类型；出现新类型时先显式登记 MIME。 */
-const CONTENT_TYPES = new Map([
-  ['.html', 'text/html; charset=utf-8'],
-  ['.js', 'text/javascript; charset=utf-8'],
-  ['.mjs', 'text/javascript; charset=utf-8'],
-  ['.css', 'text/css; charset=utf-8'],
-  ['.json', 'application/json; charset=utf-8'],
-  ['.svg', 'image/svg+xml'],
-  ['.png', 'image/png'],
-  ['.jpg', 'image/jpeg'],
-  ['.jpeg', 'image/jpeg'],
-  ['.webp', 'image/webp'],
-  ['.gif', 'image/gif'],
-  ['.ico', 'image/x-icon'],
-  ['.woff', 'font/woff'],
-  ['.woff2', 'font/woff2'],
-  ['.txt', 'text/plain; charset=utf-8'],
-]);
-
-console.log('构建 worker.js:');
+console.log('构建检查产物:');
 runNpm('build:web');
 
-rmSync(outDir, { recursive: true, force: true });
-rmSync(buildDir, { recursive: true, force: true });
-mkdirSync(outDir, { recursive: true });
-mkdirSync(generatedDir, { recursive: true });
-
-const assets = collectAssets(webDir);
-if (!assets.some((asset) => asset.path === '/index.html')) {
+if (!existsSync(join(webDir, 'index.html'))) {
   throw new Error('app/dist/web/index.html 缺失：前端构建结果不完整');
 }
 
-writeFileSync(join(generatedDir, 'assets.ts'), renderAssetsModule(assets), 'utf8');
-writeFileSync(join(generatedDir, 'index.ts'), renderEntryModule(generatedDir), 'utf8');
+rmSync(outDir, { recursive: true, force: true });
+mkdirSync(outDir, { recursive: true });
 
-runWrangler([
-  toPosix(relative(root, join(generatedDir, 'index.ts'))),
-  '--dry-run',
-  '--config',
-  'wrangler.toml',
-  '--outdir',
-  toPosix(relative(root, bundleDir)),
-]);
+runWrangler(['deploy', '--dry-run', '--config', 'wrangler.toml', '--outdir', toPosix(relative(root, outDir))]);
 
 const bundle = createBundle();
 writeFileSync(releaseWorkerPath, bundle, 'utf8');
-writeFileSync(deployWorkerPath, bundle, 'utf8');
-rmSync(buildDir, { recursive: true, force: true });
 
-console.log(`  资源 ${assets.length} 个，打包 ${formatKb(assets.reduce((sum, asset) => sum + asset.bytes.length, 0))}`);
 console.log(`  worker.js  raw ${formatKb(Buffer.byteLength(bundle))}  gzip ${formatKb(gzipSync(bundle).length)}`);
-console.log('  部署入口：_worker.js');
-console.log('  检查产物：app/dist/release/worker.js');
+console.log('  静态资源：app/dist/web（部署时由 wrangler.toml 的 [assets] 指向）');
 
 /** npm 在 Windows 上是 .cmd 包装器，用字符串形式交给 shell 启动，避免 spawn EINVAL。 */
 function runNpm(script) {
@@ -91,14 +48,14 @@ function runNpm(script) {
  */
 function runWrangler(args) {
   try {
-    execFileSync(process.execPath, [join(appRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js'), 'deploy', ...args], {
+    execFileSync(process.execPath, [join(appRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js'), ...args], {
       cwd: root,
       stdio: 'inherit',
       timeout: 90_000,
       env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
     });
   } catch (error) {
-    if (existsSync(bundleDir) && readdirSync(bundleDir).some((name) => name.endsWith('.js'))) {
+    if (existsSync(outDir) && readdirSync(outDir).some((name) => name.endsWith('.js'))) {
       console.warn('  Wrangler 已写出 bundle，但未正常退出；构建继续。');
       return;
     }
@@ -107,7 +64,7 @@ function runWrangler(args) {
 }
 
 function createBundle() {
-  const source = readFileSync(pickBundleFile(bundleDir), 'utf8');
+  const source = readFileSync(pickBundleFile(outDir), 'utf8');
   return stripSourceMapReference(source);
 }
 
@@ -115,37 +72,6 @@ function createBundle() {
 function stripSourceMapReference(source) {
   const withoutMap = source.replace(/^\/\/# sourceMappingURL=.*$/gm, '');
   return withoutMap.replace(/\s+$/, '') + '\n';
-}
-
-/** 递归收集前端产物，生成以请求路径为 key 的资源表。 */
-function collectAssets(directory) {
-  const collected = [];
-
-  for (const entry of readdirSync(directory, { withFileTypes: true }).sort(byName)) {
-    const absolute = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      collected.push(...collectAssets(absolute));
-      continue;
-    }
-    if (extname(entry.name) === '.map') continue;
-
-    const path = `/${toPosix(relative(webDir, absolute))}`;
-    const contentType = CONTENT_TYPES.get(extname(entry.name));
-    if (!contentType) throw new Error(`app/dist/web 出现未登记 MIME 的资源：${path}`);
-
-    const bytes = readFileSync(absolute);
-    const gzip = gzipSync(bytes, { level: 9 });
-    const useGzip = gzip.length < bytes.length;
-    collected.push({
-      path,
-      contentType,
-      bytes,
-      base64: (useGzip ? gzip : bytes).toString('base64'),
-      gzip: useGzip,
-    });
-  }
-
-  return collected;
 }
 
 function pickBundleFile(directory) {
@@ -156,49 +82,8 @@ function pickBundleFile(directory) {
   return join(directory, candidates[0]);
 }
 
-function byName(left, right) {
-  return left.name.localeCompare(right.name);
-}
-
-function renderAssetsModule(collected) {
-  const rows = collected
-    .map((asset) => `  ${quote(asset.path)}: { contentType: ${quote(asset.contentType)}, base64: ${quote(asset.base64)}, gzip: ${asset.gzip} },`)
-    .join('\n');
-  return [
-    '// 由 scripts/build-worker.mjs 生成，请勿手改。',
-    `import type { BundledAssetMap } from ${quote(importPath(generatedDir, 'app/src/adapters/assets/bundled-assets'))};`,
-    '',
-    'export const BUNDLED_WEB_ASSETS: BundledAssetMap = {',
-    rows,
-    '};',
-    '',
-  ].join('\n');
-}
-
-function renderEntryModule(fromDirectory) {
-  return [
-    '// 由 scripts/build-worker.mjs 生成，请勿手改。',
-    "import { connect } from 'cloudflare:sockets';",
-    `import { createBundledAssets } from ${quote(importPath(fromDirectory, 'app/src/adapters/assets/bundled-assets'))};`,
-    `import { createWorker } from ${quote(importPath(fromDirectory, 'app/src/worker'))};`,
-    "import { BUNDLED_WEB_ASSETS } from './assets';",
-    '',
-    'export default createWorker({ connect, assets: createBundledAssets(BUNDLED_WEB_ASSETS) });',
-    '',
-  ].join('\n');
-}
-
-function importPath(fromDirectory, target) {
-  const specifier = toPosix(relative(fromDirectory, join(root, target)));
-  return specifier.startsWith('.') ? specifier : `./${specifier}`;
-}
-
 function toPosix(value) {
   return value.split(sep).join('/');
-}
-
-function quote(value) {
-  return JSON.stringify(value);
 }
 
 function formatKb(bytes) {

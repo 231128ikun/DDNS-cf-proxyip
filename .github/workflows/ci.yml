@@ -1,18 +1,16 @@
 name: CI
 
-# 校验模块源码和测试；当前可读部署入口仍是根目录 _worker.js。
+# 校验模块源码和测试；部署入口是 wrangler.toml 指向的 app/src/index.ts，仓库不提交构建产物。
 on:
   push:
     paths:
       - 'app/**'
-      - '_worker.js'
       - 'wrangler.toml'
       - 'AGENTS.md'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'app/**'
-      - '_worker.js'
       - 'wrangler.toml'
       - 'AGENTS.md'
       - '.github/workflows/ci.yml'
@@ -40,7 +38,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `npm run check`：类型检查、单元测试、构建检查产物、体积门禁。
-      # 全部用例使用内存 KV 与 mock fetch，不需要真实密钥或 Cloudflare 绑定。
+      # `npm run check`：类型检查、单元测试、构建前端与 Worker、体积门禁。
+      # 面板由 Cloudflare 静态资源分发，Worker 只处理 /api/*；全部用例使用内存 KV 与 mock fetch。
       - name: Check
         run: npm run check
+
+      # 部署入口是源码，仓库里不应再出现构建产物。
+      - name: Reject committed build artifacts
+        working-directory: .
+        run: |
+          if git ls-files --error-unmatch _worker.js >/dev/null 2>&1; then
+            echo "_worker.js 不应提交：部署入口是 app/src/index.ts"
+            exit 1
+          fi

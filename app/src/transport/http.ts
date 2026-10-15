@@ -42,7 +42,6 @@ export interface HttpAppDependencies {
   readonly version: string;
   readonly configSource?: EffectiveConfigSource;
   readonly authKey?: string;
-  readonly assets?: Fetcher;
   /** 未绑定 KV 时为空；此时 IP 池相关接口返回 503。 */
   readonly pools?: PoolService;
   readonly checkPool?: CheckPoolText;
@@ -81,15 +80,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   /** 所有 /api/* 业务路由共用同一个鉴权入口，避免新增路由时漏掉校验。 */
   const guard = (context: RouteContext): Response | null =>
     isAuthorized(context.request, dependencies.authKey) ? null : errorResponse('unauthorized', 401);
-
-  router.get('/', (context) => {
-    if (dependencies.assets) return dependencies.assets.fetch(context.request);
-    return jsonResponse({
-      name: 'ddns-cf-proxyip',
-      version: dependencies.version,
-      api: '/api/check?proxyip=1.2.3.4:443',
-    });
-  });
 
   router.get('/api/health', () => {
     const response: HealthResponse = {
@@ -412,13 +402,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
       const matched = await router.handle(request);
       if (matched) return matched;
 
-      const path = new URL(request.url).pathname;
-      const canServeAsset = request.method === 'GET' || request.method === 'HEAD';
-      if (dependencies.assets && canServeAsset && !path.startsWith('/api/')) {
-        return await dependencies.assets.fetch(request);
-      }
-      return errorResponse('not found', 404);
-    } catch (error) {
+      return errorResponse('not found', 404);    } catch (error) {
       console.error('Unhandled worker error', error);
       return errorResponse('internal error', 500);
     }

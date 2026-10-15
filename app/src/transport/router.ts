@@ -16,7 +16,7 @@ interface Route {
 
 /**
  * 极小的 Worker 路由器：精确匹配路径与 `:param` 段，不做中间件、不做正则路由。
- * 返回 null 表示没有命中，由调用方决定回退到静态资源还是 404。
+ * 返回 null 表示没有命中，由调用方返回 404。
  */
 export class Router {
   private readonly routes: Route[] = [];
