@@ -5,7 +5,7 @@
 
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
-项目不依赖自建服务器，核心代码是单文件 Worker：[`_worker.js`](./_worker.js)。
+项目不依赖自建服务器。`app/` 是唯一源码入口：Worker 处理 `/api/*`，浏览器端由 Cloudflare 静态资源分发，仓库不提交构建产物。
 
 > 本项目依赖 check-proxyip-api，若要自行部署后端代码，见下方参考代码。现在可行的方案是部署[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)然后将` http://部署的项目地址/check?proxyip= `填入检测api中。（snippets版本可参考[CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)自行修改）
 
@@ -44,85 +44,106 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 ## 💡 快速部署
 
 > [!TIP]
-> 推荐部署顺序：复制 Worker 代码并部署 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 打开面板 -> 配置中心保存配置 -> 设置 cron 触发器
+> 推荐部署顺序：准备 Node.js 22 -> 构建源码 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 部署 -> 打开面板保存配置。
+> 仓库不再提供“复制单文件到 Worker 编辑器”的部署方式，也不提交 `_worker.js`。
 
-### ⚙️ Worker 手动部署
+### ⚙️ Wrangler 本地部署
 
 <details>
-<summary><code><strong>「 Worker 手动部署文字教程 」</strong></code></summary>
+<summary><code><strong>「 Wrangler 部署文字教程 」</strong></code></summary>
 
-1. 部署 CF Worker：
-   - 进入 [Cloudflare Workers](https://dash.cloudflare.com/?to=/:account/workers)。
-   - 创建一个 Worker。
-   - 把 [`_worker.js`](./_worker.js) 的全部内容复制到 Worker 编辑器。
-   - 保存并部署。
+1. 准备环境：
+   - Node.js 22 或更新版本。
+   - 已登录 Cloudflare 的 Wrangler CLI。
 
-2. 绑定 KV 命名空间：
-   - 在 [Workers KV](https://dash.cloudflare.com/?to=/:account/workers/kv/namespaces) 创建命名空间，名称可用 `IP_DATA`也可任意。
-   - 打开 Worker -> **Settings** -> **Bindings**。
-   - 添加 **KV Namespace** 绑定。
-   - `Variable name` 必须填写 `IP_DATA`。
+   ```powershell
+   npx wrangler login
+   ```
 
-   ```text
-   IP_DATA
+2. 构建 Worker 与前端静态资源：
+
+   ```powershell
+   cd app
+   npm ci
+   npm run build
+   ```
+
+   构建结果是：
+
+   - `app/dist/web/`：面板静态资源，由 `wrangler.toml` 的 `[assets]` 声明；
+   - `app/dist/release/worker.js`：Wrangler 打包检查产物，只用于体积门禁，不是仓库入口。
+
+3. 绑定 KV 命名空间：
+   - 创建或选择一个 KV Namespace。
+   - 在 `wrangler.toml` 的 `[[kv_namespaces]]` 里把 `IP_DATA` 绑定到该 Namespace，已有 Namespace 时需要填写其 `id`。
+
+   ```toml
+   [[kv_namespaces]]
+   binding = "IP_DATA"
+   id = "你的_KV_Namespace_ID"
    ```
 
    未绑定 `IP_DATA` 时，面板可以打开，但配置保存、IP 池和维护任务不可用。
 
-3. 可选设置面板访问密钥：
+4. 可选设置面板访问密钥：
    - 建议设置 `AUTH_KEY`，否则公开 Worker 地址后任何人都可以进入管理面板。
-   - 在 Worker -> **Settings** -> **Variables** 添加变量：
+   - 可通过 Wrangler 或 Cloudflare 控制台设置变量：
 
    | 变量名 | 必填 | 说明 |
    | --- | --- | --- |
    | `AUTH_KEY` | 可选 | 管理面板访问密钥 |
 
-   首次访问时，可以直接在页面中输入 `AUTH_KEY` 的值，也可以直接访问：
+   首次访问时，可以直接在页面中输入 `AUTH_KEY`，也可以访问：
 
    ```text
    https://你的-worker-url/?key=你的AUTH_KEY
    ```
 
-   登录后 Worker 会写入 HttpOnly Cookie，后续可直接打开面板。
+   面板会把该值保存在当前浏览器标签页的 `sessionStorage` 中，并在 API 请求头里发送；不会写入 HttpOnly Cookie。
 
-4. 打开面板并进入配置中心：
+5. 部署：
+
+   ```powershell
+   npx wrangler deploy --config ../wrangler.toml
+   ```
+
+6. 打开面板并进入配置中心：
    - 打开 Worker 地址。
    - 进入 **配置中心**。
    - 填写维护域名、Zone ID、CF Key、管理域名、检测 API、Telegram 等配置。
    - 保存后配置会写入 KV 的 `app_config`，优先级高于环境变量。
 
-5. 配置定时任务：
-   - 如需自动维护，需要同时开启配置中心里的自动维护开关，并在 Worker 中配置 Cron Triggers。
-   - Worker -> **Triggers** -> **Cron Triggers** 添加，例如：
+7. 定时维护：
+   - `wrangler.toml` 已声明每 3 小时一次的 Cron：
 
    ```text
    0 */3 * * *
    ```
 
-   表示每 3 小时执行一次自动维护。
+   - 同时需要在配置中心开启自动维护；关闭时定时任务会直接跳过。
 
 </details>
 
-### 🚀 Worker 自动部署
+### 🚀 Cloudflare Git 集成部署
 
 <details>
-<summary><code><strong>「 Worker 自动部署文字教程 」</strong></code></summary>
+<summary><code><strong>「 Git 集成部署文字教程 」</strong></code></summary>
 
-1. Fork 本仓库并在 Cloudflare 中连接该仓库。（可以顺手点个star）
+1. Fork 本仓库并在 Cloudflare Workers 中连接该仓库。
+2. Worker 项目名称需与 `wrangler.toml` 里的 `name` 一致，例如 `ddns-cf-proxyip`。
+3. 在构建配置中填写：
 
-2. Cloudflare 中创建/连接的 Worker 项目名称需与 [`wrangler.toml`](./wrangler.toml) 里的 `name` 保持一致，例如 `ddns-cf-proxyip`，不然后续更新会冲突。
+   ```text
+   Build command: cd app && npm ci && npm run build
+   Deploy command: npx wrangler deploy --config wrangler.toml
+   ```
 
-3. 然后环境变量可选设置面板密码，进入面板配置即可使用。
+4. 为 Worker 绑定 KV，变量名必须是 `IP_DATA`。
+5. 可选设置 `AUTH_KEY`，然后打开面板完成配置。
 
-4. 可打开 **action** 自动同步工作流，这样就可以自动同步上游并更新项目了。
-
-> 本仓库的 [`wrangler.toml`](./wrangler.toml) 会指定 Worker 入口为 `_worker.js`，并声明 `IP_DATA` KV 绑定和每 3 小时一次的 cron 触发器。
-
+> [`wrangler.toml`](./wrangler.toml) 是部署事实源：Worker 入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`，KV 绑定名是 `IP_DATA`，并声明每 3 小时一次的 Cron。
 
 </details>
-
----
-
 ## 🔑 配置说明
 
 ### Cloudflare API Token 与 Zone ID

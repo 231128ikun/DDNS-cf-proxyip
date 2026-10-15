@@ -1,37 +1,53 @@
 # 重构状态
 
 > [!WARNING]
-> **本分支的模块化重构尚未完成。** 请勿将本分支直接视为稳定版本，也不要直接覆盖 `main` 或用于正式部署。
+> **本分支仍在重构中。** 不要把本分支当作稳定版本，也不要直接覆盖 `main`。合并前需要同步 `main`、完成 UI 验收和代码审查。
 
 ## 当前状态
 
-- 状态：进行中（Work in Progress）
+- 状态：进行中
 - 稳定分支：`main`
 - 重构分支：`codex/modular-refactor`
-- 目标：将原来的单文件 Worker 逐步拆分为便于测试和维护的模块化结构。
-- 验证：类型检查、单元测试和本机构建已完成；部署验证、与 `main` 最新变更的同步及最终审查尚未完成。
-- 合并要求：完成重构、测试和代码审查后，再通过 Pull Request 合并到 `main`。
+- 目标：保持 DDNS Pro 一套源码、一套 API 和一套 KV 数据，把原来的单文件实现拆分为可测试、可维护的模块。
+- 合并要求：完成 `main` 同步、测试、UI 验收和代码审查后，通过 Pull Request 合并到 `main`。
 
-## 注意事项
+## 已完成
 
-- 不要直接使用本分支覆盖 `main`。
-- 不要将本分支作为生产版本发布。
-- 完成收尾时，需要同步 `main` 上的最新安全修复和功能改动。
-## 工作区说明（2026-09-28）
+- Worker 源码从单文件拆分为 `contracts / domain / application / ports / adapters / transport / jobs / config`。
+- 浏览器端从 Worker 字符串模板迁移到 `app/web/` 的 Preact 源码。
+- 面板改为 Cloudflare Workers Static Assets：`app/dist/web` 是静态资源目录，Worker 只处理 `/api/*`。
+- 仓库不再提交 `_worker.js`；`wrangler.toml` 的入口是 `app/src/index.ts`。
+- 新增部署形态冒烟检查 `npm run smoke`，验证静态资源、API 路由和缺失资源 404 行为。
+- 移除重构期间夹带的 socket 探针、composite 探针和接口自检。
+- 一键洗库恢复为服务端用例：读池、检测、有效项写回、失效项统一入桶，未确认项不落盘。
 
-- `<main-checkout>` 固定检出稳定分支 `main`。
-- `<refactor-worktree>` 是正式的 Git worktree，检出 `codex/modular-refactor`。
-- 两个目录共享同一个 Git 仓库，但拥有各自独立的工作区和检出文件，互不覆盖。
+## 待完成
 
-## 最近验证（2026-09-28）
+- 同步 `main` 分支上的最新提交，逐条核对行为差异并处理冲突。
+- 完成垃圾桶维护报告的“距上次成功通知”基线快照。
+- 完成前端视觉语义化与组件整理，并通过桌面和窄屏 UI 验收。
+- 完成最终代码审查和 Pull Request。
 
-- `npm run typecheck`：通过。
-- `npm test`：通过，25 个测试文件、195 项测试全部成功。
-- `npm run build`：通过，发布入口成功生成。
-- `npm run check:size`：仍然失败，Web JS 的 gzip 合计为 25.30 KB，超过 25 KB 预算约 0.30 KB。
-- 构建时 Wrangler 提示“未正常退出，构建继续”，但最终构建进程返回成功并写出了产物。
+## 最近验证（2026-10-15）
 
-## 与 main 同步
+在 `app/` 下运行：
 
-- 重构分支当前基点仍是 `c93e64a`。
-- `main` 已经前进到包含最新安全修复和功能修复的提交，因此本分支完成前仍需同步 `main`，重新测试并处理潜在冲突。
+```powershell
+npm run check
+npm run smoke
+```
+
+结果：
+
+- 类型检查通过。
+- 单元测试通过：24 个测试文件、172 项测试。
+- 构建通过。
+- 体积门禁通过。
+- Worker 打包体积：127.63 KB raw / 30.31 KB gzip。
+- 冒烟检查通过：`/` 返回静态面板，`/api/health` 返回 Worker JSON，缺失 JS/CSS 返回 404。
+
+## 工作区说明
+
+- `<main-checkout>` 检出稳定分支 `main`。
+- `<refactor-worktree>` 是同一仓库的 worktree，检出 `codex/modular-refactor`。
+- 两个目录共享 Git 对象库，但工作区独立，互不覆盖。
