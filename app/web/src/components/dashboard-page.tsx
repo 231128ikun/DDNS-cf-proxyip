@@ -280,7 +280,8 @@ export function DashboardPage({
                   class="btn btn-success"
                   type="button"
                   aria-label="将输入框内容保存到当前 IP 池"
-                  disabled={savingPool || !ipText.trim()}
+                  title={inTrash ? '垃圾桶只能由维护和洗库流程写入' : undefined}
+                  disabled={savingPool || inTrash || !ipText.trim()}
                   onClick={actions.savePool}
                 >
                   <Icon name="save" /> {savingPool ? '保存中…' : '入库'}

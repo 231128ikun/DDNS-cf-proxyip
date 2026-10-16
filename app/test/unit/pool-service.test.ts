@@ -39,6 +39,15 @@ describe('PoolService', () => {
     expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('203.0.113.10:443,AS64500,US,v4 # keep');
   });
 
+  it('refuses to write the trash pool through save', async () => {
+    const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: '203.0.113.9:443,AS64500,US,v4 # dead 来自 ip_pool_001' });
+    const service = new PoolService(catalog);
+
+    await expect(service.save(TRASH_POOL_KEY, '203.0.113.10:443', 'append')).rejects.toThrow('垃圾桶只能由维护和洗库流程写入');
+    await expect(service.save(TRASH_POOL_KEY, '203.0.113.9:443', 'remove')).rejects.toThrow('垃圾桶只能由维护和洗库流程写入');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe('203.0.113.9:443,AS64500,US,v4 # dead 来自 ip_pool_001');
+  });
+
   it('creates, renames and deletes numbered pools only', async () => {
     const catalog = new MemoryPoolCatalog();
     const service = new PoolService(catalog);

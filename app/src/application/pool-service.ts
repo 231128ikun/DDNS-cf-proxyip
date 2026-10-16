@@ -42,6 +42,8 @@ export class PoolService {
 
   async save(poolKey: unknown, content: unknown, modeValue?: unknown): Promise<PoolSaveResponse> {
     const key = requirePoolKey(poolKey);
+    // 垃圾桶只有 addToTrash 一个写入入口：去重、上限截断与注释格式都依赖它。
+    if (key === TRASH_POOL_KEY) throw new PoolInputError('垃圾桶只能由维护和洗库流程写入');
     const mode = parseSaveMode(modeValue);
     const incoming = poolEntryMap(normalizeContent(content));
     const existing = poolEntryMap(await this.catalog.read(key));

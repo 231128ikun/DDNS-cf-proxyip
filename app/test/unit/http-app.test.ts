@@ -142,6 +142,24 @@ describe('HTTP app pool routes', () => {
     await expect(response.json()).resolves.toEqual({ error: 'IP 池标识无效' });
   });
 
+  it('refuses to write the trash pool through the save route', async () => {
+    const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: '203.0.113.9:443' });
+    const app = createHttpApp({
+      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      version: 'test',
+      pools: new PoolService(catalog),
+    });
+
+    const response = await app.request(`/api/pools/${TRASH_POOL_KEY}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '203.0.113.10:443' }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: '垃圾桶只能由维护和洗库流程写入' });
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe('203.0.113.9:443');
+  });
+
   it('restores and clears trash through explicit routes', async () => {
     const catalog = new MemoryPoolCatalog({
       [TRASH_POOL_KEY]: '203.0.113.10:443,AS64500,US,v4 # dead 来自 ip_pool_001',
