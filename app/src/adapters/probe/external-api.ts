@@ -306,10 +306,6 @@ function isSuccessfulProbe(probe: JsonRecord): boolean {
   return probe.ok === true || probe.success === true || readText(probe.status)?.toLowerCase() === 'success' || asRecord(probe.exit) !== null;
 }
 
-
-
-
-
 function pickExitFamily(record: JsonRecord, exitIp: string | undefined): ExitFamily {
   const stack = (readText(record.inferred_stack) ?? readText(record.stack) ?? readText(record.ipType) ?? '').toLowerCase();
   if (stack === 'dual_stack' || stack === 'dual' || stack === 'v4/v6') return 'dual';
@@ -338,9 +334,6 @@ function trimMessage(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, 240) : undefined;
 }
-
-
-
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);

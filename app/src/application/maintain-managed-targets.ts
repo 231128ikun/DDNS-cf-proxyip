@@ -32,7 +32,7 @@ export interface MaintenanceRunSummary {
   readonly probeErrors: number;
 }
 
-/** 维护任务补上的池数量对比；efore 是距上次成功通知的基线。 */
+/** 维护任务补上的池数量对比；before 是距上次成功通知的基线。 */
 export type MaintenanceRunReport = MaintenanceRunSummary & {
   readonly poolStats: MaintenancePoolStats;
 };

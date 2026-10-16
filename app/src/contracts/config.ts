@@ -2,7 +2,6 @@ import type { ExitFilter, TargetMode } from '../domain/managed-target';
 import { normalizeAsn, normalizeCountry } from '../domain/pool-entry';
 import { asRecord, parseFail, parseOk, type ParseResult } from './parse';
 
-export const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
 export const MIN_PROBE_TIMEOUT_MS = 500;
 export const MAX_PROBE_TIMEOUT_MS = 30_000;
 export const MAX_ENDPOINT_URL_LENGTH = 2_048;
@@ -10,12 +9,8 @@ export const MAX_SECRET_LENGTH = 512;
 export const MAX_ZONE_ID_LENGTH = 64;
 export const MAX_ZONES = 20;
 export const MAX_TARGETS = 100;
-export const MAX_PREFIX_LENGTH = 63;
-export const MIN_TARGET_PORT = 1;
 export const MAX_TARGET_PORT = 65_535;
 export const MAX_MIN_ACTIVE = 100;
-export const MAX_PROBE_ENDPOINTS = 2;
-export const TARGET_MODES = ['A', 'TXT'] as const;
 
 /** 运行时探针配置；不是 KV 数据模型，只由 AppConfig 派生。 */
 export interface ExternalApiEndpoint {

@@ -3,8 +3,8 @@ import { exitFamilyFromIp, type ProbeExit, type SingleExitFamily } from '../../d
 /**
  * 探针响应解析的公共规则。
  *
- * 外部检测 API 与双探针 Socket 适配器面对的是同一类出口信息（ip/asn/country），
- * 这里只保留一份解析实现，避免两个适配器各写一套字段兼容。
+ * 外部检测 API 的响应字段（ip/asn/country）只在这里解析一份，
+ * 避免每个调用点各写一套字段兼容。
  */
 export type JsonRecord = Record<string, unknown>;
 

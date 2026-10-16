@@ -25,11 +25,6 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
 }
 
-/** 只允许白名单字段，等价于 schema 的 strict 模式。 */
-export function hasOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
-  return Object.keys(record).every((key) => allowed.includes(key));
-}
-
 export function readTrimmedString(value: unknown, min: number, max: number): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -38,12 +33,4 @@ export function readTrimmedString(value: unknown, min: number, max: number): str
 
 export function readInteger(value: unknown, min: number, max: number): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : null;
-}
-
-export function readBoolean(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null;
-}
-
-export function readEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
-  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : null;
 }
