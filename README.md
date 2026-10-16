@@ -47,6 +47,22 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 > 推荐部署顺序：准备 Node.js 22 -> 构建源码 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 部署 -> 打开面板保存配置。
 > 仓库不再提供“复制单文件到 Worker 编辑器”的部署方式，也不提交 `_worker.js`。
 
+### ☁️ 一键部署
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip)
+
+点击按钮后授权仓库，并在 Cloudflare 给出的部署设置里确认两项：
+
+| 设置项 | 值 |
+| --- | --- |
+| Build command | `cd app && npm ci && npm run build` |
+| Deploy command | `npx wrangler deploy` |
+
+- Worker 名称、入口和静态资源目录都由仓库根目录的 [`wrangler.toml`](./wrangler.toml) 决定：入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`。
+- Cloudflare 会读取 `wrangler.toml` 并自动创建/绑定 `IP_DATA` KV 命名空间；如果这一步没有自动完成，按下面的手动步骤补一个同名绑定，功能不受影响。
+- 部署完成后打开 Worker 地址，在 **配置中心** 填写 Zone ID、CF Key、维护域名与检测 API。
+- 想在公开地址上保护面板，就给 Worker 添加 `AUTH_KEY` 环境变量；不设置时任何人都能打开面板。
+
 ### ⚙️ Wrangler 本地部署
 
 <details>
