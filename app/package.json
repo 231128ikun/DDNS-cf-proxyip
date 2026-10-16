@@ -3,6 +3,14 @@
   "version": "0.7.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/231128ikun/DDNS-cf-proxyip.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "npm run build && wrangler dev --config ../wrangler.toml",
     "clean": "node scripts/clean.mjs",

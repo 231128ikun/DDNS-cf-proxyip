@@ -1,7 +1,7 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-> [!WARNING]
-> **重构状态：进行中（WIP）** 本分支的模块化重构尚未完成，不能直接视为稳定版本或用于正式部署。详细说明见 [REFACTOR_STATUS.md](./REFACTOR_STATUS.md)。
+> [!NOTE]
+> 本分支 `codex/modular-refactor` 是独立重构线，与 `main` 并行演进、不合并。当前状态、与 `main` 的差异和验证结果见 [docs/refactor-status.md](./docs/refactor-status.md)。
 
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
@@ -275,6 +275,25 @@ txt@example.com      # 读取 TXT 记录里的地址列表并逐个探测
 ## 🧩 内部设计说明
 
 下面内容主要用于了解项目内部数据格式、检测接口要求和维护流程。普通部署只需要看前面的快速部署、配置说明和使用说明。
+
+### 仓库结构
+
+| 路径 | 用途 |
+| --- | --- |
+| `app/src/contracts/` | 跨层类型、API 输入输出与轻量手写校验 |
+| `app/src/domain/` | 地址、目标、探针结果、IP 池等纯业务规则 |
+| `app/src/application/` | 用例编排；不直接访问 `env`、KV 或 `fetch` |
+| `app/src/ports/` | 存储、探针、DNS、通知等接口 |
+| `app/src/adapters/` | KV、Cloudflare DNS、探针、DoH、Telegram 等外部实现 |
+| `app/src/transport/` | HTTP 路由、鉴权、请求校验和错误映射 |
+| `app/src/jobs/` | cron 与手动维护共用的任务入口 |
+| `app/src/config/` | 环境变量解析与运行时适配器装配 |
+| `app/web/` | 浏览器端 Preact 源码（构建到 `app/dist/web`） |
+| `app/scripts/` | 构建、清理、体积门禁、冒烟与 UI 验收脚本 |
+| `docs/` | 重构状态、IP 池与存储设计等文档 |
+| `wrangler.toml` | 部署事实源：Worker 入口、静态资源目录、KV 绑定与 Cron |
+
+依赖方向固定为 `transport/jobs -> application -> domain + ports <- adapters`：业务规则不依赖 HTTP、KV、`fetch` 或页面。
 
 ### 检测 API
 
