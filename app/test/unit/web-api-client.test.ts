@@ -8,11 +8,17 @@ describe('web API client', () => {
       expect(init?.method).toBe('POST');
       expect(init?.body).toBe(JSON.stringify({ proxyip: '203.0.113.10:443' }));
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secret');
-      return Response.json({ status: 'alive', exitFamily: 'ipv4', exits: [] });
+      return Response.json({
+        ok: true,
+        input: '203.0.113.10:443',
+        source: { kind: 'direct' },
+        items: [{ address: '203.0.113.10:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
     });
     const client = new ApiClient({ authKey: ' secret ', fetchImpl: fetchMock as typeof fetch });
 
-    await expect(client.check('203.0.113.10:443')).resolves.toMatchObject({ status: 'alive' });
+    await expect(client.checkTarget('203.0.113.10:443')).resolves.toMatchObject({ ok: true, source: { kind: 'direct' } });
   });
 
   it('maps API error responses to ApiError', async () => {

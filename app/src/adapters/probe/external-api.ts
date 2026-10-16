@@ -10,6 +10,7 @@ import {
 } from '../../domain/probe-result';
 import type { ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
+import { createRequestTimeout } from '../../util/request-timeout';
 import {
   firstText,
   readProbeExit,
@@ -116,32 +117,6 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
 export function buildProbeUrl(urlTemplate: string, target: ProxyTarget): string {
   const encoded = encodeURIComponent(target.authority);
   return urlTemplate.includes('{proxyip}') ? urlTemplate.replaceAll('{proxyip}', encoded) : `${urlTemplate}${encoded}`;
-}
-
-function createRequestTimeout(timeoutMs: number, externalSignal?: AbortSignal): {
-  signal: AbortSignal;
-  didTimeout: () => boolean;
-  cleanup: () => void;
-} {
-  const controller = new AbortController();
-  let timedOut = false;
-  const handleExternalAbort = () => controller.abort(externalSignal?.reason);
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-
-  if (externalSignal?.aborted) handleExternalAbort();
-  else externalSignal?.addEventListener('abort', handleExternalAbort, { once: true });
-
-  return {
-    signal: controller.signal,
-    didTimeout: () => timedOut,
-    cleanup: () => {
-      clearTimeout(timer);
-      externalSignal?.removeEventListener('abort', handleExternalAbort);
-    },
-  };
 }
 
 function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: string, latencyMs: number): ProbeResult {

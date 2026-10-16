@@ -23,6 +23,8 @@ export interface RuntimeEnv {
   readonly TG_ENABLED?: string;
   readonly CHECK_API?: string;
   readonly CHECK_API_BACKUP?: string;
+  /** 公共 DNS 查询接口；`txt@域名` 与裸域名探测都依赖它。 */
+  readonly DOH_API?: string;
   readonly CHECK_TIMEOUT?: string;
   readonly REMOTE_LOAD_TIMEOUT?: string;
   readonly IP_DATA?: KVNamespace;
@@ -44,6 +46,7 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
       : defaults.zones,
     checkApi: readLengthBounded(env.CHECK_API, defaults.checkApi),
     checkApiBackup: readLengthBounded(env.CHECK_API_BACKUP, defaults.checkApiBackup),
+    dohApi: readLengthBounded(env.DOH_API, defaults.dohApi),
     authKey: readLengthBounded(env.AUTH_KEY, defaults.authKey),
     tgToken: readLengthBounded(env.TG_TOKEN, defaults.tgToken),
     tgId: readLengthBounded(env.TG_ID, defaults.tgId, 64),

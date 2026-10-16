@@ -1,4 +1,5 @@
 import { CloudflareDnsRepository } from './adapters/dns/cloudflare-dns';
+import { DohLookup } from './adapters/dns/doh-lookup';
 import { TelegramNotifier } from './adapters/notify/telegram';
 import { KvConfigRepository } from './adapters/storage/kv-config-repository';
 import { KvDomainBindingRepository } from './adapters/storage/kv-domain-binding-repository';
@@ -9,12 +10,14 @@ import { KvPoolRepository } from './adapters/storage/kv-pool-repository';
 import { CheckPoolText } from './application/check-pool';
 import { CleanPool } from './application/clean-pool';
 import { CheckProxy } from './application/check-proxy';
+import { CheckTarget } from './application/check-target';
 import { ConfigService } from './application/config-service';
 import { DomainBindings } from './application/domain-bindings';
 import { MaintainManagedTarget } from './application/maintain-managed-target';
 import { MaintainManagedTargets } from './application/maintain-managed-targets';
 import { PoolService } from './application/pool-service';
 import { RemotePoolLoader } from './application/remote-pool-loader';
+import { ResolveTarget } from './application/resolve-target';
 import { createProbeAdapterFromConfig, loadEnvConfig, type RuntimeEnv } from './config/runtime';
 import { toProbeConfig, type AppConfig, type ProbeConfig } from './contracts/config';
 import { runMaintenanceJob } from './jobs/maintenance-job';
@@ -26,6 +29,8 @@ export const APP_VERSION = '2026.10.16-09.53';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
+/** DoH 查询超时：域名解析比节点探测更快，超过这个时间就该让用户重试。 */
+const DOH_TIMEOUT_MS = 5_000;
 
 /**
  * Worker 入口装配：配置、探针、存储、维护 runner 只有这一份组装顺序，
@@ -48,9 +53,14 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         : null;
 
       const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.BACKEND_CONCURRENT_CHECKS);
+      const checkTarget = new CheckTarget({
+        resolver: new ResolveTarget(new DohLookup({ endpoint: resolved.config.dohApi, timeoutMs: DOH_TIMEOUT_MS })),
+        checkProxy,
+        concurrency: resolved.config.settings.BACKEND_CONCURRENT_CHECKS,
+      });
 
       const dependencies: HttpAppDependencies = {
-        checkProxy,
+        checkTarget,
         checkPool,
         version: APP_VERSION,
         configSource: resolved.source,

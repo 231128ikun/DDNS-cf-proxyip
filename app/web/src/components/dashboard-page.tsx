@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
-import type { HealthResponse, ProbeResponse } from '../../../src/contracts/probe';
+import type { CheckTargetItemResponse, CheckTargetResponse, HealthResponse, ProbeResponse } from '../../../src/contracts/probe';
 import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
 import { countPoolTextLines } from '../../../src/domain/pool-text';
 import type { RequestState } from '../state/request-state';
@@ -40,7 +40,7 @@ export interface DashboardActions {
 
 interface DashboardPageProps {
   readonly health: RequestState<HealthResponse>;
-  readonly check: RequestState<ProbeResponse>;
+  readonly check: RequestState<CheckTargetResponse>;
   readonly pools: RequestState<PoolsResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
   readonly lookup: string;
@@ -145,7 +145,7 @@ export function DashboardPage({
                 </tr>
               </thead>
               <tbody id="status-table">
-                <StatusRow state={check} lookup={lookup} />
+                <StatusRow state={check} />
               </tbody>
             </table>
           </div>
@@ -529,7 +529,7 @@ function PoolActionMenu({
   );
 }
 
-function StatusRow({ state, lookup }: { readonly state: RequestState<ProbeResponse>; readonly lookup: string }) {
+function StatusRow({ state }: { readonly state: RequestState<CheckTargetResponse> }) {
   if (state.status === 'idle') {
     return <EmptyStatusRow text="暂无解析记录。" />;
   }
@@ -544,15 +544,33 @@ function StatusRow({ state, lookup }: { readonly state: RequestState<ProbeRespon
     );
   }
 
-  const { data } = state;
+  const { source, items } = state.data;
+  // 解析出来的目标可能是多个地址，逐行展示，解析来源放在首行提示里。
+  const hint = source.kind === 'direct'
+    ? null
+    : `${source.kind === 'txt' ? 'txt@' : ''}${source.host ?? ''} 解析到 ${items.length} 个地址`;
+  return (
+    <>
+      {hint && (
+        <tr>
+          <td colspan={6} class="text-secondary small py-2">{hint}</td>
+        </tr>
+      )}
+      {items.map((item) => <StatusItemRow key={item.address} item={item} />)}
+    </>
+  );
+}
+
+function StatusItemRow({ item }: { readonly item: CheckTargetItemResponse }) {
+  const { result } = item;
   return (
     <tr>
-      <td class="fw-bold" data-label="目标">{lookup}</td>
+      <td class="fw-bold" data-label="目标">{item.address}</td>
       <td data-label="Colo">—</td>
-      <td data-label="延迟">{data.latencyMs === undefined ? '—' : `${data.latencyMs} ms`}</td>
-      <td data-label="状态"><ProbeBadge status={data.status} /></td>
-      <td class="text-start status-exit-cell" data-label="出口">{formatExits(data)}</td>
-      <td data-label="结果">{data.code ?? '—'}</td>
+      <td data-label="延迟">{result.latencyMs === undefined ? '—' : `${result.latencyMs} ms`}</td>
+      <td data-label="状态"><ProbeBadge status={result.status} /></td>
+      <td class="text-start status-exit-cell" data-label="出口">{formatExits(result)}</td>
+      <td data-label="结果">{result.code ?? '—'}</td>
     </tr>
   );
 }
@@ -576,7 +594,7 @@ function Console({
   batch,
 }: {
   readonly health: RequestState<HealthResponse>;
-  readonly check: RequestState<ProbeResponse>;
+  readonly check: RequestState<CheckTargetResponse>;
   readonly pools: RequestState<PoolsResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
 }) {
@@ -596,7 +614,7 @@ function Console({
       {pools.status === 'error' && <div class="console-line console-error">✗ {pools.message}</div>}
       {check.status === 'ready' && (
         <div class="console-line">
-          [检测] {probeStatusLabel(check.data.status)} · {check.data.exitIp ?? '出口未知'} · {check.data.latencyMs ?? '—'} ms
+          [探测] {check.data.items.length} 个目标 · 可用 {check.data.items.filter((item) => item.result.status === 'alive').length} / 失效 {check.data.items.filter((item) => item.result.status === 'dead').length} / 未知 {check.data.items.filter((item) => item.result.status === 'unknown').length}
         </div>
       )}
       {check.status === 'error' && <div class="console-line console-error">✗ {check.message}</div>}

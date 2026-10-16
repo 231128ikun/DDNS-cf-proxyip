@@ -1,5 +1,5 @@
 import type { CheckPoolText, PoolCheckItem, PoolCheckReport } from '../application/check-pool';
-import { CheckProxy } from '../application/check-proxy';
+import type { CheckTarget, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
 import { DomainBindingsInputError, type DomainBindings } from '../application/domain-bindings';
@@ -25,7 +25,12 @@ import type {
   SavePoolOrderRequest,
   SavePoolRequest,
 } from '../contracts/pool';
-import { parseCheckProxyInput, type HealthResponse, type ProbeResponse } from '../contracts/probe';
+import {
+  parseCheckProxyInput,
+  type CheckTargetResponse,
+  type HealthResponse,
+  type ProbeResponse,
+} from '../contracts/probe';
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { formatPoolEntry } from '../domain/pool-entry';
@@ -35,7 +40,8 @@ import { isAuthorized } from './auth';
 import { errorResponse, jsonResponse, readJsonBody, Router, type RouteContext } from './router';
 
 export interface HttpAppDependencies {
-  readonly checkProxy: CheckProxy;
+  /** 探测入口：内部负责域名解析与逐地址探测。 */
+  readonly checkTarget: CheckTarget;
   readonly version: string;
   readonly configSource?: EffectiveConfigSource;
   readonly authKey?: string;
@@ -87,17 +93,10 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     return jsonResponse(response);
   });
 
-  router.get('/api/check', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
-    const parsed = parseCheckProxyInput(context.url.searchParams.get('proxyip'));
-    if (!parsed.ok) return errorResponse('invalid proxyip', 400);
-
-    const result = await dependencies.checkProxy.execute(parsed.value, { signal: context.request.signal });
-    return jsonResponse(toProbeResponse(result));
-  });
-
+  /**
+   * 面板探测入口：`txt@域名` 取 TXT 列表，裸域名解析 A/AAAA，
+   * IP 与带端口目标直接探测；解析失败按输入错误返回，不会把节点判成失效。
+   */
   router.post('/api/check', async (context) => {
     const denied = guard(context);
     if (denied) return denied;
@@ -108,8 +107,10 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const parsed = parseCheckProxyInput((body.value as { proxyip?: unknown } | null)?.proxyip);
     if (!parsed.ok) return errorResponse('invalid proxyip', 400);
 
-    const result = await dependencies.checkProxy.execute(parsed.value, { signal: context.request.signal });
-    return jsonResponse(toProbeResponse(result));
+    const outcome = await dependencies.checkTarget.execute(parsed.value, { signal: context.request.signal });
+    if (!outcome.ok) return errorResponse(outcome.message, 400);
+
+    return jsonResponse(toCheckTargetResponse(outcome.report));
   });
 
   router.post('/api/check/batch', async (context) => {
@@ -452,6 +453,19 @@ function toMaintenanceResponse(run: MaintenanceJobResult['run']): MaintenanceRun
       probeErrors: report?.probeErrors ?? 0,
       error: error ?? (report?.errors.length ? report.errors.join('；') : null),
     })),
+  };
+}
+
+function toCheckTargetResponse(report: CheckTargetReport): CheckTargetResponse {
+  const { source } = report;
+  return {
+    ok: true,
+    input: report.input,
+    source: source.kind === 'direct'
+      ? { kind: 'direct' }
+      : { kind: source.kind, host: source.host, addresses: source.addresses },
+    items: report.items.map((item) => ({ address: item.address, result: toProbeResponse(item.result) })),
+    skipped: report.skipped,
   };
 }
 

@@ -34,6 +34,7 @@ interface ConfigForm {
   readonly targets: readonly TargetConfig[];
   readonly checkApi: string;
   readonly checkApiBackup: string;
+  readonly dohApi: string;
   readonly projectUrl: string;
   readonly zoneId: string;
   readonly tgId: string;
@@ -260,6 +261,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
           </section>
 
           <div class="config-grid mb-3">
+            <TextField id="cfg-doh" label="DoH API" help="`txt@域名` 与域名解析探测使用的公共 DNS 接口。" value={form.dohApi} onValue={(value) => patch({ dohApi: value })} />
             <TextField id="cfg-project-url" label="项目地址" help="页脚和通知中展示，可留空。" value={form.projectUrl} onValue={(value) => patch({ projectUrl: value })} />
             {SETTINGS_FIELDS.map(([key, label, help]) => (
               <NumberField key={key} id={`cfg-${key}`} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
@@ -549,6 +551,7 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
     targets: config.targets.map((target) => ({ ...target })),
     checkApi: config.checkApi,
     checkApiBackup: config.checkApiBackup,
+    dohApi: config.dohApi,
     projectUrl: config.projectUrl,
     zoneId: config.zoneId,
     tgId: config.tgId,
@@ -585,6 +588,7 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
     targets: form.targets.map(normalizeTargetDraft),
     checkApi: form.checkApi.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
+    dohApi: form.dohApi.trim(),
     ...(authKey === undefined ? {} : { authKey }),
     ...(tgToken === undefined ? {} : { tgToken }),
     tgId: form.tgId.trim(),

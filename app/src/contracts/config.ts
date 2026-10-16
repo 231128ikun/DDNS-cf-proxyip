@@ -80,6 +80,7 @@ export interface AppConfig {
   readonly targets: readonly TargetConfig[];
   readonly checkApi: string;
   readonly checkApiBackup: string;
+  readonly dohApi: string;
   readonly authKey: string;
   readonly tgToken: string;
   readonly tgId: string;
@@ -103,6 +104,7 @@ export interface PublicAppConfig {
   readonly zoneId: string;
   readonly checkApi: string;
   readonly checkApiBackup: string;
+  readonly dohApi: string;
   readonly tgId: string;
   readonly scheduledEnabled: boolean;
   readonly tgEnabled: boolean;
@@ -132,6 +134,7 @@ export function createDefaultConfig(): AppConfig {
     targets: [],
     checkApi: '',
     checkApiBackup: 'https://checkapi.dvb.kdns.fr/?candidate=',
+    dohApi: 'https://cloudflare-dns.com/dns-query',
     authKey: '',
     tgToken: '',
     tgId: '',
@@ -155,6 +158,7 @@ export function toPublicConfig(config: AppConfig): PublicAppConfig {
     zoneId: config.zoneId,
     checkApi: config.checkApi,
     checkApiBackup: config.checkApiBackup,
+    dohApi: config.dohApi,
     tgId: config.tgId,
     scheduledEnabled: config.scheduledEnabled,
     tgEnabled: config.tgEnabled,
@@ -199,6 +203,7 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     targets,
     checkApi: text(record.checkApi, base.checkApi, MAX_ENDPOINT_URL_LENGTH),
     checkApiBackup: text(record.checkApiBackup, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH),
+    dohApi: text(record.dohApi, base.dohApi, MAX_ENDPOINT_URL_LENGTH),
     authKey: text(record.authKey, base.authKey, MAX_SECRET_LENGTH),
     tgToken: text(record.tgToken, base.tgToken, MAX_SECRET_LENGTH),
     tgId: text(record.tgId, base.tgId, 64),

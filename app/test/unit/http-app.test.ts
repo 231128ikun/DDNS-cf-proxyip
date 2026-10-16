@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { CheckPoolText } from '../../src/application/check-pool';
 import { DomainBindings } from '../../src/application/domain-bindings';
 import { CheckProxy } from '../../src/application/check-proxy';
+import { CheckTarget } from '../../src/application/check-target';
+import { ResolveTarget } from '../../src/application/resolve-target';
 import { PoolService } from '../../src/application/pool-service';
 import { RemotePoolLoader } from '../../src/application/remote-pool-loader';
 import { createDefaultConfig, type AppConfig, type ConfigResponse } from '../../src/contracts/config';
@@ -9,9 +11,24 @@ import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
 import { alive, type ProbeResult } from '../../src/domain/probe-result';
 import type { MaintenanceJobResult } from '../../src/jobs/maintenance-job';
 import type { ProxyTarget } from '../../src/domain/proxy-target';
+import type { DnsLookup } from '../../src/ports/dns-lookup';
 import type { ProbeAdapter } from '../../src/ports/probe';
 import { createHttpApp, type ConfigGateway, type MaintenanceRunner } from '../../src/transport/http';
 import { MemoryPoolCatalog } from '../helpers/memory-pool-catalog';
+
+/** POST JSON 用例在所有路由测试里重复，抽成一处，避免每个用例再写一遍头部。 */
+function postJson(
+  app: ReturnType<typeof createHttpApp>,
+  path: string,
+  body: unknown,
+  headers: Readonly<Record<string, string>> = {},
+): Promise<Response> {
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
 
 class FakeProbeAdapter implements ProbeAdapter {
   readonly name = 'fake';
@@ -21,9 +38,17 @@ class FakeProbeAdapter implements ProbeAdapter {
   }
 }
 
+/** 测试里探测入口默认不解析域名；需要解析的用例自己传入 lookup 桩。 */
+function createCheckTarget(
+  adapter: ProbeAdapter = new FakeProbeAdapter(),
+  lookup: DnsLookup = { query: async () => ({ ok: true, values: [] }) },
+): CheckTarget {
+  return new CheckTarget({ resolver: new ResolveTarget(lookup), checkProxy: new CheckProxy(adapter) });
+}
+
 function createApp() {
   return createHttpApp({
-    checkProxy: new CheckProxy(new FakeProbeAdapter()),
+    checkTarget: createCheckTarget(),
     version: 'test',
   });
 }
@@ -35,23 +60,61 @@ describe('HTTP app', () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true, version: 'test' });
   });
 
-  it('checks a target through the adapter', async () => {
-    const response = await createApp().request('/api/check?proxyip=203.0.113.10:443');
+  it('checks a direct target through the adapter', async () => {
+    const response = await postJson(createApp(), '/api/check', { proxyip: '203.0.113.10:443' });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ status: 'alive', exitIp: '198.51.100.8' });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      input: '203.0.113.10:443',
+      source: { kind: 'direct' },
+      items: [{ address: '203.0.113.10:443', result: { status: 'alive', exitIp: '198.51.100.8' } }],
+      skipped: [],
+    });
+  });
+
+  it('resolves txt targets before probing', async () => {
+    const lookup: DnsLookup = {
+      async query(_name, type) {
+        if (type !== 'TXT') return { ok: true, values: [] };
+        return { ok: true, values: ['"203.0.113.10:443,203.0.113.11:443"'] };
+      },
+    };
+    const app = createHttpApp({ checkTarget: createCheckTarget(new FakeProbeAdapter(), lookup), version: 'test' });
+
+    const response = await postJson(app, '/api/check', { proxyip: 'txt@example.com' });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      source: { kind: 'txt', host: 'example.com', addresses: ['203.0.113.10:443', '203.0.113.11:443'] },
+      items: [{ address: '203.0.113.10:443' }, { address: '203.0.113.11:443' }],
+    });
+  });
+
+  it('reports unresolvable domains as input errors', async () => {
+    const lookup: DnsLookup = {
+      async query() {
+        return { ok: false, code: 'DNS_STATUS', message: 'DoH 返回状态 3' };
+      },
+    };
+    const app = createHttpApp({ checkTarget: createCheckTarget(new FakeProbeAdapter(), lookup), version: 'test' });
+
+    const response = await postJson(app, '/api/check', { proxyip: 'missing.example.com' });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('域名解析失败') });
   });
 
   it('enforces the optional auth key', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       authKey: 'secret',
     });
-    const unauthorized = await app.request('/api/check?proxyip=203.0.113.10:443');
+    const unauthorized = await postJson(app, '/api/check', { proxyip: '203.0.113.10:443' });
     expect(unauthorized.status).toBe(401);
 
-    const authorized = await app.request('/api/check?proxyip=203.0.113.10:443', {
-      headers: { authorization: 'Bearer secret' },
+    const authorized = await postJson(app, '/api/check', { proxyip: '203.0.113.10:443' }, {
+      authorization: 'Bearer secret',
     });
     expect(authorized.status).toBe(200);
   });
@@ -71,7 +134,7 @@ describe('HTTP app pool routes', () => {
   it('lists, reads, writes, creates, renames, orders and deletes pools', async () => {
     const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: '203.0.113.10:443' });
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       pools: new PoolService(catalog),
     });
@@ -128,7 +191,7 @@ describe('HTTP app pool routes', () => {
 
   it('rejects pool keys outside the ip_pool_ whitelist', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       pools: new PoolService(new MemoryPoolCatalog()),
     });
@@ -145,7 +208,7 @@ describe('HTTP app pool routes', () => {
   it('refuses to write the trash pool through the save route', async () => {
     const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: '203.0.113.9:443' });
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       pools: new PoolService(catalog),
     });
@@ -165,7 +228,7 @@ describe('HTTP app pool routes', () => {
       [TRASH_POOL_KEY]: '203.0.113.10:443,AS64500,US,v4 # dead 来自 ip_pool_001',
     });
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       pools: new PoolService(catalog),
     });
@@ -191,7 +254,7 @@ describe('HTTP app pool routes', () => {
 
   it('guards pool routes with the shared auth key', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       authKey: 'secret',
       pools: new PoolService(new MemoryPoolCatalog()),
@@ -204,7 +267,7 @@ describe('HTTP app pool routes', () => {
 
   it('checks batch text through the shared pool parser', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       checkPool: new CheckPoolText(new CheckProxy(new FakeProbeAdapter())),
     });
@@ -243,7 +306,7 @@ describe('HTTP app config routes', () => {
   function createConfigApp(config: AppConfig) {
     const gateway = createConfigGateway(config);
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       config: gateway,
     });
@@ -349,7 +412,7 @@ describe('HTTP app config routes', () => {
 
   it('guards config routes with the shared auth key', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       authKey: 'secret',
       config: createConfigGateway(stored),
@@ -363,7 +426,7 @@ describe('HTTP app config routes', () => {
 describe('HTTP app remote load route', () => {
   function createRemoteApp(loader?: RemotePoolLoader) {
     return createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       ...(loader ? { remotePoolLoader: loader } : {}),
     });
@@ -461,7 +524,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
   it('lists and updates domain bindings through the shared application service', async () => {
     const { bindings, stored } = createBindings({ 'a.example.com|A': 'ip_pool_default' });
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       domainBindings: bindings,
     });
@@ -485,7 +548,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
   it('saves the domain binding display order through the same resource', async () => {
     const { bindings, order } = createBindings();
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       domainBindings: bindings,
     });
@@ -509,7 +572,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
   });
   it('rejects invalid pool keys and malformed payloads with 400', async () => {
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       domainBindings: createBindings().bindings,
     });
@@ -535,7 +598,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
     expect(unavailable.status).toBe(503);
 
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       authKey: 'secret',
       domainBindings: createBindings().bindings,
@@ -568,7 +631,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
     const run = vi.fn(async () => job);
     const maintenance: MaintenanceRunner = { run };
     const app = createHttpApp({
-      checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      checkTarget: createCheckTarget(),
       version: 'test',
       maintenance,
     });

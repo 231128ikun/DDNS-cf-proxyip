@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckResponse } from '../../src/contracts/pool-check';
-import type { ProbeResponse } from '../../src/contracts/probe';
+import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { countPoolTextLines } from '../../src/domain/pool-text';
@@ -28,7 +28,7 @@ export function App() {
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [lookup, setLookup] = useState('');
-  const [check, setCheck] = useState<RequestState<ProbeResponse>>({ status: 'idle' });
+  const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
   const [ipText, setIpText] = useState('');
   const [filterText, setFilterText] = useState('');
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -112,7 +112,7 @@ export function App() {
       return;
     }
     setCheck({ status: 'loading' });
-    client.check(value)
+    client.checkTarget(value)
       .then((data) => setCheck({ status: 'ready', data }))
       .catch((error: unknown) => setCheck({ status: 'error', message: errorMessage(error) }));
   };

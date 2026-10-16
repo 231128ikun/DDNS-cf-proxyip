@@ -8,7 +8,7 @@ import type {
   PoolsResponse,
   RestoreTrashResponse,
 } from '../../../src/contracts/pool';
-import type { ApiErrorResponse, HealthResponse, ProbeResponse } from '../../../src/contracts/probe';
+import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
@@ -48,8 +48,9 @@ export class ApiClient {
     return await this.request<HealthResponse>('/api/health', 'GET', undefined, signal);
   }
 
-  async check(proxyip: string, signal?: AbortSignal): Promise<ProbeResponse> {
-    return await this.request<ProbeResponse>('/api/check', 'POST', { proxyip }, signal);
+  /** 探测入口：域名解析与逐地址探测都在服务端完成，前端只负责展示结果。 */
+  async checkTarget(proxyip: string, signal?: AbortSignal): Promise<CheckTargetResponse> {
+    return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal);
   }
 
   /** 批量检测复用服务端解析与并发控制，前端不再重复实现 IP 池文本解析。 */
