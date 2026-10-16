@@ -8,6 +8,7 @@ import {
 import {
   buildMaintenancePlan,
   decideCurrentResult,
+  orderCandidatesForAddition,
   type CandidateMaintenanceItem,
   type CurrentMaintenanceItem,
   type MaintenancePlan,
@@ -25,6 +26,14 @@ export interface MaintainManagedTargetCommand {
   readonly zone: DnsZone;
   readonly poolKey: string;
 }
+
+/**
+ * 候选探测窗口：按需数量放大探索倍数，避免“第一个可用就收工”，
+ * 同时给全失效的池兜住子请求预算——早期实现会一直探测到池底。
+ */
+const CANDIDATE_EXPLORE_FACTOR = 2;
+const CANDIDATE_EXPLORE_EXTRA = 1;
+const MAX_CANDIDATE_PROBES = 12;
 
 export interface MaintainManagedTargetDependencies {
   readonly probe: ProbeAdapter;
@@ -70,7 +79,7 @@ export class MaintainManagedTarget {
       command.target,
       excludedAddresses,
     );
-    const probedCandidates = await this.probeCandidatesUntilTarget(command.target, candidates, activeCount);
+    const probedCandidates = await this.probeCandidates(command.target, candidates, activeCount);
     const plan = buildMaintenancePlan({ target: command.target, current, candidates: probedCandidates, poolText });
     const probeErrors = current.filter((item) => isProbeErrorResult(item.result)).length
       + probedCandidates.filter((item) => isProbeErrorResult(item.result)).length;
@@ -129,18 +138,25 @@ export class MaintainManagedTarget {
     }));
   }
 
-  private async probeCandidatesUntilTarget(
+  /**
+   * 只探测一个有界窗口，再按“能补位 + 延迟”排序返回：
+   * 既要挑到更快的候选，又不能让全失效的池把子请求打满。
+   */
+  private async probeCandidates(
     target: ManagedTarget,
     candidates: readonly PoolEntry[],
     currentActiveCount: number,
-  ): Promise<CandidateMaintenanceItem[]> {
-    const results: CandidateMaintenanceItem[] = [];
-    let activeCount = currentActiveCount;
+  ): Promise<readonly CandidateMaintenanceItem[]> {
+    const needed = Math.max(0, target.minActive - currentActiveCount);
+    if (needed === 0 || candidates.length === 0) return [];
 
-    for (const entry of candidates) {
-      if (activeCount >= target.minActive) break;
+    const window = Math.min(
+      candidates.length,
+      Math.min(MAX_CANDIDATE_PROBES, Math.max(needed, needed * CANDIDATE_EXPLORE_FACTOR + CANDIDATE_EXPLORE_EXTRA)),
+    );
+    const probed = await mapWithConcurrency(candidates.slice(0, window), this.concurrency, async (entry) => {
       const parsed = parseProxyTarget(entry.address, target.port ?? 443);
-      if (!parsed) continue;
+      if (!parsed) return null;
       const address = target.mode === 'A' && target.port
         ? formatProxyAuthority(parsed.host, target.port)
         : parsed.authority;
@@ -150,11 +166,13 @@ export class MaintainManagedTarget {
         value: activeValueForEntry(entry, target),
       };
       const result = await probeSafely(this.dependencies.probe, item, target);
-      results.push({ ...item, result });
-      if (result.status === 'alive' && resultMatchesTarget(result, target)) activeCount += 1;
-    }
+      return { ...item, result };
+    });
 
-    return results;
+    return orderCandidatesForAddition(
+      probed.filter((item): item is CandidateMaintenanceItem => item !== null),
+      target,
+    );
   }
 
   private async applyDnsChanges(
@@ -254,10 +272,6 @@ async function probeSafely(
   } catch {
     return unknown(parsed, 'PROBE_ERROR', '检测执行异常');
   }
-}
-
-function resultMatchesTarget(result: ProbeResult, target: ManagedTarget): boolean {
-  return decideCurrentResult(result, target) === 'active';
 }
 
 function parsePoolEntries(text: string) {

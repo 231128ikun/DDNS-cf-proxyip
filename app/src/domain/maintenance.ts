@@ -56,6 +56,31 @@ export interface MaintenancePlan {
   readonly exhausted: boolean;
 }
 
+/**
+ * 候选排序：能直接补位且延迟更低的排在前面，未知和失效排在后面。
+ * 维护按顺序取前 N 个补位，这份排序决定“谁上场”；同分保持池内原有顺序。
+ */
+export function orderCandidatesForAddition(
+  candidates: readonly CandidateMaintenanceItem[],
+  target: ManagedTarget,
+): readonly CandidateMaintenanceItem[] {
+  const rank = (item: CandidateMaintenanceItem): number => {
+    if (item.result.status === 'alive') return probeMatchesTarget(item.result, target) ? 0 : 1;
+    return item.result.status === 'unknown' ? 2 : 3;
+  };
+  return candidates
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const byRank = rank(left.item) - rank(right.item);
+      if (byRank !== 0) return byRank;
+      const leftLatency = left.item.result.latencyMs ?? Number.POSITIVE_INFINITY;
+      const rightLatency = right.item.result.latencyMs ?? Number.POSITIVE_INFINITY;
+      if (leftLatency !== rightLatency) return leftLatency < rightLatency ? -1 : 1;
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
+}
+
 export function decideCurrentResult(result: ProbeResult, target: ManagedTarget): MaintenanceDecision {
   if (result.status === 'unknown') return 'keep-unknown';
   if (result.status === 'dead') return 'remove-dead';

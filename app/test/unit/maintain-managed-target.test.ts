@@ -124,8 +124,17 @@ function match(address: string): ProbeResult {
   });
 }
 
+/** 带延迟的可用结果：候选排序按延迟取最快，测试用它区分优先级。 */
+function matchWithLatency(address: string, latencyMs: number): ProbeResult {
+  return alive(requireProxy(address), {
+    latencyMs,
+    exitFamily: 'ipv4',
+    exits: [{ family: 'ipv4', asn: '64500', country: 'JP', ip: '198.51.100.1' }],
+  });
+}
+
 describe('MaintainManagedTarget', () => {
-  it('maintains A records, refills from the pool and never probes past the target', async () => {
+  it('maintains A records, refills with the fastest candidate and never walks the whole pool', async () => {
     const target = requireTarget({
       mode: 'A',
       domain: 'edge.example.com',
@@ -145,13 +154,14 @@ describe('MaintainManagedTarget', () => {
       '203.0.113.11:443,AS64500,JP,v4 # dead',
       '203.0.113.12:443,AS64500,JP,v4 # unknown',
       '203.0.113.20:443 # candidate',
-      '203.0.113.21:443 # must-stay-unprobed',
+      '203.0.113.21:443 # slower-candidate',
     ].join('\n'));
     const probe = new StubProbeAdapter(new Map([
       ['203.0.113.10:443', match('203.0.113.10:443')],
       ['203.0.113.11:443', dead(requireProxy('203.0.113.11:443'))],
       ['203.0.113.12:443', unknown(requireProxy('203.0.113.12:443'), 'TIMEOUT', 'timeout')],
-      ['203.0.113.20:443', match('203.0.113.20:443')],
+      ['203.0.113.20:443', matchWithLatency('203.0.113.20:443', 120)],
+      ['203.0.113.21:443', matchWithLatency('203.0.113.21:443', 260)],
     ]));
     const service = new MaintainManagedTarget({ probe, pools, dns, concurrency: 2 });
 
@@ -163,10 +173,11 @@ describe('MaintainManagedTarget', () => {
     expect(report).toMatchObject({ deleted: 1, added: 1, dnsUpdated: true, errors: [], probeErrors: 1 });
     expect(report.plan.activeCount).toBe(2);
     expect(report.plan.exhausted).toBe(false);
-    expect(probe.calls).not.toContain('203.0.113.21:443');
+    // 只补一个位置，但会多探一个候选来比较延迟：更快的 .20 入选，.21 留在池里。
+    expect(probe.calls).toContain('203.0.113.21:443');
     expect(pools.value()).toContain('203.0.113.20:443,AS64500,JP,v4 # candidate');
     expect(pools.value()).not.toContain('203.0.113.11:443');
-    expect(pools.value()).toContain('203.0.113.21:443 # must-stay-unprobed');
+    expect(pools.value()).toContain('203.0.113.21:443 # slower-candidate');
     expect(pools.trash).toEqual([
       { entryLine: '203.0.113.11:443,AS64500,JP,v4 # dead', reason: '维护失效', poolKey: 'ip_pool_default' },
     ]);
@@ -227,6 +238,44 @@ describe('MaintainManagedTarget', () => {
     expect(report.plan.exhausted).toBe(true);
     expect(report.probeErrors).toBe(0);
     expect(pools.trash).toHaveLength(1);
+  });
+
+  it('caps candidate probing instead of walking a dead pool to the end', async () => {
+    const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 1 });
+    const addresses = Array.from({ length: 20 }, (_, index) => `203.0.113.${100 + index}:443`);
+    const pools = new MemoryPoolRepository(addresses.map((address) => `${address} # dead`).join('\n'));
+    const probe = new StubProbeAdapter(new Map(addresses.map((address) => [address, dead(requireProxy(address))])));
+    const service = new MaintainManagedTarget({ probe, pools, dns: new MemoryDnsRepository([]) });
+
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+
+    // 全失效的池不再一路探到底：窗口有上限，剩下的留给下一轮维护。
+    expect(probe.calls.length).toBeLessThanOrEqual(12);
+    expect(report.plan.exhausted).toBe(true);
+  });
+
+  it('prefers the fastest alive candidate when several are reachable', async () => {
+    const target = requireTarget({
+      mode: 'A',
+      domain: 'edge.example.com',
+      port: 443,
+      minActive: 1,
+      exitFilter: 'v4',
+      countries: 'JP',
+      asns: '64500',
+    });
+    const addresses = ['203.0.113.30:443', '203.0.113.31:443', '203.0.113.32:443'];
+    const probe = new StubProbeAdapter(new Map([
+      [addresses[0]!, matchWithLatency(addresses[0]!, 300)],
+      [addresses[1]!, matchWithLatency(addresses[1]!, 90)],
+      [addresses[2]!, matchWithLatency(addresses[2]!, 200)],
+    ]));
+    const pools = new MemoryPoolRepository(addresses.map((address) => `${address} # candidate`).join('\n'));
+    const service = new MaintainManagedTarget({ probe, pools, dns: new MemoryDnsRepository([]) });
+
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+
+    expect(report.plan.additions.map((item) => item.address)).toEqual(['203.0.113.31:443']);
   });
 
   it('keeps a record when the probe itself throws', async () => {
