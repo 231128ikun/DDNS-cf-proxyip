@@ -1,20 +1,16 @@
 :root {
   --color-primary: #0066cc;
   --color-primary-strong: #0b5cab;
-  --color-primary-soft: #e8f4ff;
   --color-primary-border: #b8d7ff;
   --color-primary-alpha: rgba(0, 122, 255, 0.35);
   --color-hover-overlay: rgba(0, 0, 0, 0.05);
-  --color-overlay: var(--color-overlay);
   --color-primary-alpha-soft: rgba(0, 122, 255, 0.1);
-  --color-primary-alpha-faint: rgba(0, 122, 255, 0.06);
 
   --color-success: #167d3f;
   --color-success-strong: #166534;
   --color-success-bright: #32d74b;
   --color-success-soft: #e6f7ee;
   --color-success-softer: #a8e3c3;
-  --color-success-alpha: rgba(52, 199, 89, 0.08);
 
   --color-danger: #c62828;
   --color-danger-strong: #991b1b;
@@ -23,7 +19,7 @@
   --color-warning: #a05a00;
   --color-warning-strong: #92400e;
   --color-warning-soft: #fff8e1;
-  --color-warning-border: var(--color-warning-border);
+  --color-warning-border: #ffe08a;
 
   --color-info: #087990;
   --color-info-soft: #eef6ff;
@@ -52,7 +48,6 @@
   --space-9: 24px;
   --space-10: 28px;
 
-  --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -62,14 +57,11 @@
   --font-size-sm: 14px;
   --font-size-md: 16px;
   --font-size-lg: 18px;
-  --font-size-xl: 20px;
   --font-size-xxl: 24px;
   --shadow-xs: 0 2px 6px rgba(0, 0, 0, 0.06);
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.1);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.18);
-  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.3);
-  --focus-ring: 0 0 0 4px rgba(0, 122, 255, 0.1);
 }
         *, *::before, *::after { box-sizing: border-box; }
         body {
@@ -1074,7 +1066,7 @@
         }
         .config-dirty-hint {
             font-size: var(--font-size-xs);
-            color: var(--color-warning-border);
+            color: var(--color-warning);
         }
         /* 页面里不再写孤立内联尺寸，统一由这些语义类承接。 */
         .status-display {
