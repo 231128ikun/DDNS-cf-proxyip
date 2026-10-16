@@ -8,12 +8,11 @@ describe('KV configuration storage', () => {
       [CONFIG_KEY, JSON.stringify({
         checkApi: 'https://primary.example/?proxyip=',
         checkApiBackup: '',
-        dohApi: 'https://doh.example/dns-query',
         authKey: 'panel-key',
         tgToken: 'tg-token',
         tgId: '42',
         projectUrl: 'https://github.com/example/project',
-        settings: { CHECK_TIMEOUT: 8_000, CONCURRENT_CHECKS: 7 },
+        settings: { CHECK_TIMEOUT: 8_000, BACKEND_CONCURRENT_CHECKS: 5 },
         zones: [{ name: '主域名', baseDomain: 'example.com', zoneId: 'zone-1', apiKey: 'cf-token' }],
         targets: [{
           mode: 'TXT',
@@ -42,12 +41,11 @@ describe('KV configuration storage', () => {
       zoneId: 'zone-1',
       checkApi: 'https://primary.example/?proxyip=',
       checkApiBackup: '',
-      dohApi: 'https://doh.example/dns-query',
       authKey: 'panel-key',
       tgToken: 'tg-token',
       tgId: '42',
       projectUrl: 'https://github.com/example/project',
-      settings: { CHECK_TIMEOUT: 8_000, CONCURRENT_CHECKS: 7 },
+      settings: { CHECK_TIMEOUT: 8_000, BACKEND_CONCURRENT_CHECKS: 5 },
       zones: [{ name: '主域名', label: '主域名', baseDomain: 'example.com', zoneId: 'zone-1', apiKey: 'cf-token' }],
       targets: [{
         mode: 'TXT',
@@ -73,7 +71,7 @@ describe('KV configuration storage', () => {
     const raw = JSON.parse(store.get(CONFIG_KEY) ?? '{}') as Record<string, unknown>;
     expect(raw).toMatchObject({
       checkApi: 'https://primary.example/?proxyip=',
-      settings: { CONCURRENT_CHECKS: 48, CHECK_TIMEOUT: 9_000 },
+      settings: { BACKEND_CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
       zones: [{ name: '主域名', label: '主域名' }],
       targets: [{ mode: 'TXT', port: 'any', country: 'US', asn: '64500' }],
     });
@@ -98,14 +96,14 @@ describe('KV configuration storage', () => {
 
   it('keeps explicit empty optional endpoints', async () => {
     const store = new Map<string, string>([
-      [CONFIG_KEY, JSON.stringify({ checkApi: 'https://primary.example/?proxyip=', checkApiBackup: '', dohApi: '' })],
+      [CONFIG_KEY, JSON.stringify({ checkApi: 'https://primary.example/?proxyip=', checkApiBackup: '' })],
     ]);
 
     const result = await new KvConfigRepository(createKv(store)).load();
 
     expect(result).toMatchObject({
       status: 'loaded',
-      config: { checkApi: 'https://primary.example/?proxyip=', checkApiBackup: '', dohApi: '' },
+      config: { checkApi: 'https://primary.example/?proxyip=', checkApiBackup: '' },
     });
   });
 });
@@ -143,11 +141,10 @@ function validConfig(): AppConfig {
     }],
     checkApi: 'https://primary.example/?proxyip=',
     checkApiBackup: '',
-    dohApi: 'https://doh.example/dns-query',
     authKey: 'panel-key',
     tgToken: 'tg-token',
     tgId: '42',
     projectUrl: 'https://github.com/example/project',
-    settings: { ...defaults.settings, CONCURRENT_CHECKS: 48, CHECK_TIMEOUT: 9_000 },
+    settings: { ...defaults.settings, BACKEND_CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
   };
 }

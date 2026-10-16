@@ -24,8 +24,6 @@ import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from 
 
 export const APP_VERSION = '2026.10.16-09.53';
 
-/** 批量检测并发：与维护流程一样显式限制，避免打满子请求与 CPU。 */
-const BATCH_CHECK_CONCURRENCY = 8;
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
@@ -49,7 +47,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
 
-      const checkPool = new CheckPoolText(checkProxy, BATCH_CHECK_CONCURRENCY);
+      const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.BACKEND_CONCURRENT_CHECKS);
 
       const dependencies: HttpAppDependencies = {
         checkProxy,
@@ -143,6 +141,7 @@ export function createMaintenanceRunner(
       probe: createProbeAdapterFromConfig(toProbeConfig(config)),
       pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
       dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
+      concurrency: config.settings.BACKEND_CONCURRENT_CHECKS,
     }),
   });
   const notifier = new TelegramNotifier({

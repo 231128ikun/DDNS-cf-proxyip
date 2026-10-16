@@ -30,31 +30,25 @@ export interface ProbeConfig {
 }
 
 export interface RuntimeSettings {
-  readonly CONCURRENT_CHECKS: number;
   readonly BACKEND_CONCURRENT_CHECKS: number;
   readonly CHECK_TIMEOUT: number;
   readonly REMOTE_LOAD_TIMEOUT: number;
-  readonly DOH_TIMEOUT: number;
   readonly DEFAULT_MIN_ACTIVE: number;
   readonly MAX_TRASH_SIZE: number;
 }
 
 export const SETTINGS_LIMITS = {
-  CONCURRENT_CHECKS: { min: 1, max: 128 },
   BACKEND_CONCURRENT_CHECKS: { min: 1, max: 6 },
   CHECK_TIMEOUT: { min: 500, max: 30_000 },
   REMOTE_LOAD_TIMEOUT: { min: 1_000, max: 60_000 },
-  DOH_TIMEOUT: { min: 1_000, max: 30_000 },
   DEFAULT_MIN_ACTIVE: { min: 0, max: 100 },
   MAX_TRASH_SIZE: { min: 0, max: 100_000 },
 } as const;
 
 export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
-  CONCURRENT_CHECKS: 32,
   BACKEND_CONCURRENT_CHECKS: 4,
   CHECK_TIMEOUT: 15_000,
   REMOTE_LOAD_TIMEOUT: 8_000,
-  DOH_TIMEOUT: 5_000,
   DEFAULT_MIN_ACTIVE: 3,
   MAX_TRASH_SIZE: 1_000,
 };
@@ -91,7 +85,6 @@ export interface AppConfig {
   readonly targets: readonly TargetConfig[];
   readonly checkApi: string;
   readonly checkApiBackup: string;
-  readonly dohApi: string;
   readonly authKey: string;
   readonly tgToken: string;
   readonly tgId: string;
@@ -115,7 +108,6 @@ export interface PublicAppConfig {
   readonly zoneId: string;
   readonly checkApi: string;
   readonly checkApiBackup: string;
-  readonly dohApi: string;
   readonly tgId: string;
   readonly scheduledEnabled: boolean;
   readonly tgEnabled: boolean;
@@ -137,12 +129,6 @@ export interface ConfigResponse {
 export type ConfigUpdateRequest =
   Omit<Partial<AppConfig>, 'settings'> & { readonly settings?: Partial<RuntimeSettings> };
 
-
-export const CONFIG_KEYS = [
-  'apiKey', 'zoneId', 'zones', 'targets', 'checkApi', 'checkApiBackup', 'dohApi', 'authKey',
-  'tgToken', 'tgId', 'scheduledEnabled', 'tgEnabled', 'settings', 'projectUrl',
-] as const;
-
 export function createDefaultConfig(): AppConfig {
   return {
     apiKey: '',
@@ -151,7 +137,6 @@ export function createDefaultConfig(): AppConfig {
     targets: [],
     checkApi: '',
     checkApiBackup: 'https://checkapi.dvb.kdns.fr/?candidate=',
-    dohApi: 'https://cloudflare-dns.com/dns-query',
     authKey: '',
     tgToken: '',
     tgId: '',
@@ -175,7 +160,6 @@ export function toPublicConfig(config: AppConfig): PublicAppConfig {
     zoneId: config.zoneId,
     checkApi: config.checkApi,
     checkApiBackup: config.checkApiBackup,
-    dohApi: config.dohApi,
     tgId: config.tgId,
     scheduledEnabled: config.scheduledEnabled,
     tgEnabled: config.tgEnabled,
@@ -220,7 +204,6 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     targets,
     checkApi: text(record.checkApi, base.checkApi, MAX_ENDPOINT_URL_LENGTH),
     checkApiBackup: text(record.checkApiBackup, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH),
-    dohApi: text(record.dohApi, base.dohApi, MAX_ENDPOINT_URL_LENGTH),
     authKey: text(record.authKey, base.authKey, MAX_SECRET_LENGTH),
     tgToken: text(record.tgToken, base.tgToken, MAX_SECRET_LENGTH),
     tgId: text(record.tgId, base.tgId, 64),

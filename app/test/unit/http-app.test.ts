@@ -260,7 +260,6 @@ describe('HTTP app config routes', () => {
     tgEnabled: false,
     checkApi: 'https://probe.example/?proxyip={proxyip}',
     checkApiBackup: '',
-    dohApi: 'https://doh.example/dns-query',
     projectUrl: 'https://example.com/project',
   };
 
@@ -279,7 +278,6 @@ describe('HTTP app config routes', () => {
         tgEnabled: false,
         checkApi: 'https://probe.example/?proxyip={proxyip}',
         checkApiBackup: '',
-        dohApi: 'https://doh.example/dns-query',
         projectUrl: 'https://example.com/project',
         secrets: { apiKey: true, authKey: true, tgToken: true },
       },
