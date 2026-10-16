@@ -107,7 +107,7 @@ export function DashboardPage({
             <input
               type="text"
               class="form-control form-control-sm"
-              placeholder="探测: 域名 / IP:端口 / txt@域名"
+              placeholder="探测: 域名 / IP:端口"
               aria-label="要探测的域名或 IP"
               value={lookup}
               onInput={(event) => onLookupChange(event.currentTarget.value)}
