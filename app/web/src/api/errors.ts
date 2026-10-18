@@ -10,6 +10,11 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败';
 }
 
+/** 503 是"存储未绑定"，属于未初始化状态，界面要给出引导而不是报错。 */
+export function isUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 503;
+}
+
 export function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }

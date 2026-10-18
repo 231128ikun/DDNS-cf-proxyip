@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'preact/hooks';
-import { errorMessage, isAbort } from '../api/errors';
+import { errorMessage, isAbort, isUnavailable } from '../api/errors';
 import type { RequestState } from './request-state';
 
 /**
@@ -24,7 +24,7 @@ export function useResource<T>(
       setState({ status: 'ready', data: await latest.current(signal) });
     } catch (error) {
       if (isAbort(error)) return;
-      setState({ status: 'error', message: errorMessage(error) });
+      setState({ status: 'error', message: errorMessage(error), unavailable: isUnavailable(error) });
     }
   }, []);
 

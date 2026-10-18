@@ -72,6 +72,15 @@ function TargetSummary({ state }: { readonly state: RequestState<DomainBindingsR
     );
   }
   if (state.status === 'error') {
+    // 503 是"存储还没绑定"，新部署第一次打开就是这种状态，按未初始化引导。
+    if (state.unavailable) {
+      return (
+        <>
+          <span class="target-summary-domain">尚未初始化</span>
+          <span class="target-summary-meta">绑定 KV 后在配置中心保存配置即可开始</span>
+        </>
+      );
+    }
     return (
       <>
         <span class="target-summary-domain">维护域名读取失败</span>

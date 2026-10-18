@@ -334,6 +334,8 @@ export function DashboardPage({
                   <button
                     class="btn btn-sm btn-outline-secondary"
                     type="button"
+                    aria-label="刷新域名池绑定"
+                    title="刷新域名池绑定"
                     disabled={bindings.status === 'loading'}
                     onClick={(event) => {
                       event.preventDefault();
@@ -341,7 +343,7 @@ export function DashboardPage({
                       actions.refreshBindings();
                     }}
                   >
-                    <Icon name="refresh" /> 刷新
+                    <Icon name="refresh" />
                   </button>
                 </div>
               </summary>
@@ -424,16 +426,19 @@ export function DashboardPage({
             <div id="log-window" class="console mb-3">
               <Console health={health} check={check} pools={pools} batch={batch} />
             </div>
-            <div
-              class="progress batch-progress mb-3"
-              role="progressbar"
-              aria-label="批量检测进度"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={batchProgress(batch)}
-            >
-              <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch)}%` }} />
-            </div>
+            {/* 只在批量检测进行中显示进度条：空闲时留一条空槽会被误读成控件。 */}
+            {batch.status === 'loading' && (
+              <div
+                class="progress batch-progress mb-3"
+                role="progressbar"
+                aria-label="批量检测进度"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={batchProgress(batch)}
+              >
+                <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch)}%` }} />
+              </div>
+            )}
             <button
               class="btn btn-dark w-100 mb-3"
               type="button"

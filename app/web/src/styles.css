@@ -9,6 +9,8 @@
   --color-success: #167d3f;
   --color-success-strong: #166534;
   --color-success-bright: #32d74b;
+  /* 深色控制台专用的高亮红：--color-danger 在 #1d1d1f 上只有 2.99:1。 */
+  --color-danger-bright: #ff6b6b;
   --color-success-soft: #e6f7ee;
   --color-success-softer: #a8e3c3;
 
@@ -1301,7 +1303,7 @@
             color: var(--color-success-bright);
         }
         .console-error {
-            color: var(--color-danger);
+            color: var(--color-danger-bright);
         }
         .status-table td,
         .pool-stat,
