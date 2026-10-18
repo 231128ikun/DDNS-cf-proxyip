@@ -29,16 +29,6 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 - **Telegram 通知**：手动维护、IP 变化、库存不足或配置错误时可推送报告。
 - **KV 配置**：配置中心会把运行配置保存到 Cloudflare KV，覆盖环境变量默认值。
 
-### 页面展示
-<details>
-<summary>点击展开</summary>
-
-![配置中心](./img/config-center.jpg)
-
-![运行面板](./img/dashboard.jpg)
-
-</details>
-
 ---
 
 ## 💡 快速部署
