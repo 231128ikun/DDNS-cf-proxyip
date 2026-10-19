@@ -15,7 +15,6 @@ import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../sr
 
 export interface ApiClientOptions {
   readonly baseUrl?: string;
-  readonly authKey?: string;
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -35,12 +34,10 @@ export class ApiError extends Error {
 
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly authKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
-    this.authKey = options.authKey?.trim() || undefined;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -149,7 +146,6 @@ export class ApiClient {
 
   private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers = new Headers({ Accept: 'application/json' });
-    if (this.authKey) headers.set('Authorization', `Bearer ${this.authKey}`);
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };

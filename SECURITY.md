@@ -11,7 +11,7 @@
 
 ## 部署安全清单
 
-- `AUTH_KEY` 只保护 `/api/*`：面板静态页面本身不受它保护，公开地址等于公开面板入口，务必设置密钥。
+- 当前测试阶段不执行面板 key 校验。公开部署时，Worker API 和面板配置均可被访问与修改，请仅用于可信测试环境。
 - Cloudflare API Token 只授予需要维护的 Zone 的 `DNS:Edit`，不要使用 Global API Key。
 - 密钥只放在 Cloudflare 环境变量/Secret 或面板配置（KV）里，不要写进仓库、Issue、日志或截图。
 - 怀疑泄露时先在 Cloudflare 侧轮换 Token/密钥，再排查访问记录。

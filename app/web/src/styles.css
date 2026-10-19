@@ -84,14 +84,6 @@
         table { border-collapse: collapse; }
         /* ── Bootstrap replacement: Grid ── */
         .container { width: 100%; max-width: 1140px; margin: 0 auto; padding: 0 var(--space-5); }
-        .auth-gate { min-height: 100vh; display: grid; place-items: center; padding-top: var(--space-9); padding-bottom: var(--space-9); }
-        .auth-gate-card { width: min(100%, 440px); padding: var(--space-9); }
-        .auth-gate-brand { margin: 0 0 var(--space-3); color: var(--color-primary-strong); font-size: var(--font-size-sm); font-weight: 700; }
-        .auth-gate-card h1 { margin: 0 0 var(--space-4); font-size: var(--font-size-xxl); }
-        .auth-gate-card > p.text-secondary { margin: 0 0 var(--space-8); }
-        .auth-gate-form { display: grid; gap: var(--space-4); }
-        .auth-gate-error { margin: 0; color: var(--color-danger); }
-        .auth-gate-form .btn { width: 100%; min-height: 44px; }
         .row { display: flex; flex-wrap: wrap; margin: 0 -6px; }
         .row > * { padding: 0 var(--space-2); }
         .row.g-2 { margin: 0 -4px; }
@@ -545,6 +537,23 @@
             border-color: var(--color-primary);
             box-shadow: 0 0 0 3px var(--color-primary-alpha-soft);
         }
+        .config-card-open {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-3);
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+        .config-card-open:focus-visible {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 3px;
+            border-radius: var(--radius-sm);
+        }
         .config-mini-card h5 {
             margin: 0;
             font-size: 17px;
@@ -560,11 +569,14 @@
         }
         .config-mini-card .actions {
             display: flex;
+            align-items: center;
+            flex-wrap: wrap;
             gap: var(--space-3);
             margin-top: auto;
         }
         .config-mini-card .actions .btn {
             min-height: 32px;
+            min-width: 58px;
             padding: var(--space-2) var(--space-4);
             font-size: var(--font-size-xs);
         }
@@ -582,10 +594,9 @@
             font-size: 13px;
             text-align: center;
         }
-        .config-save-btn {
-            position: sticky;
-            top: var(--space-4);
-            z-index: 5;
+        .config-action-btn {
+            min-width: 128px;
+            justify-content: center;
         }
         .config-edit-panel {
             display: none;
@@ -617,8 +628,18 @@
         .config-edit-actions {
             display: flex;
             justify-content: flex-end;
+            align-items: center;
+            flex-wrap: wrap;
             gap: var(--space-3);
             margin-top: var(--space-4);
+            padding-top: var(--space-4);
+            border-top: 1px solid var(--color-border);
+        }
+        .config-edit-actions .btn {
+            min-width: 92px;
+        }
+        .config-edit-actions .config-action-btn {
+            min-width: 128px;
         }
         .pool-tools {
             display: flex;
@@ -963,15 +984,10 @@
             font-size: 13px;
             color: var(--color-text-muted);
         }
-        .config-toolbar {
-            display: flex;
-            gap: var(--space-3);
-            align-items: center;
-            flex-wrap: wrap;
-        }
         .config-dirty-hint {
             font-size: var(--font-size-xs);
             color: var(--color-warning);
+            margin-left: auto;
         }
         /* 页面里不再写孤立内联尺寸，统一由这些语义类承接。 */
         .status-display {
@@ -1028,7 +1044,7 @@
         .config-details-summary {
             min-height: 32px;
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-start;
             align-items: center;
             gap: var(--space-5);
             flex-wrap: wrap;
@@ -1169,6 +1185,13 @@
             }
             .config-grid {
                 grid-template-columns: 1fr;
+            }
+            .config-edit-actions {
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+            .config-edit-actions .btn {
+                width: 100%;
             }
         }
 

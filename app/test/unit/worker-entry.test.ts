@@ -35,13 +35,4 @@ describe('发布 Worker 装配', () => {
     await expect(request('/api/pools').then((response) => response.status)).resolves.toBe(503);
   });
 
-  it('配置面板密钥后 API 需要鉴权', async () => {
-    const guarded: RuntimeEnv = { ...env, AUTH_KEY: 'panel-key' };
-
-    const denied = await request('/api/pools', undefined, guarded);
-    expect(denied.status).toBe(401);
-
-    const allowed = await request('/api/pools', { headers: { authorization: 'Bearer panel-key' } }, guarded);
-    expect(allowed.status).toBe(503);
-  });
 });

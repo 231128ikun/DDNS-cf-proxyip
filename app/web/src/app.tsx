@@ -8,8 +8,6 @@ import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } 
 import { countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
-import { readAuthKey, shouldShowAuthFailure, writeAuthKey } from './auth/session-key';
-import { AuthGate } from './components/auth-gate';
 import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
 import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
@@ -41,10 +39,7 @@ export function App() {
   const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [authKey, setAuthKey] = useState(readStoredToken);
-  const [authGateVisible, setAuthGateVisible] = useState(!authKey);
-  const [authAttempted, setAuthAttempted] = useState(Boolean(authKey));
-  const client = useMemo(() => new ApiClient({ authKey }), [authKey]);
+  const client = useMemo(() => new ApiClient(), []);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -84,12 +79,7 @@ export function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [authKey, notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
-
-  useEffect(() => {
-    if (config.status === 'ready') setAuthGateVisible(false);
-    else if (config.status === 'error' && config.unauthorized) setAuthGateVisible(true);
-  }, [config]);
+  }, [notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
 
   useEffect(() => {
     if (!toast) return;
@@ -128,17 +118,6 @@ export function App() {
     void refreshHealth();
     void refreshPools();
     void refreshBindings();
-  };
-
-  const handleAuthSubmit = (key: string): void => {
-    try {
-      writeAuthKey(key, window.sessionStorage);
-    } catch {
-      // Keep the key in memory for this page even when browser storage is unavailable.
-    }
-    setAuthAttempted(true);
-    setAuthGateVisible(true);
-    setAuthKey(key);
   };
 
   const handleLoadPool = (): void => {
@@ -405,15 +384,6 @@ export function App() {
     runMaintenance: handleRunMaintenance,
   };
 
-  if (authGateVisible) {
-    return (
-      <AuthGate
-        invalid={shouldShowAuthFailure(authAttempted, config.status === 'error' && Boolean(config.unauthorized))}
-        onSubmit={handleAuthSubmit}
-      />
-    );
-  }
-
   return (
     <>
       <Hero
@@ -466,12 +436,4 @@ export function App() {
       </div>
     </>
   );
-}
-
-function readStoredToken(): string {
-  try {
-    return readAuthKey(window.location.search, window.sessionStorage);
-  } catch {
-    return '';
-  }
 }

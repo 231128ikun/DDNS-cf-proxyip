@@ -139,7 +139,7 @@ npm run audit:ui
 
 ## 6. 配置与安全
 
-不得提交真实 Cloudflare Token、Zone ID、Telegram Token、Chat ID、`AUTH_KEY`、KV Namespace ID，也不得在回复或日志中回显密钥。
+不得提交真实 Cloudflare Token、Zone ID、Telegram Token、Chat ID、KV Namespace ID，也不得在回复或日志中回显密钥。
 
 环境变量只是 KV 为空时的启动配置和故障回退，不是第二套配置模型。所有外部请求必须有超时、失败处理和备用逻辑。
 

@@ -36,15 +36,13 @@ import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { formatPoolEntry } from '../domain/pool-entry';
 import { countPoolTextLines } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
-import { isAuthorized } from './auth';
-import { errorResponse, jsonResponse, readJsonBody, Router, type RouteContext } from './router';
+import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 
 export interface HttpAppDependencies {
   /** 探测入口：内部负责域名解析与逐地址探测。 */
   readonly checkTarget: CheckTarget;
   readonly version: string;
   readonly configSource?: EffectiveConfigSource;
-  readonly authKey?: string;
   /** 未绑定 KV 时为空；此时 IP 池相关接口返回 503。 */
   readonly pools?: PoolService;
   /** 一键洗库用例；与维护流程共用同一个垃圾桶写入实现。 */
@@ -80,10 +78,6 @@ export interface HttpApp {
 export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   const router = new Router();
 
-  /** 所有 /api/* 业务路由共用同一个鉴权入口，避免新增路由时漏掉校验。 */
-  const guard = (context: RouteContext): Response | null =>
-    isAuthorized(context.request, dependencies.authKey) ? null : errorResponse('unauthorized', 401);
-
   router.get('/api/health', () => {
     const response: HealthResponse = {
       ok: true,
@@ -98,9 +92,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
    * IP 与带端口目标直接探测；解析失败按输入错误返回，不会把节点判成失效。
    */
   router.post('/api/check', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const body = await readJsonBody(context.request);
     if (!body.ok) return errorResponse('invalid json', 400);
 
@@ -114,9 +105,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.post('/api/check/batch', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const checkPool = dependencies.checkPool;
     if (!checkPool) return errorResponse('probe unavailable', 503);
 
@@ -130,10 +118,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     return jsonResponse(toPoolCheckResponse(report));
   });
 
-  router.get('/api/pools', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
+  router.get('/api/pools', async () => {
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -142,9 +127,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.post('/api/pools', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -160,9 +142,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
   // 固定路径必须先于 /pools/:key 注册，避免 'order' 被当成池 key。
   router.put('/api/pools/order', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -175,10 +154,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  router.post('/api/pools/trash/clear', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
+  router.post('/api/pools/trash/clear', async () => {
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -187,9 +163,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.post('/api/pools/trash/restore', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -209,9 +182,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
    * 面板不再自己拼这几步——main 上「垃圾桶被绕过统一入口直接追加」的 bug 就出在那里。
    */
   router.post('/api/pools/:key/clean', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const cleanPool = dependencies.cleanPool;
     if (!cleanPool) return errorResponse('pool storage unavailable', 503);
 
@@ -222,9 +192,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.get('/api/pools/:key', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -238,9 +205,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.put('/api/pools/:key', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -256,9 +220,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.add('PATCH', '/api/pools/:key', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -272,9 +233,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.delete('/api/pools/:key', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
 
@@ -284,10 +242,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  router.get('/api/domain-bindings', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
+  router.get('/api/domain-bindings', async () => {
     const bindings = dependencies.domainBindings;
     if (!bindings) return errorResponse('binding storage unavailable', 503);
 
@@ -295,9 +250,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.put('/api/domain-bindings', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const bindings = dependencies.domainBindings;
     if (!bindings) return errorResponse('binding storage unavailable', 503);
 
@@ -311,9 +263,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.put('/api/domain-bindings/order', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const bindings = dependencies.domainBindings;
     if (!bindings) return errorResponse('binding storage unavailable', 503);
 
@@ -326,10 +275,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  router.post('/api/maintenance/run', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
+  router.post('/api/maintenance/run', async () => {
     const maintenance = dependencies.maintenance;
     if (!maintenance) return errorResponse('maintenance unavailable', 503);
 
@@ -337,10 +283,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     return jsonResponse(toMaintenanceResponse(run));
   });
 
-  router.get('/api/config', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
+  router.get('/api/config', async () => {
     const config = dependencies.config;
     if (!config) return errorResponse('config storage unavailable', 503);
 
@@ -348,9 +291,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.put('/api/config', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const config = dependencies.config;
     if (!config) return errorResponse('config storage unavailable', 503);
 
@@ -367,9 +307,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   router.post('/api/remote-load', async (context) => {
-    const denied = guard(context);
-    if (denied) return denied;
-
     const loader = dependencies.remotePoolLoader;
     if (!loader) return errorResponse('remote load unavailable', 503);
 

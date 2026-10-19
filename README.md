@@ -34,7 +34,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 ## 💡 快速部署
 
 > [!TIP]
-> 推荐部署顺序：准备 Node.js 22 -> 构建源码 -> 绑定 KV -> 可选设置 `AUTH_KEY` -> 部署 -> 打开面板保存配置。
+> 推荐部署顺序：准备 Node.js 22 -> 构建源码 -> 绑定 KV -> 部署 -> 打开面板保存配置。
 > 仓库不再提供“复制单文件到 Worker 编辑器”的部署方式，也不提交 `_worker.js`。
 
 ### ☁️ 一键部署
@@ -51,7 +51,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 - Worker 名称、入口和静态资源目录都由仓库根目录的 [`wrangler.toml`](./wrangler.toml) 决定：入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`。
 - Cloudflare 会读取 `wrangler.toml` 并自动创建/绑定 `IP_DATA` KV 命名空间；如果这一步没有自动完成，按下面的手动步骤补一个同名绑定，功能不受影响。
 - 部署完成后打开 Worker 地址，在 **配置中心** 填写 Zone ID、CF Key、维护域名与检测 API。
-- 想在公开地址上保护面板，就给 Worker 添加 `AUTH_KEY` 环境变量；不设置时任何人都能打开面板。
+- 当前测试阶段 API 不启用面板 key 校验；公开 Worker 地址上的 API 可直接访问。
 
 ### ⚙️ Wrangler 本地部署
 
@@ -91,29 +91,13 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
    未绑定 `IP_DATA` 时，面板可以打开，但配置保存、IP 池和维护任务不可用。
 
-4. 可选设置面板访问密钥：
-   - 建议设置 `AUTH_KEY`，否则公开 Worker 地址后任何人都可以进入管理面板。
-   - 可通过 Wrangler 或 Cloudflare 控制台设置变量：
-
-   | 变量名 | 必填 | 说明 |
-   | --- | --- | --- |
-   | `AUTH_KEY` | 可选 | 管理面板访问密钥 |
-
-   首次访问时，可以直接在页面中输入 `AUTH_KEY`，也可以访问：
-
-   ```text
-   https://你的-worker-url/?key=你的AUTH_KEY
-   ```
-
-   面板会把该值保存在当前浏览器标签页的 `sessionStorage` 中，并在 API 请求头里发送；不会写入 HttpOnly Cookie。
-
-5. 部署：
+4. 部署：
 
    ```powershell
    npx wrangler deploy --config ../wrangler.toml
    ```
 
-6. 打开面板并进入配置中心：
+5. 打开面板并进入配置中心：
    - 打开 Worker 地址。
    - 进入 **配置中心**。
    - 填写维护域名、Zone ID、CF Key、管理域名、检测 API、Telegram 等配置。
@@ -145,7 +129,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
    ```
 
 4. 为 Worker 绑定 KV，变量名必须是 `IP_DATA`。
-5. 可选设置 `AUTH_KEY`，然后打开面板完成配置。
+5. 打开面板完成配置。
 
 > [`wrangler.toml`](./wrangler.toml) 是部署事实源：Worker 入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`，KV 绑定名是 `IP_DATA`，并声明每 3 小时一次的 Cron。
 
@@ -181,7 +165,6 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 | 变量名 | 说明 | 默认值 |
 | --- | --- | --- |
-| `AUTH_KEY` | 面板访问密钥 | 空 |
 | `CF_KEY` | Cloudflare API Token | 空 |
 | `CF_ZONEID` | Cloudflare Zone ID | 空 |
 | `CF_BASE_DOMAIN` | 托管域名，例如 `example.com` | 空 |

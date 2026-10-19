@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'preact/hooks';
-import { errorMessage, isAbort, isUnauthorized, isUnavailable } from '../api/errors';
+import { errorMessage, isAbort, isUnavailable } from '../api/errors';
 import type { RequestState } from './request-state';
 
 /**
@@ -28,7 +28,6 @@ export function useResource<T>(
         status: 'error',
         message: errorMessage(error),
         unavailable: isUnavailable(error),
-        unauthorized: isUnauthorized(error),
       });
     }
   }, []);

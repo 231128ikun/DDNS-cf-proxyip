@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../../web/src/api/client';
 
 describe('web API client', () => {
-  it('uses the shared check contract and sends the bearer token', async () => {
+  it('uses the shared check contract without adding a panel key header', async () => {
     const fetchMock = vi.fn(async function (this: unknown, _input: RequestInfo | URL, init?: RequestInit) {
       expect(this).toBeUndefined();
       expect(init?.method).toBe('POST');
       expect(init?.body).toBe(JSON.stringify({ proxyip: '203.0.113.10:443' }));
-      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secret');
+      expect(new Headers(init?.headers).get('Authorization')).toBeNull();
       return Response.json({
         ok: true,
         input: '203.0.113.10:443',
@@ -16,7 +16,7 @@ describe('web API client', () => {
         skipped: [],
       });
     });
-    const client = new ApiClient({ authKey: ' secret ', fetchImpl: fetchMock as typeof fetch });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
 
     await expect(client.checkTarget('203.0.113.10:443')).resolves.toMatchObject({ ok: true, source: { kind: 'direct' } });
   });
@@ -126,8 +126,8 @@ describe('web API client config and remote load endpoints', () => {
       url: 'https://panel.example/api/config',
       init: { method: 'PUT', body: JSON.stringify(update) },
     });
-    // 未提交的密钥由服务端沿用旧值，客户端不得凭空补空字符串。
-    expect(calls[1]?.init.body).not.toContain('authKey');
+    // 未提交的 Cloudflare / Telegram 密钥由服务端沿用旧值。
+    expect(calls[1]?.init.body).not.toContain('apiKey');
   });
 
   it('posts the remote load request', async () => {
@@ -146,12 +146,12 @@ describe('web API client config and remote load endpoints', () => {
     });
   });
 
-  it('keeps the auth header on config writes', async () => {
+  it('does not add a panel key header to config writes', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secret');
+      expect(new Headers(init?.headers).get('Authorization')).toBeNull();
       return Response.json({ source: 'kv', config: {} });
     });
-    const client = new ApiClient({ authKey: 'secret', fetchImpl: fetchMock as typeof fetch });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
 
     await client.saveConfig({ checkApi: 'https://probe.example/?proxyip={proxyip}', settings: { CHECK_TIMEOUT: 5_000 } });
     expect(fetchMock).toHaveBeenCalledTimes(1);

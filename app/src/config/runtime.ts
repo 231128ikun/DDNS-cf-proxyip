@@ -17,7 +17,6 @@ export interface RuntimeEnv {
   readonly CF_KEY?: string;
   readonly CF_ZONEID?: string;
   readonly CF_BASE_DOMAIN?: string;
-  readonly AUTH_KEY?: string;
   readonly TG_TOKEN?: string;
   readonly TG_ID?: string;
   readonly SCHEDULED_ENABLED?: string;
@@ -48,7 +47,6 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
     checkApi: readLengthBounded(env.CHECK_API, defaults.checkApi),
     checkApiBackup: readLengthBounded(env.CHECK_API_BACKUP, defaults.checkApiBackup),
     dohApi: readLengthBounded(env.DOH_API, defaults.dohApi),
-    authKey: readLengthBounded(env.AUTH_KEY, defaults.authKey),
     tgToken: readLengthBounded(env.TG_TOKEN, defaults.tgToken),
     tgId: readLengthBounded(env.TG_ID, defaults.tgId, 64),
     scheduledEnabled: readBooleanEnv(env.SCHEDULED_ENABLED, defaults.scheduledEnabled),

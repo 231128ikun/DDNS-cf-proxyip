@@ -25,7 +25,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.10.16-09.53';
+export const APP_VERSION = '2026.10.19-22.16';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -43,8 +43,6 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
       const resolved = await configService.resolve();
       const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
-      // 面板密钥以统一配置为准，未配置时仍兼容环境变量 AUTH_KEY。
-      const authKey = resolved.config.authKey || env.AUTH_KEY?.trim();
       // 同一份 KV 存储实例既服务维护 runner，也服务域名绑定读写，避免两套读取顺序。
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
@@ -66,7 +64,6 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         configSource: resolved.source,
         config: configService,
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
-        ...(authKey ? { authKey } : {}),
         ...(kv ? createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance) : {}),
       };
 

@@ -104,21 +104,6 @@ describe('HTTP app', () => {
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('域名解析失败') });
   });
 
-  it('enforces the optional auth key', async () => {
-    const app = createHttpApp({
-      checkTarget: createCheckTarget(),
-      version: 'test',
-      authKey: 'secret',
-    });
-    const unauthorized = await postJson(app, '/api/check', { proxyip: '203.0.113.10:443' });
-    expect(unauthorized.status).toBe(401);
-
-    const authorized = await postJson(app, '/api/check', { proxyip: '203.0.113.10:443' }, {
-      authorization: 'Bearer secret',
-    });
-    expect(authorized.status).toBe(200);
-  });
-
   it('returns 404 for unknown routes', async () => {
     const page = await createApp().request('/dashboard');
     expect(page.status).toBe(404);
@@ -252,19 +237,6 @@ describe('HTTP app pool routes', () => {
     expect(response.status).toBe(503);
   });
 
-  it('guards pool routes with the shared auth key', async () => {
-    const app = createHttpApp({
-      checkTarget: createCheckTarget(),
-      version: 'test',
-      authKey: 'secret',
-      pools: new PoolService(new MemoryPoolCatalog()),
-    });
-
-    expect((await app.request('/api/pools')).status).toBe(401);
-    const authorized = await app.request('/api/pools', { headers: { authorization: 'Bearer secret' } });
-    expect(authorized.status).toBe(200);
-  });
-
   it('checks batch text through the shared pool parser', async () => {
     const app = createHttpApp({
       checkTarget: createCheckTarget(),
@@ -317,7 +289,6 @@ describe('HTTP app config routes', () => {
     ...createDefaultConfig(),
     apiKey: 'cf-token',
     zoneId: 'zone-1',
-    authKey: 'panel-key',
     tgToken: 'tg-token',
     tgId: '42',
     tgEnabled: false,
@@ -342,10 +313,10 @@ describe('HTTP app config routes', () => {
         checkApi: 'https://probe.example/?proxyip={proxyip}',
         checkApiBackup: '',
         projectUrl: 'https://example.com/project',
-        secrets: { apiKey: true, authKey: true, tgToken: true },
+        secrets: { apiKey: true, tgToken: true },
       },
     });
-    for (const secret of ['cf-token', 'tg-token', 'panel-key']) expect(raw).not.toContain(secret);
+    for (const secret of ['cf-token', 'tg-token']) expect(raw).not.toContain(secret);
   });
 
   it('inherits omitted secrets and clears them when sent as empty strings', async () => {
@@ -362,7 +333,6 @@ describe('HTTP app config routes', () => {
     expect(partial.status).toBe(200);
     expect(gateway.current).toMatchObject({
       apiKey: 'cf-token',
-      authKey: 'panel-key',
       tgToken: 'tg-token',
       checkApi: 'https://next.example/?proxyip={proxyip}',
       settings: { CHECK_TIMEOUT: 5_000 },
@@ -371,11 +341,10 @@ describe('HTTP app config routes', () => {
     const cleared = await app.request('/api/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiKey: '', authKey: '', checkApi: '', checkApiBackup: '' }),
+      body: JSON.stringify({ apiKey: '', checkApi: '', checkApiBackup: '' }),
     });
     expect(cleared.status).toBe(200);
     expect(gateway.current.apiKey).toBe('');
-    expect(gateway.current.authKey).toBe('');
     expect(gateway.current.checkApi).toBe('');
     expect(gateway.current.checkApiBackup).toBe('');
     expect(gateway.current.tgToken).toBe('tg-token');
@@ -410,17 +379,6 @@ describe('HTTP app config routes', () => {
     expect((await createApp().request('/api/config')).status).toBe(503);
   });
 
-  it('guards config routes with the shared auth key', async () => {
-    const app = createHttpApp({
-      checkTarget: createCheckTarget(),
-      version: 'test',
-      authKey: 'secret',
-      config: createConfigGateway(stored),
-    });
-
-    expect((await app.request('/api/config')).status).toBe(401);
-    expect((await app.request('/api/config', { headers: { authorization: 'Bearer secret' } })).status).toBe(200);
-  });
 });
 
 describe('HTTP app remote load route', () => {
@@ -593,18 +551,16 @@ describe('HTTP app domain binding and maintenance routes', () => {
     expect(malformed.status).toBe(400);
   });
 
-  it('returns 503 without binding storage and guards the route with the shared auth key', async () => {
+  it('returns 503 without binding storage and serves routes without panel key validation', async () => {
     const unavailable = await createApp().request('/api/domain-bindings');
     expect(unavailable.status).toBe(503);
 
     const app = createHttpApp({
       checkTarget: createCheckTarget(),
       version: 'test',
-      authKey: 'secret',
       domainBindings: createBindings().bindings,
     });
-    expect((await app.request('/api/domain-bindings')).status).toBe(401);
-    expect((await app.request('/api/domain-bindings', { headers: { authorization: 'Bearer secret' } })).status).toBe(200);
+    expect((await app.request('/api/domain-bindings')).status).toBe(200);
   });
 
   it('runs manual maintenance with the same runner and never leaks DNS credentials', async () => {

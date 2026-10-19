@@ -8,7 +8,6 @@ describe('KV configuration storage', () => {
       [CONFIG_KEY, JSON.stringify({
         checkApi: 'https://primary.example/?proxyip=',
         checkApiBackup: '',
-        authKey: 'panel-key',
         tgToken: 'tg-token',
         tgId: '42',
         projectUrl: 'https://github.com/example/project',
@@ -41,7 +40,6 @@ describe('KV configuration storage', () => {
       zoneId: 'zone-1',
       checkApi: 'https://primary.example/?proxyip=',
       checkApiBackup: '',
-      authKey: 'panel-key',
       tgToken: 'tg-token',
       tgId: '42',
       projectUrl: 'https://github.com/example/project',
@@ -141,7 +139,6 @@ function validConfig(): AppConfig {
     }],
     checkApi: 'https://primary.example/?proxyip=',
     checkApiBackup: '',
-    authKey: 'panel-key',
     tgToken: 'tg-token',
     tgId: '42',
     projectUrl: 'https://github.com/example/project',

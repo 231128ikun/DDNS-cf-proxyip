@@ -43,14 +43,13 @@ interface ConfigForm {
   readonly tgEnabled: boolean;
 }
 
-type SecretKey = 'authKey' | 'apiKey' | 'tgToken';
+type SecretKey = 'apiKey' | 'tgToken';
 type SecretDrafts = Readonly<Record<SecretKey, string>>;
 type SecretClearing = Readonly<Record<SecretKey, boolean>>;
 
-const EMPTY_DRAFTS: SecretDrafts = { authKey: '', apiKey: '', tgToken: '' };
-const NO_CLEARING: SecretClearing = { authKey: false, apiKey: false, tgToken: false };
+const EMPTY_DRAFTS: SecretDrafts = { apiKey: '', tgToken: '' };
+const NO_CLEARING: SecretClearing = { apiKey: false, tgToken: false };
 const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
-  authKey: '面板访问密钥',
   apiKey: 'Cloudflare API Token',
   tgToken: 'Telegram Bot Token',
 };
@@ -64,15 +63,16 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
 
 export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPageProps) {
   const [load, setLoad] = useState<RequestState<ConfigResponse>>(initialConfig);
-  // 已落库基线：只有当前表单与基线不一致时，"保存到 KV / 还原改动"才值得占位置。
+  // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
   const [baseline, setBaseline] = useState('');
   const [form, setForm] = useState<ConfigForm | null>(null);
-  const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, authKey: false, tgToken: false });
+  const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, tgToken: false });
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
   const [clearing, setClearing] = useState<SecretClearing>(NO_CLEARING);
   const [saving, setSaving] = useState(false);
   const [editingZone, setEditingZone] = useState<number | null>(null);
   const [editingTarget, setEditingTarget] = useState<number | null>(null);
+  const basicSettingsRef = useRef<HTMLDetailsElement>(null);
 
   const applyResponse = useCallback((response: ConfigResponse): void => {
     const nextForm = formFromConfig(response.config);
@@ -183,7 +183,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     }
   }, [baseline, clearing, drafts, form]);
 
-  const handleSave = (): void => {
+  const handleSave = (close: 'basic' | 'editor' = 'basic'): void => {
     if (!form) return;
     let update: ConfigUpdateRequest;
     try {
@@ -197,9 +197,10 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     client.saveConfig(update)
       .then((response) => {
         applyResponse(response);
+        if (close === 'basic') basicSettingsRef.current?.removeAttribute('open');
         // 回写首屏共享缓存，返回仪表盘再进来时不会看到旧数据。
         void onReload();
-        notify('配置已保存到 KV');
+        notify('配置已保存');
       })
       .catch((error: unknown) => notify(errorMessage(error), 'error'))
       .finally(() => setSaving(false));
@@ -218,25 +219,16 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
 
   const activeZone = editingZone === null ? null : form.zones[editingZone] ?? null;
   const activeTarget = editingTarget === null ? null : form.targets[editingTarget] ?? null;
+  const targetZone = activeTarget?.zoneIndex === null || activeTarget?.zoneIndex === undefined
+    ? null
+    : form.zones[activeTarget.zoneIndex] ?? null;
 
   return (
     <div id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config">
-      <details class="card p-4 mb-3 config-details">
+      <details ref={basicSettingsRef} class="card p-4 mb-3 config-details">
         <summary class="config-details-summary">
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
-          <div class="config-toolbar">
-            <span class={`status-badge ${load.data.source === 'kv' ? 'ok' : 'warn'}`}>{sourceLabel(load.data.source)}</span>
-            {dirty && <span class="config-dirty-hint">有未保存的改动</span>}
-            {/* 保存与还原只在真有改动时出现：常驻按钮会让"已经存好了"看起来也像待办。 */}
-            {dirty && (
-              <>
-                <button class="btn btn-sm btn-outline-secondary" type="button" disabled={saving} onClick={(event) => { event.preventDefault(); applyResponse(load.data); }}>还原改动</button>
-                <button class="btn btn-sm btn-success config-save-btn" type="button" disabled={saving} onClick={(event) => { event.preventDefault(); handleSave(); }}>
-                  <Icon name="save" /> {saving ? '保存中…' : '保存到 KV'}
-                </button>
-              </>
-            )}
-          </div>
+          {dirty && <span class="config-dirty-hint">有未保存的改动</span>}
         </summary>
         <div class="config-details-body">
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
@@ -266,11 +258,19 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             {SETTINGS_FIELDS.map(([key, label, help]) => (
               <NumberField key={key} id={`cfg-${key}`} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
             ))}
-            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="留空则回退到环境变量 AUTH_KEY。" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
             <SecretField id="cfg-api-token" label={SECRET_LABELS.apiKey} help="旧配置兼容项，优先用权限配置里的 Token。" configured={secrets.apiKey} value={drafts.apiKey} clearing={clearing.apiKey} onValue={(value) => setDrafts((current) => ({ ...current, apiKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, apiKey: !current.apiKey }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启通知时必填。" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
           </div>
+          <ConfigFormActions
+            dirty={dirty}
+            saving={saving}
+            saveLabel="保存并收起"
+            secondaryLabel="还原改动"
+            secondaryDisabled={!dirty}
+            onSecondary={() => applyResponse(load.data)}
+            onSave={() => handleSave('basic')}
+          />
         </div>
       </details>
 
@@ -284,23 +284,23 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
         <div class="config-card-grid">
           {form.zones.length === 0 && <div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>}
           {form.zones.map((zone, index) => (
-            <div
+            <article
               class={`config-mini-card${editingZone === index ? ' selected' : ''}`}
               key={index}
-              title="点击编辑权限配置"
-              onClick={() => setEditingZone((current) => current === index ? null : index)}
             >
-              <h5>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</h5>
-              <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>
-              <div class="meta">
-                <span>Zone: {zone.zoneId ? '已填写' : '未填写'}</span>
-                <span>CF Key: {zone.hasApiKey || zone.apiKey ? '已配置' : '未配置'}</span>
-              </div>
-              <div class="actions" onClick={(event) => event.stopPropagation()}>
+              <button class="config-card-open" type="button" aria-expanded={editingZone === index} aria-controls="zone-edit-panel" onClick={() => setEditingZone((current) => current === index ? null : index)}>
+                <h5>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</h5>
+                <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>
+                <div class="meta">
+                  <span>Zone: {zone.zoneId ? '已填写' : '未填写'}</span>
+                  <span>CF Key: {zone.hasApiKey || zone.apiKey ? '已配置' : '未配置'}</span>
+                </div>
+              </button>
+              <div class="actions">
                 <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => setEditingZone(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeZone(index)}>删除</button>
               </div>
-            </div>
+            </article>
           ))}
         </div>
         <div id="zone-edit-panel" class={`config-edit-panel${activeZone ? ' active' : ''}`}>
@@ -308,7 +308,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             <>
               <div class="config-edit-heading">
                 <h3>编辑权限配置</h3>
-                <small>修改后点击页首“保存到 KV”生效。</small>
+                <small>基础域名会用于生成下属管理域名。</small>
               </div>
               <div class="config-grid">
                 <TextField id={`zone-name-${editingZone}`} label="显示名称" value={activeZone.label} onValue={(value) => patchZone(editingZone, { label: value, name: value })} />
@@ -316,7 +316,14 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
                 <TextField id={`zone-id-${editingZone}`} label="Cloudflare Zone ID" value={activeZone.zoneId} onValue={(value) => patchZone(editingZone, { zoneId: value })} />
                 <TextField id={`zone-token-${editingZone}`} label="Cloudflare API Token" help="留空保持原值。" type="password" autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : '未配置'} onValue={(value) => patchZone(editingZone, { apiKey: value })} />
               </div>
-              <div class="config-edit-actions"><button class="btn btn-sm btn-outline-secondary" type="button" onClick={() => setEditingZone(null)}>收起</button></div>
+              <ConfigFormActions
+                dirty={dirty}
+                saving={saving}
+                saveLabel="保存并收起"
+                secondaryLabel="收起"
+                onSecondary={() => setEditingZone(null)}
+                onSave={() => handleSave('editor')}
+              />
             </>
           )}
         </div>
@@ -332,26 +339,26 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
         <div class="config-card-grid">
           {form.targets.length === 0 && <div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>}
           {form.targets.map((target, index) => (
-            <div
+            <article
               class={`config-mini-card${editingTarget === index ? ' selected' : ''}`}
               key={index}
-              title="点击编辑管理域名"
-              onClick={() => setEditingTarget((current) => current === index ? null : index)}
             >
-              <h5>{targetDisplayDomain(target)}</h5>
-              <div class="meta">
-                <RecordBadge mode={target.mode} />
-                <span>{target.mode === 'TXT' ? 'TXT 列表' : `端口 ${target.port}`}</span>
-                <span>{exitFilterLabel(target.exitFilter)}</span>
-                <span>{zoneDisplayName(form.zones, target.zoneIndex)}</span>
-                <span>{target.enabled ? '维护开启' : '维护关闭'}</span>
-              </div>
-              <div class="meta">
-                <span>活跃数 {target.minActive}</span>
-                {target.country && <span>国家 {target.country}</span>}
-                {target.asn && <span>ASN {target.asn}</span>}
-              </div>
-              <div class="actions" onClick={(event) => event.stopPropagation()}>
+              <button class="config-card-open" type="button" aria-expanded={editingTarget === index} aria-controls="target-edit-panel" onClick={() => setEditingTarget((current) => current === index ? null : index)}>
+                <h5>{targetDisplayDomain(target)}</h5>
+                <div class="meta">
+                  <RecordBadge mode={target.mode} />
+                  <span>{target.mode === 'TXT' ? 'TXT 列表' : `端口 ${target.port}`}</span>
+                  <span>{exitFilterLabel(target.exitFilter)}</span>
+                  <span>{zoneDisplayName(form.zones, target.zoneIndex)}</span>
+                  <span>{target.enabled ? '维护开启' : '维护关闭'}</span>
+                </div>
+                <div class="meta">
+                  <span>活跃数 {target.minActive}</span>
+                  {target.country && <span>国家 {target.country}</span>}
+                  {target.asn && <span>ASN {target.asn}</span>}
+                </div>
+              </button>
+              <div class="actions">
                 <label class="switch" title="单独控制这个域名是否参与维护">
                   <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
                   <span class="switch-slider" />
@@ -359,7 +366,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
                 <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => setEditingTarget(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeTarget(index)}>删除</button>
               </div>
-            </div>
+            </article>
           ))}
         </div>
         <div id="target-edit-panel" class={`config-edit-panel${activeTarget ? ' active' : ''}`}>
@@ -367,7 +374,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             <>
               <div class="config-edit-heading">
                 <h3>编辑管理域名</h3>
-                <small>修改后点击页首“保存到 KV”生效。</small>
+                <small>基础域名来自权限配置，只需填写子域名前缀。</small>
               </div>
               <div class="config-grid">
                 <label class="field">
@@ -378,14 +385,44 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
                 </label>
                 <label class="field">
                   <span>权限配置</span>
-                  <select class="form-select form-select-sm" value={activeTarget.zoneIndex === null ? '' : String(activeTarget.zoneIndex)} onChange={(event) => patchTarget(editingTarget, { zoneIndex: event.currentTarget.value === '' ? null : Number(event.currentTarget.value) })}>
+                  <select class="form-select form-select-sm" value={activeTarget.zoneIndex === null ? '' : String(activeTarget.zoneIndex)} onChange={(event) => {
+                    const zoneIndex = event.currentTarget.value === '' ? null : Number(event.currentTarget.value);
+                    const baseDomain = zoneIndex === null ? '' : form.zones[zoneIndex]?.baseDomain.trim() ?? '';
+                    const currentBase = activeTarget.zoneIndex === null ? activeTarget.baseDomain : form.zones[activeTarget.zoneIndex]?.baseDomain ?? activeTarget.baseDomain;
+                    const prefix = targetPrefix(activeTarget, currentBase);
+                    patchTarget(editingTarget, {
+                      zoneIndex,
+                      baseDomain,
+                      prefix,
+                      ...(zoneIndex === null ? {} : { domain: composeDomain(prefix, baseDomain) }),
+                    });
+                  }}>
                   <option value="">使用顶层凭据</option>
                     {form.zones.map((zone, zoneIndex) => <option value={zoneIndex} key={zoneIndex}>{zone.label || zone.baseDomain || `权限配置 ${zoneIndex + 1}`}</option>)}
                   </select>
                 </label>
-                <TextField id={`target-prefix-${editingTarget}`} label="域名前缀" value={activeTarget.prefix} placeholder="proxy" onValue={(value) => patchTarget(editingTarget, { prefix: value })} />
-                <TextField id={`target-base-${editingTarget}`} label="基础域名" value={activeTarget.baseDomain} placeholder="example.com" onValue={(value) => patchTarget(editingTarget, { baseDomain: value })} />
-                <TextField id={`target-domain-${editingTarget}`} label="完整域名" help="留空则自动拼接。" value={activeTarget.domain} onValue={(value) => patchTarget(editingTarget, { domain: value })} />
+                {targetZone?.baseDomain ? (
+                  <>
+                    <TextField
+                      id={`target-prefix-${editingTarget}`}
+                      label="子域名前缀"
+                      help={`完整域名：${composeDomain(targetPrefix(activeTarget, targetZone.baseDomain), targetZone.baseDomain)}`}
+                      value={targetPrefix(activeTarget, targetZone.baseDomain)}
+                      placeholder="留空使用根域名"
+                      onValue={(value) => {
+                        const baseDomain = targetZone.baseDomain.trim();
+                        const prefix = value.trim().replace(/^\.+|\.+$/g, '');
+                        patchTarget(editingTarget, { prefix, baseDomain, domain: composeDomain(prefix, baseDomain) });
+                      }}
+                    />
+                    <div class="field domain-base-summary">
+                      <span>基础域名（来自权限配置）</span>
+                      <output>{targetZone.baseDomain}</output>
+                    </div>
+                  </>
+                ) : (
+                  <TextField id={`target-domain-${editingTarget}`} label="管理域名" help="填写需要维护的完整域名。" value={activeTarget.domain} placeholder="proxy.example.com" onValue={(value) => patchTarget(editingTarget, { domain: value, baseDomain: '', prefix: '' })} />
+                )}
                 <NumberField id={`target-port-${editingTarget}`} label={activeTarget.mode === 'TXT' ? '端口（TXT 固定任意）' : '端口'} help={activeTarget.mode === 'TXT' ? 'TXT 模式不限制端口。' : 'A/AAAA 使用；1-65535。'} value={activeTarget.mode === 'TXT' ? 'any' : String(activeTarget.port)} min={1} max={65535} onChange={(value) => patchTarget(editingTarget, { port: Number(value) })} />
                 <NumberField id={`target-min-${editingTarget}`} label="最少可用数" help="低于此数量提示补货不足。" value={String(activeTarget.minActive)} min={0} max={100} onChange={(value) => patchTarget(editingTarget, { minActive: Number(value) })} />
                 <label class="field">
@@ -398,7 +435,14 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
                 <TextField id={`target-asn-${editingTarget}`} label="ASN 筛选" value={activeTarget.asn} placeholder="AS13335 或留空" onValue={(value) => patchTarget(editingTarget, { asn: value })} />
                 <label class="field checkbox-field"><span>维护开关</span><label class="switch"><input type="checkbox" checked={activeTarget.enabled} onChange={(event) => patchTarget(editingTarget, { enabled: event.currentTarget.checked })} /><span class="switch-slider" /><span>{activeTarget.enabled ? '启用' : '停用'}</span></label></label>
               </div>
-              <div class="config-edit-actions"><button class="btn btn-sm btn-outline-secondary" type="button" onClick={() => setEditingTarget(null)}>收起</button></div>
+              <ConfigFormActions
+                dirty={dirty}
+                saving={saving}
+                saveLabel="保存并收起"
+                secondaryLabel="收起"
+                onSecondary={() => setEditingTarget(null)}
+                onSave={() => handleSave('editor')}
+              />
             </>
           )}
         </div>
@@ -425,6 +469,36 @@ function exitFilterLabel(value: TargetConfig['exitFilter']): string {
   if (value === 'v6') return 'IPv6 出口';
   if (value === 'dual') return '双栈出口';
   return '任意出口';
+}
+
+/** 基础配置和各卡片编辑区共用同一套主次操作，避免保存按钮散落在不同位置。 */
+function ConfigFormActions({
+  dirty,
+  saving,
+  saveLabel,
+  secondaryLabel,
+  secondaryDisabled = false,
+  onSecondary,
+  onSave,
+}: {
+  readonly dirty: boolean;
+  readonly saving: boolean;
+  readonly saveLabel: string;
+  readonly secondaryLabel: string;
+  readonly secondaryDisabled?: boolean;
+  readonly onSecondary: () => void;
+  readonly onSave: () => void;
+}) {
+  return (
+    <div class="config-edit-actions">
+      <button class="btn btn-sm btn-outline-secondary" type="button" disabled={secondaryDisabled} onClick={onSecondary}>
+        {secondaryLabel}
+      </button>
+      <button class="btn btn-sm btn-primary config-action-btn" type="button" disabled={saving || !dirty} onClick={onSave}>
+        <Icon name="save" /> {saving ? '保存中…' : saveLabel}
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -572,7 +646,6 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
   ) as unknown as RuntimeSettings;
 
   const apiKey = secretValue(drafts, clearing, 'apiKey');
-  const authKey = secretValue(drafts, clearing, 'authKey');
   const tgToken = secretValue(drafts, clearing, 'tgToken');
 
   return {
@@ -585,11 +658,10 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
       apiKey: zone.apiKey.trim(),
       label: zone.label.trim() || zone.name.trim(),
     })),
-    targets: form.targets.map(normalizeTargetDraft),
+    targets: form.targets.map((target) => normalizeTargetDraft(target, form.zones)),
     checkApi: form.checkApi.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
     dohApi: form.dohApi.trim(),
-    ...(authKey === undefined ? {} : { authKey }),
     ...(tgToken === undefined ? {} : { tgToken }),
     tgId: form.tgId.trim(),
     scheduledEnabled: form.scheduledEnabled,
@@ -599,14 +671,17 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
   };
 }
 
-function normalizeTargetDraft(target: TargetConfig): TargetConfig {
+function normalizeTargetDraft(target: TargetConfig, zones: readonly ZoneDraft[]): TargetConfig {
   const countries = splitList(target.country);
   const asns = splitList(target.asn);
+  const zone = target.zoneIndex === null ? undefined : zones[target.zoneIndex];
+  const baseDomain = zone?.baseDomain.trim() || target.baseDomain.trim();
+  const prefix = target.prefix.trim();
   return {
     ...target,
-    domain: target.domain.trim().toLowerCase(),
-    baseDomain: target.baseDomain.trim(),
-    prefix: target.prefix.trim(),
+    domain: (zone?.baseDomain ? composeDomain(prefix, baseDomain) : target.domain.trim()).toLowerCase(),
+    baseDomain,
+    prefix,
     port: target.mode === 'TXT' ? 'any' : target.port,
     countries,
     asns,
@@ -648,6 +723,21 @@ function mergeTarget(target: TargetConfig, partial: Partial<TargetConfig>): Targ
   };
 }
 
+function targetPrefix(target: TargetConfig, baseDomain: string): string {
+  const domain = target.domain.trim().replace(/\.$/, '').toLowerCase();
+  const base = baseDomain.trim().replace(/^\.+|\.+$/g, '').toLowerCase();
+  if (!base) return target.prefix.trim();
+  if (domain === base) return '';
+  if (domain.endsWith(`.${base}`)) return domain.slice(0, -(base.length + 1));
+  return target.prefix.trim();
+}
+
+function composeDomain(prefix: string, baseDomain: string): string {
+  const cleanPrefix = prefix.trim().replace(/^\.+|\.+$/g, '');
+  const cleanBase = baseDomain.trim().replace(/^\.+|\.+$/g, '');
+  return cleanPrefix ? `${cleanPrefix}.${cleanBase}` : cleanBase;
+}
+
 function splitList(value: string): readonly string[] {
   return [...new Set(value.split(/[,;，；\s]+/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
 }
@@ -679,11 +769,7 @@ function readExitFilter(value: string): ExitFilter {
   return value === 'v4' || value === 'v6' || value === 'dual' ? value : 'any';
 }
 
-/** 保存按钮出现与否只取决于"表单与已落库基线是否一致"，因此这里只需要一个稳定的比较值。 */
+/** 保存入口始终可见；只有表单与已落库基线不同时才允许提交。 */
 function snapshot(form: ConfigForm, drafts: SecretDrafts, clearing: SecretClearing): string {
   return JSON.stringify([form, drafts, clearing]);
-}
-
-function sourceLabel(source: ConfigResponse['source']): string {
-  return source === 'kv' ? 'KV 配置生效' : '环境变量回退';
 }
