@@ -1,4 +1,5 @@
 import { parseTxtAddresses } from '../domain/txt-record';
+import { parseProxyTarget } from '../domain/proxy-target';
 import type { DnsLookup, DnsLookupContext } from '../ports/dns-lookup';
 
 /** `txt@域名` 取 TXT 列表，裸域名取 A/AAAA；两条路径都只返回地址，不负责探测。 */
@@ -46,12 +47,16 @@ export class ResolveTarget {
     for (const value of result.values) {
       for (const address of parseTxtAddresses(value)) {
         if (seen.has(address)) continue;
+        // TXT 里常混着 SPF、域名验证等文本；只保留 IP 或带点的域名。
+        const target = parseProxyTarget(address, 443);
+        if (!target) continue;
+        if (target.family === 'hostname' && !target.host.includes('.')) continue;
         seen.add(address);
         addresses.push(address);
         if (addresses.length >= MAX_RESOLVED_ADDRESSES) break;
       }
     }
-    if (addresses.length === 0) return { ok: false, message: `${host} 的 TXT 记录里没有可用地址` };
+    if (addresses.length === 0) return { ok: false, message: `${host} 的 TXT 记录里没有可用的 IP 或域名` };
     return { ok: true, source: { kind: 'txt', host, addresses } };
   }
 

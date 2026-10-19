@@ -80,6 +80,20 @@ describe('CheckTarget', () => {
     expect(probe.probed).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
   });
 
+  it('ignores non-address TXT values when resolving proxy targets', async () => {
+    const { probe, target } = createTarget({
+      TXT: ['"203.0.113.10:443,v=spf1 include:mail.example.com -all,verify-token,edge.example.com:8443"'],
+    });
+
+    const outcome = await target.execute('txt@_proxy.example.com');
+
+    expect(outcome.ok && outcome.report.source).toMatchObject({
+      kind: 'txt',
+      addresses: ['203.0.113.10:443', 'edge.example.com:8443'],
+    });
+    expect(probe.probed).toEqual(['203.0.113.10:443', 'edge.example.com:8443']);
+  });
+
   it('merges A and AAAA answers and defaults the port to 443', async () => {
     const { target } = createTarget({ A: ['203.0.113.10'], AAAA: ['2001:db8::1'] });
 
