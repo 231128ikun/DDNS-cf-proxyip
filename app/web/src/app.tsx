@@ -8,6 +8,8 @@ import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } 
 import { countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
+import { readAuthKey, shouldShowAuthFailure, writeAuthKey } from './auth/session-key';
+import { AuthGate } from './components/auth-gate';
 import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
 import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
@@ -15,8 +17,6 @@ import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
-
-const TOKEN_KEY = 'ddns-proxyip-token';
 
 interface Toast {
   readonly message: string;
@@ -41,7 +41,9 @@ export function App() {
   const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  const authKey = useMemo(readStoredToken, []);
+  const [authKey, setAuthKey] = useState(readStoredToken);
+  const [authGateVisible, setAuthGateVisible] = useState(!authKey);
+  const [authAttempted, setAuthAttempted] = useState(Boolean(authKey));
   const client = useMemo(() => new ApiClient({ authKey }), [authKey]);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
@@ -82,7 +84,12 @@ export function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
+  }, [authKey, notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
+
+  useEffect(() => {
+    if (config.status === 'ready') setAuthGateVisible(false);
+    else if (config.status === 'error' && config.unauthorized) setAuthGateVisible(true);
+  }, [config]);
 
   useEffect(() => {
     if (!toast) return;
@@ -121,6 +128,17 @@ export function App() {
     void refreshHealth();
     void refreshPools();
     void refreshBindings();
+  };
+
+  const handleAuthSubmit = (key: string): void => {
+    try {
+      writeAuthKey(key, window.sessionStorage);
+    } catch {
+      // Keep the key in memory for this page even when browser storage is unavailable.
+    }
+    setAuthAttempted(true);
+    setAuthGateVisible(true);
+    setAuthKey(key);
   };
 
   const handleLoadPool = (): void => {
@@ -387,6 +405,15 @@ export function App() {
     runMaintenance: handleRunMaintenance,
   };
 
+  if (authGateVisible) {
+    return (
+      <AuthGate
+        invalid={shouldShowAuthFailure(authAttempted, config.status === 'error' && Boolean(config.unauthorized))}
+        onSubmit={handleAuthSubmit}
+      />
+    );
+  }
+
   return (
     <>
       <Hero
@@ -443,12 +470,7 @@ export function App() {
 
 function readStoredToken(): string {
   try {
-    const queryKey = new URLSearchParams(window.location.search).get('key')?.trim();
-    if (queryKey) {
-      sessionStorage.setItem(TOKEN_KEY, queryKey);
-      return queryKey;
-    }
-    return sessionStorage.getItem(TOKEN_KEY) ?? '';
+    return readAuthKey(window.location.search, window.sessionStorage);
   } catch {
     return '';
   }

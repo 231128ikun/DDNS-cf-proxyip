@@ -7,4 +7,5 @@ export type RequestState<T> =
     readonly message: string;
     /** 503 表示存储未绑定；这是"还没初始化"，不该按故障展示。 */
     readonly unavailable?: boolean;
+    readonly unauthorized?: boolean;
   };

@@ -15,6 +15,10 @@ export function isUnavailable(error: unknown): boolean {
   return error instanceof ApiError && error.status === 503;
 }
 
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
 export function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
