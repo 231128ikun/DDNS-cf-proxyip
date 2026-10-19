@@ -11,6 +11,7 @@ import {
   type ProbeConfig,
 } from '../contracts/config';
 import type { ProbeAdapter } from '../ports/probe';
+import { appFetch } from '../util/fetch';
 
 export interface RuntimeEnv {
   readonly CF_KEY?: string;
@@ -79,7 +80,7 @@ export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAda
     endpoints: config.endpoints.map(({ name, urlTemplate }) => ({ name, urlTemplate })),
     timeoutMs: config.timeoutMs,
     fallbackToNext: config.fallbackToNext,
-    fetchImpl: deps.fetchImpl ?? fetch,
+    fetchImpl: deps.fetchImpl ?? appFetch,
   });
 }
 

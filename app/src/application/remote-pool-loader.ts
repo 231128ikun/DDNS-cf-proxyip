@@ -1,5 +1,6 @@
 import { cleanPoolText } from '../domain/pool-text';
 import { validateRemoteUrl, type RemoteUrlRejection } from '../domain/remote-url';
+import { appFetch } from '../util/fetch';
 
 export const DEFAULT_MAX_REMOTE_BYTES = 512 * 1024;
 export const DEFAULT_MAX_REDIRECTS = 3;
@@ -46,7 +47,7 @@ export class RemotePoolLoader {
     this.timeoutMs = options.timeoutMs;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_REMOTE_BYTES;
     this.maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 
   async load(rawUrl: string, options: RemoteLoadRequestOptions = {}): Promise<RemotePoolLoadResult> {

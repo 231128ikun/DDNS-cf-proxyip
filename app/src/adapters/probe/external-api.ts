@@ -11,6 +11,7 @@ import {
 import type { ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
+import { appFetch } from '../../util/fetch';
 import {
   firstText,
   readProbeExit,
@@ -46,7 +47,7 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
     this.endpoints = options.endpoints;
     this.timeoutMs = options.timeoutMs;
     this.fallbackToNext = options.fallbackToNext ?? true;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 
   async probe(target: ProxyTarget, context: ProbeContext = {}): Promise<ProbeResult> {

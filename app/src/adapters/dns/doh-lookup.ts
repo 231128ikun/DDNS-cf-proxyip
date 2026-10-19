@@ -6,6 +6,7 @@ import type {
   DnsLookupType,
 } from '../../ports/dns-lookup';
 import { createRequestTimeout } from '../../util/request-timeout';
+import { appFetch } from '../../util/fetch';
 
 /** IANA 记录类型编号，用于从 DoH JSON 响应里挑出需要的 Answer。 */
 const TYPE_CODES: Readonly<Record<DnsLookupType, number>> = { A: 1, AAAA: 28, TXT: 16 };
@@ -32,7 +33,7 @@ export class DohLookup implements DnsLookup {
   constructor(options: DohLookupOptions) {
     this.endpoint = options.endpoint.trim();
     this.timeoutMs = Math.max(1_000, Math.min(30_000, options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 
   async query(name: string, type: DnsLookupType, context: DnsLookupContext = {}): Promise<DnsLookupResult> {

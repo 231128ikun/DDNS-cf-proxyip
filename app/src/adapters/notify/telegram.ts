@@ -1,4 +1,5 @@
 import type { Notifier, NotifyResult } from '../../ports/notifier';
+import { appFetch } from '../../util/fetch';
 
 export interface TelegramNotifierOptions {
   readonly enabled: boolean;
@@ -21,7 +22,7 @@ export class TelegramNotifier implements Notifier {
     this.token = options.token.trim();
     this.chatId = options.chatId.trim();
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 
   async send(text: string): Promise<NotifyResult> {

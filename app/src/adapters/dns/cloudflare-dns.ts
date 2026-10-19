@@ -1,6 +1,7 @@
 import { dnsRecordTypeForHost, type DnsRecordType } from '../../domain/proxy-target';
 import { formatTxtAddresses } from '../../domain/txt-record';
 import type { DnsRecord, DnsRepository, DnsZone } from '../../ports/dns-repository';
+import { appFetch } from '../../util/fetch';
 
 export interface CloudflareDnsOptions {
   readonly baseUrl?: string;
@@ -18,7 +19,7 @@ export class CloudflareDnsRepository implements DnsRepository {
   constructor(options: CloudflareDnsOptions = {}) {
     this.baseUrl = (options.baseUrl ?? 'https://api.cloudflare.com/client/v4').replace(/\/+$/, '');
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 
   async listAddressRecords(zone: DnsZone, domain: string): Promise<readonly DnsRecord[]> {
