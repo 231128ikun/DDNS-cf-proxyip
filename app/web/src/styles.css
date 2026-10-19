@@ -84,6 +84,14 @@
         table { border-collapse: collapse; }
         /* ── Bootstrap replacement: Grid ── */
         .container { width: 100%; max-width: 1140px; margin: 0 auto; padding: 0 var(--space-5); }
+        .auth-gate { min-height: 100vh; display: grid; place-items: center; padding-top: var(--space-9); padding-bottom: var(--space-9); }
+        .auth-gate-card { width: min(100%, 440px); padding: var(--space-9); }
+        .auth-gate-brand { margin: 0 0 var(--space-3); color: var(--color-primary-strong); font-size: var(--font-size-sm); font-weight: 700; }
+        .auth-gate-card h1 { margin: 0 0 var(--space-4); font-size: var(--font-size-xxl); }
+        .auth-gate-card > p.text-secondary { margin: 0 0 var(--space-8); }
+        .auth-gate-form { display: grid; gap: var(--space-4); }
+        .auth-gate-error { margin: 0; color: var(--color-danger); }
+        .auth-gate-form .btn { width: 100%; min-height: 44px; }
         .row { display: flex; flex-wrap: wrap; margin: 0 -6px; }
         .row > * { padding: 0 var(--space-2); }
         .row.g-2 { margin: 0 -4px; }
@@ -153,33 +161,47 @@
         .w-100 { width: 100% !important; }
         .card-title { margin-top: 0; margin-bottom: var(--space-3); font-size: var(--font-size-md); font-weight: 500; }
         .hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(280px, 460px);
+            align-items: center;
+            gap: var(--space-5) var(--space-9);
             padding: var(--space-10) 0 var(--space-7);
             position: relative;
         }
+        .hero-copy { min-width: 0; }
+        .hero-eyebrow {
+            margin: 0 0 var(--space-2);
+            color: var(--color-primary-strong);
+            font-size: var(--font-size-xs);
+            font-weight: 700;
+            letter-spacing: .08em;
+        }
         .hero h1 {
             font-size: var(--font-size-xxl);
-            font-weight: 600;
-            color: var(--color-text-muted);
-            margin-bottom: var(--space-4);
+            font-weight: 700;
+            color: var(--color-text);
+            margin: 0 0 var(--space-4);
         }
         .hero-actions {
             display: flex;
             align-items: center;
             gap: var(--space-4);
-            margin-top: var(--space-3);
+            margin-top: var(--space-4);
             flex-wrap: wrap;
         }
         .guide-toggle {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 34px;
-            height: 34px;
-            border-radius: var(--radius-pill);
+            min-height: 34px;
+            gap: var(--space-2);
+            padding: 0 var(--space-4);
+            border-radius: var(--radius-md);
             border: 1px solid var(--color-border-strong);
             background: var(--color-surface);
             color: var(--color-text-muted);
-            font-size: 16px;
+            font-size: var(--font-size-xs);
+            font-weight: 600;
             cursor: pointer;
             transition: all 0.15s ease;
         }
@@ -196,6 +218,7 @@
             border: 1px solid var(--color-border);
             font-size: var(--font-size-xs);
             color: var(--color-text-muted);
+            grid-column: 1 / -1;
         }
         .usage-guide ol {
             padding-left: 18px;
@@ -205,13 +228,26 @@
             margin-bottom: var(--space-1);
         }
         @media (max-width: 768px) {
+            .hero {
+                grid-template-columns: minmax(0, 1fr);
+                gap: var(--space-5);
+                padding-top: var(--space-8);
+            }
             .hero h1 {
                 font-size: var(--font-size-lg);
             }
         }
         .domain-selector {
-            max-width: 560px;
-            margin-top: var(--space-5);
+            grid-column: 2;
+            grid-row: 1;
+            min-width: 0;
+            width: 100%;
+        }
+        .target-summary-label {
+            margin: 0 0 var(--space-2) var(--space-1);
+            color: var(--color-text-muted);
+            font-size: var(--font-size-xs);
+            font-weight: 700;
         }
         .target-summary-button {
             text-align: left;
@@ -220,7 +256,7 @@
         }
         .target-summary {
             display: inline-flex;
-            width: fit-content;
+            width: 100%;
             max-width: 100%;
             position: relative;
             min-height: 76px;
@@ -271,6 +307,10 @@
             margin-left: 0;
         }
         @media (max-width: 768px) {
+            .domain-selector {
+                grid-column: 1;
+                grid-row: auto;
+            }
             .target-summary-button {
             text-align: left;
             font: inherit;
@@ -290,12 +330,13 @@
             }
         }
         .card {
-            border: none;
-            border-radius: 20px;
-            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-xs);
             background: var(--color-surface);
             margin-bottom: var(--space-9);
         }
+        #page-dashboard > .card:first-child { box-shadow: var(--shadow-sm); }
         .console {
             background: var(--color-text);
             color: var(--color-success-bright);
@@ -1022,7 +1063,9 @@
             gap: var(--space-3);
             align-items: center;
             flex-wrap: wrap;
-            margin-bottom: var(--space-7);
+            margin-bottom: var(--space-8);
+            padding-bottom: var(--space-4);
+            border-bottom: 1px solid var(--color-border);
         }
         .nav-tab {
             display: inline-flex;
@@ -1033,15 +1076,21 @@
             border: 1px solid var(--color-border-strong);
             background: var(--color-surface);
             color: var(--color-text-muted);
-            border-radius: var(--radius-pill);
-            padding: var(--space-3) var(--space-6);
+            border-radius: var(--radius-md);
+            padding: var(--space-3) var(--space-5);
             font-weight: 700;
             cursor: pointer;
         }
         .nav-tab.active {
-            background: var(--color-primary);
-            color: var(--color-inverse);
-            border-color: var(--color-primary);
+            background: var(--color-primary-alpha-soft);
+            color: var(--color-primary-strong);
+            border-color: var(--color-primary-border);
+        }
+        .nav-tab:focus-visible,
+        .guide-toggle:focus-visible,
+        .btn:focus-visible {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 2px;
         }
         .page-panel { display: none; }
         .page-panel.active { display: block; }
@@ -1163,7 +1212,7 @@
             }
         }
 
-        /* IP库管理和系统控制台卡片等高 */
+        /* IP 库编辑区与控制台保持相近高度，避免日志区占满页面。 */
         .col-lg-7 > .card.p-4:first-child,
         .col-lg-5 > .card.p-4 {
             display: flex;
@@ -1172,7 +1221,7 @@
         @media (min-width: 992px) {
             .col-lg-7 > .card.p-4:first-child,
             .col-lg-5 > .card.p-4 {
-                min-height: 580px;
+                min-height: 500px;
             }
         }
         /* IP库管理卡片内部布局 - 让内容区域自动扩展，按钮固定底部 */
@@ -1190,8 +1239,8 @@
         }
         /* 系统控制台卡片内部布局 - 固定高度，不自动扩展 */
         .col-lg-5 > .card.p-4 .console {
-            height: 380px;
-            max-height: 380px;
+            height: 280px;
+            max-height: 280px;
             flex-shrink: 0;
         }
 

@@ -15,19 +15,21 @@ interface HeroProps {
 export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig }: HeroProps) {
   return (
     <div class="container hero">
-      <h1><Icon name="globe" /> DDNS Pro 多域名管理</h1>
-      <div class="hero-actions">
-        <button
-          type="button"
-          class="guide-toggle"
-          onClick={onToggleUsage}
-          aria-expanded={usageOpen}
-          title="使用步骤提示"
-          aria-label="查看使用步骤"
-        >
-          <Icon name="help" />
-        </button>
-        <div class="config-info"><Icon name="settings" /> 建议流程：导入IP → 检测 → 入库 → 执行维护</div>
+      <div class="hero-copy">
+        <p class="hero-eyebrow">DDNS PRO · EDGE CONTROL</p>
+        <h1><Icon name="globe" /> 多域名管理</h1>
+        <div class="hero-actions">
+          <button
+            type="button"
+            class="guide-toggle"
+            onClick={onToggleUsage}
+            aria-expanded={usageOpen}
+            aria-controls="usage-guide"
+          >
+            <Icon name="help" /> 使用说明
+          </button>
+          <div class="config-info"><Icon name="settings" /> 导入节点 <span>→</span> 检测 <span>→</span> 入库 <span>→</span> DNS 维护</div>
+        </div>
       </div>
 
       {health.status === 'error' && (
@@ -46,6 +48,7 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
       </div>
 
       <div class="domain-selector">
+        <p class="target-summary-label">当前维护目标</p>
         <button class="target-summary target-summary-button" type="button" onClick={onOpenConfig}>
           <span id="current-target-summary-content">
             <TargetSummary state={bindings} />
