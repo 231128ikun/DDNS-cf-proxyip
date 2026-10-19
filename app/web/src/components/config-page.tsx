@@ -274,15 +274,18 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
         </div>
       </details>
 
-      <div class="card p-4 mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 维护的域名配置</h2>
+      <section class="card p-4 mb-3" aria-labelledby="zone-config-title">
+        <div class="config-section-heading">
+          <div>
+            <h2 id="zone-config-title" class="card-title m-0 fw-bold"><Icon name="globe" /> Cloudflare 权限配置</h2>
+            <p class="config-section-help">每个 Zone 配置一次基础域名和凭据，下属管理域名会自动复用。</p>
+          </div>
           <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.zones.length >= MAX_ZONES} onClick={addZone}>
-            <Icon name="plus" /> 添加权限配置
+            <Icon name="plus" /> 添加 Zone
           </button>
         </div>
         <div class="config-card-grid">
-          {form.zones.length === 0 && <div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>}
+          {form.zones.length === 0 && <div class="config-empty-state">暂无 Zone，点击“添加 Zone”创建。</div>}
           {form.zones.map((zone, index) => (
             <article
               class={`config-mini-card${editingZone === index ? ' selected' : ''}`}
@@ -327,11 +330,14 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             </>
           )}
         </div>
-      </div>
+      </section>
 
-      <div class="card p-4 mb-3">
-        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <h2 class="card-title m-0 fw-bold"><Icon name="activity" /> 管理域名</h2>
+      <section class="card p-4 mb-3" aria-labelledby="target-config-title">
+        <div class="config-section-heading">
+          <div>
+            <h2 id="target-config-title" class="card-title m-0 fw-bold"><Icon name="activity" /> 管理域名</h2>
+            <p class="config-section-help">选择 Zone 后只填写子域名前缀；留空表示维护基础域名本身。</p>
+          </div>
           <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
             <Icon name="plus" /> 添加管理域名
           </button>
@@ -446,7 +452,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             </>
           )}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

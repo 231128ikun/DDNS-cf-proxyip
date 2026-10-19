@@ -516,6 +516,26 @@
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
             gap: var(--space-5);
         }
+        .config-section-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: var(--space-3) var(--space-5);
+            margin-bottom: var(--space-5);
+        }
+        .config-section-heading > div {
+            min-width: 0;
+        }
+        .config-section-help {
+            margin: var(--space-2) 0 0;
+            color: var(--color-text-muted);
+            font-size: var(--font-size-xs);
+            line-height: 1.45;
+        }
+        .config-section-heading > .btn {
+            flex: 0 0 auto;
+        }
         .config-mini-card {
             border: 1px solid var(--color-border);
             background: var(--color-surface-muted);
