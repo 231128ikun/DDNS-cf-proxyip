@@ -57,11 +57,12 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
       const result = await this.probeEndpoint(target, endpoint, context);
       attempts.push(result);
       if (result.status === 'alive') return result;
-      if (!this.fallbackToNext) return result;
       if (context.signal?.aborted) return result;
+      // 备用接口只接手主接口无法得出结论的情况。可信探针明确判死后应直接采用该结论。
+      if (result.status !== 'unknown' || !this.fallbackToNext) return result;
     }
 
-    return attempts.find((result) => result.status === 'dead') ?? attempts.at(-1) ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
+    return attempts.at(-1) ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
   }
 
   private async probeEndpoint(target: ProxyTarget, endpoint: ExternalApiProbeEndpoint, context: ProbeContext): Promise<ProbeResult> {
@@ -126,15 +127,19 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   if (!isRecognizedPayload(record)) return unknown(target, 'INVALID_RESPONSE', '检测接口响应格式不可识别', { endpoint, latencyMs });
 
   const statusText = readText(record.status)?.toLowerCase();
+  const message = readMessage(record);
+  const infrastructureError = readProbeInfrastructureError(record);
+  if (infrastructureError) {
+    return unknown(target, 'PROBE_API_ERROR', infrastructureError, { endpoint, latencyMs });
+  }
   if (statusText === 'error' || statusText === 'invalid') {
-    return unknown(target, 'API_ERROR', readMessage(record) ?? '检测接口返回错误', { endpoint, latencyMs });
+    return unknown(target, 'API_ERROR', message ?? '检测接口返回错误', { endpoint, latencyMs });
   }
 
   const decision = readBooleanDecision(record) ?? readStatusDecision(statusText) ?? readProbeResultsDecision(record.probe_results);
   const exits = readProbeExits(record);
   const exitIp = pickExitIp(record, exits);
   const exitFamily = pickExitFamily(record, exitIp);
-  const message = readMessage(record);
 
   if (decision === true) {
     return alive(target, {
@@ -295,6 +300,28 @@ function pickExitFamily(record: JsonRecord, exitIp: string | undefined): ExitFam
   if (supportsIpv6) return 'ipv6';
 
   return exitFamilyFromIp(exitIp);
+}
+
+function readProbeInfrastructureError(record: JsonRecord): string | undefined {
+  const messages = [readMessage(record), ...readNestedProbeMessages(record.probe_results)];
+  return messages.find((value): value is string => Boolean(value && isProbeInfrastructureMessage(value)));
+}
+
+function readNestedProbeMessages(value: unknown): string[] {
+  const probes = asRecord(value);
+  if (!probes) return [];
+  return Object.values(probes).flatMap((probeValue) => {
+    const probe = asRecord(probeValue);
+    if (!probe) return [];
+    return [readMessage(probe), ...readNestedProbeMessages(probe.exit)].filter((value): value is string => Boolean(value));
+  });
+}
+
+const PROBE_INFRASTRUCTURE_ERROR_PATTERN =
+  /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|request cancel(?:l)?ed|operation aborted/i;
+
+function isProbeInfrastructureMessage(value: string): boolean {
+  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value);
 }
 
 function readMessage(record: JsonRecord): string | undefined {

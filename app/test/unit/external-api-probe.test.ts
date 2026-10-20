@@ -153,4 +153,70 @@ describe('ExternalApiProbeAdapter', () => {
     expect(result.endpoint).toBe('backup');
     expect(result.exitIp).toBe('198.51.100.9');
   });
+
+  it('treats a TCP loop reported by the probe as an infrastructure error', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        candidate: '203.0.113.10:8443',
+        success: false,
+        elapsed_ms: 0,
+        message: 'TCP Loop detected, contact us if this doesn\'t seem right.',
+        probe_results: {
+          ipv4: { ok: false, error: 'TCP Loop detected, contact us if this doesn\'t seem right.', exit: null },
+          ipv6: { ok: false, error: 'TCP Loop detected, contact us if this doesn\'t seem right.', exit: null },
+        },
+      }),
+    ) as unknown as typeof fetch;
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
+      timeoutMs: 1_000,
+      fetchImpl,
+    });
+
+    const result = await adapter.probe(target);
+    expect(result.status).toBe('unknown');
+    expect(result.code).toBe('PROBE_API_ERROR');
+    expect(result.message).toContain('TCP Loop detected');
+  });
+
+  it('does not fall back after a trusted endpoint reports the node dead', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ success: false, message: 'connection refused' }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, ip: '198.51.100.9' })) as unknown as typeof fetch;
+
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [
+        { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
+        { name: 'backup', urlTemplate: 'https://backup.example/?proxyip=' },
+      ],
+      timeoutMs: 1_000,
+      fetchImpl,
+    });
+
+    const result = await adapter.probe(target);
+    expect(result.status).toBe('dead');
+    expect(result.endpoint).toBe('primary');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'Network connection lost.',
+    'probe request timed out',
+    'upstream returned 503 Service Unavailable',
+    'Worker exceeded resource limits',
+    'too many requests, rate limit exceeded',
+    'fetch failed: internal error',
+  ])('treats probe service failure %s as unknown', async (message) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ success: false, message })) as unknown as typeof fetch;
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
+      timeoutMs: 1_000,
+      fetchImpl,
+    });
+
+    const result = await adapter.probe(target);
+    expect(result.status).toBe('unknown');
+    expect(result.code).toBe('PROBE_API_ERROR');
+  });
 });
