@@ -1382,31 +1382,59 @@ body {
             }
         }
 
-        /* IP 库编辑区与控制台保持相近高度，避免日志区占满页面。 */
-        .col-lg-7 > .card.p-4:first-child,
-        .col-lg-5 > .card.p-4 {
+        /* 桌面工作区共享同一网格行高度，控制台日志占用剩余空间并在内部滚动。 */
+        .dashboard-core-row .dashboard-card {
             display: flex;
             flex-direction: column;
         }
-        @media (min-width: 992px) {
-            .col-lg-7 > .card.p-4:first-child,
-            .col-lg-5 > .card.p-4 {
-                min-height: 460px;
-            }
-            .col-lg-5 > .card.p-4 { height: 100%; }
-        }
-        /* IP库管理卡片内部布局 - 让内容区域自动扩展，按钮固定底部 */
-        .col-lg-7 > .card.p-4:first-child .ip-content-area {
+        .dashboard-core-row .ip-content-area {
+            display: flex;
             flex: 1;
-            display: flex;
             flex-direction: column;
         }
-        .col-lg-7 > .card.p-4:first-child #ip-input {
+        .dashboard-core-row #ip-input {
             flex: 1;
             min-height: 120px;
         }
-        .col-lg-7 > .card.p-4:first-child .ip-actions-area {
+        .dashboard-core-row .ip-actions-area {
             flex-shrink: 0;
+        }
+        @media (min-width: 992px) {
+            .dashboard-core-row {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: var(--space-7);
+                align-items: stretch;
+                margin: 0;
+            }
+            .dashboard-core-row > * {
+                min-width: 0;
+                max-width: none;
+                padding: 0;
+            }
+            .dashboard-core-row > .col-lg-7,
+            .dashboard-core-row > .col-lg-5 {
+                display: flex;
+                flex: none;
+            }
+            .dashboard-core-row > .col-12 {
+                grid-column: 1 / -1;
+            }
+            .dashboard-core-row .dashboard-card {
+                height: 100%;
+                min-height: 520px;
+                margin-bottom: 0;
+            }
+            .dashboard-console-card .console {
+                flex: 1 1 auto;
+                min-height: 180px;
+                max-height: none;
+            }
+        }
+        @media (min-width: 1200px) {
+            .dashboard-core-row {
+                grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+            }
         }
         /* 响应式优化 */
         @media (max-width: 768px) {

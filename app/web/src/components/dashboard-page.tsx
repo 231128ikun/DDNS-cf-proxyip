@@ -171,9 +171,9 @@ export function DashboardPage({
         </div>
       </div>
 
-      <div class="row">
+      <div class="row dashboard-core-row">
         <div class="col-lg-7">
-          <div class="card p-4 mb-3">
+          <div class="card p-4 dashboard-card">
             <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
               <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
               <div class="pool-tools">
@@ -337,7 +337,7 @@ export function DashboardPage({
         </div>
 
         <div class="col-lg-5">
-          <div class="card p-4">
+          <div class="card p-4 dashboard-card dashboard-console-card">
             <h2 class="card-title mb-3 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
             <Console health={health} pools={pools} logs={consoleLogs} />
             {/* 只在批量检测进行中显示进度条：空闲时留一条空槽会被误读成控件。 */}
