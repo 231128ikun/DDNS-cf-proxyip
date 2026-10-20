@@ -1694,6 +1694,25 @@ function joinMetaValues(values) {
     return unique.length ? unique.join('/') : 'null';
 }
 
+const PROBE_INFRASTRUCTURE_ERROR_PATTERN = /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|request cancel(?:l)?ed|operation aborted/i;
+
+function hasProbeInfrastructureError(data) {
+    if (!data || typeof data !== 'object') return false;
+    try {
+        const evidence = JSON.stringify({
+            message: data.message,
+            error: data.error,
+            errorMessage: data.errorMessage,
+            detail: data.detail,
+            reason: data.reason,
+            probeResults: data.probe_results ?? data.probeResults ?? data.probes
+        });
+        return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(evidence);
+    } catch {
+        return false;
+    }
+}
+
 function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
     if (!data || typeof data !== 'object') {
         return { success: false, candidate: requestedAddr, proxyIP: '', portRemote: '', responseTime: '-', colo: 'N/A', exits: [], ipInfo: null, asn: 'null', country: 'null', stack: 'null', apiError: Boolean(apiError) };
@@ -1703,7 +1722,7 @@ function normalizeCheckResult(data, requestedAddr = '', apiError = false) {
     const preferredExit = getPreferredExitInfo(exits);
     const status = normalizeTextValue(data.status).toLowerCase();
     const explicitFailure = data.success === false || data.ok === false || ['failed', 'failure', 'error'].includes(status);
-    const resultApiError = Boolean(apiError) || data.apiError === true;
+    const resultApiError = Boolean(apiError) || data.apiError === true || hasProbeInfrastructureError(data);
     // 异常标记优先于 success/ok：错误响应若同时带 success:true，也不能进入维护删除/补货判定。
     const success = !resultApiError && !explicitFailure && (
         data.success === true || data.ok === true || status === 'success' || exits.length > 0
