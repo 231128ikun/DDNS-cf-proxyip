@@ -5,7 +5,7 @@ import type { PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
-import { countPoolTextLines } from '../../src/domain/pool-text';
+import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
 import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
@@ -162,11 +162,18 @@ export function App() {
       notify('输入框为空，未写入池', 'error');
       return;
     }
+    const normalized = cleanPoolText(ipText);
+    if (!normalized) {
+      notify('输入框里没有可识别的 IP 或域名', 'error');
+      return;
+    }
     setSavingPool(true);
-    client.savePool(poolKey, ipText)
+    client.savePool(poolKey, normalized)
       .then(async () => {
+        const { content } = await client.readPool(poolKey);
+        setIpText(content);
         await refreshPools();
-        notify('已保存到 IP 池');
+        notify('已保存并规范化到 IP 池');
       })
       .catch((error: unknown) => notify(errorMessage(error), 'error'))
       .finally(() => setSavingPool(false));
@@ -404,6 +411,7 @@ export function App() {
             batch={batch}
             lookup={lookup}
             ipText={ipText}
+            probeConfigured={config.status !== 'ready' || Boolean(config.data.config.checkApi || config.data.config.checkApiBackup)}
             filterText={filterText}
             remoteUrl={remoteUrl}
             poolKey={poolKey}

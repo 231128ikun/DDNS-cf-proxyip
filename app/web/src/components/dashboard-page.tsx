@@ -45,6 +45,7 @@ interface DashboardPageProps {
   readonly batch: RequestState<PoolCheckResponse>;
   readonly lookup: string;
   readonly ipText: string;
+  readonly probeConfigured: boolean;
   readonly filterText: string;
   readonly remoteUrl: string;
   readonly poolKey: string;
@@ -76,6 +77,7 @@ export function DashboardPage({
   batch,
   lookup,
   ipText,
+  probeConfigured,
   filterText,
   remoteUrl,
   poolKey,
@@ -225,8 +227,14 @@ export function DashboardPage({
                 value={ipText}
                 aria-label="IP 池文本"
                 onInput={(event) => onIpTextChange(event.currentTarget.value)}
-                placeholder={`支持格式：\n1.2.3.4:443\n1.2.3.4 (默认443端口)\nexample.com:8443 (检测时解析为IP)\n1.2.3.4:443 #HK 香港节点 (带注释)`}
+                placeholder={`支持地址、逗号、竖线、Tab、空格混合输入：\n1.2.3.4:443, 1.2.3.5:8443 | [2001:db8::1]:443\n1.2.3.4 (默认443端口)\n1.2.3.4:443,AS64500,US,v4 # HK 香港节点`}
               />
+
+              {!probeConfigured && (
+                <div class="kv-alert compact">
+                  尚未配置主复检或备用复检接口。检测会返回“探针异常”，请先在配置中心保存检测接口。
+                </div>
+              )}
 
               <div class="mb-2 filter-toolbar">
                 <div class="filter-line">

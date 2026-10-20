@@ -225,7 +225,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
 
   return (
     <div id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config">
-      <details ref={basicSettingsRef} class="card p-4 mb-3 config-details">
+      <details ref={basicSettingsRef} class="card p-4 mb-3 config-details" open>
         <summary class="config-details-summary">
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
           {dirty && <span class="config-dirty-hint">有未保存的改动</span>}
@@ -250,6 +250,9 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
               <TextField id="cfg-check-api" label="主复检接口"  value={form.checkApi} placeholder="https://example.com/check?proxyip={proxyip}" onValue={(value) => patch({ checkApi: value })} />
               <TextField id="cfg-check-api-backup" label="备用复检接口" help="留空则不复检。" value={form.checkApiBackup} placeholder="https://checkapi.dvb.kdns.fr/?candidate=" onValue={(value) => patch({ checkApiBackup: value })} />
             </div>
+            {!form.checkApi.trim() && !form.checkApiBackup.trim() && (
+              <p class="kv-alert compact">至少保存一个复检接口，否则检测结果只会显示为探针异常。</p>
+            )}
           </section>
 
           <div class="config-grid mb-3">
@@ -765,7 +768,6 @@ function readInteger(value: string, label: string, min: number, max: number): nu
   if (parsed < min || parsed > max) throw new Error(`${label}必须在 ${min}-${max} 之间`);
   return parsed;
 }
-
 
 function readTargetMode(value: string): TargetMode {
   return value === 'TXT' ? 'TXT' : 'A';
