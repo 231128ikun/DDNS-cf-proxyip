@@ -16,9 +16,10 @@ import { gzipSync } from 'node:zlib';
 const BUDGETS = {
   worker: { rawKb: 230, gzipKb: 60 },
   script: { rawKb: 60, gzipKb: 22 },
-  scriptTotal: { rawKb: 90, gzipKb: 32 },
+  // 汇总 gzip 预算给实时日志和 UI 语义样式留少量空间；单文件与 Worker 门禁保持不变。
+  scriptTotal: { rawKb: 90, gzipKb: 35 },
   style: { rawKb: 40, gzipKb: 10 },
-  pageTotal: { rawKb: 130, gzipKb: 42 },
+  pageTotal: { rawKb: 130, gzipKb: 46 },
 };
 
 const appRoot = new URL('../', import.meta.url);

@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
-import type { PoolCheckResponse } from '../../src/contracts/pool-check';
+import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
-import { DashboardPage, type DashboardActions, type PoolActionKey } from './components/dashboard-page';
+import {
+  DashboardPage,
+  type ConsoleLogEntry,
+  type ConsoleTone,
+  type DashboardActions,
+  type PoolCheckProgressState,
+  type PoolActionKey,
+} from './components/dashboard-page';
 import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
 import type { RequestState } from './state/request-state';
@@ -38,11 +45,24 @@ export function App() {
   const [checkingBatch, setCheckingBatch] = useState(false);
   const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
+  const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
+  const [batchProgressState, setBatchProgressState] = useState<PoolCheckProgressState | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const client = useMemo(() => new ApiClient(), []);
+  const logSequence = useRef(0);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
+  }, []);
+
+  const appendConsoleLog = useCallback((message: string, tone: ConsoleTone = 'info'): void => {
+    const entry: ConsoleLogEntry = {
+      id: ++logSequence.current,
+      time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      tone,
+      message,
+    };
+    setConsoleLogs((current) => [...current.slice(-199), entry]);
   }, []);
 
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
@@ -109,12 +129,28 @@ export function App() {
       return;
     }
     setCheck({ status: 'loading' });
+    appendConsoleLog(`[探测] 开始检测 ${value}`);
     client.checkTarget(value)
-      .then((data) => setCheck({ status: 'ready', data }))
-      .catch((error: unknown) => setCheck({ status: 'error', message: errorMessage(error) }));
+      .then((data) => {
+        setCheck({ status: 'ready', data });
+        const statuses = data.items.reduce((counts, item) => {
+          counts[item.result.status] += 1;
+          return counts;
+        }, { alive: 0, dead: 0, unknown: 0 });
+        appendConsoleLog(
+          `[探测] 完成 · 可用 ${statuses.alive} / 失效 ${statuses.dead} / 未知 ${statuses.unknown}`,
+          statuses.alive ? 'success' : statuses.unknown ? 'warning' : 'error',
+        );
+      })
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        setCheck({ status: 'error', message });
+        appendConsoleLog(`[探测] ${message}`, 'error');
+      });
   };
 
   const handleRefresh = (): void => {
+    appendConsoleLog('[系统] 正在刷新状态和 IP 池');
     void refreshHealth();
     void refreshPools();
     void refreshBindings();
@@ -122,12 +158,18 @@ export function App() {
 
   const handleLoadPool = (): void => {
     setLoadingPool(true);
+    appendConsoleLog(`[IP池] 正在读取 ${poolKey}`);
     client.readPool(poolKey)
       .then(({ content }) => {
         setIpText(content.replace(/\n$/, ''));
+        appendConsoleLog(`[IP池] 已读取 ${countPoolTextLines(content)} 条地址`, 'success');
         notify(content.trim() ? '已从库中加载' : '该池当前为空', content.trim() ? 'success' : 'error');
       })
-      .catch((error: unknown) => notify(errorMessage(error), 'error'))
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        appendConsoleLog(`[IP池] ${message}`, 'error');
+        notify(message, 'error');
+      })
       .finally(() => setLoadingPool(false));
   };
 
@@ -139,20 +181,35 @@ export function App() {
     }
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
-    client.checkBatch(text)
+    const total = countPoolTextLines(text);
+    setBatchProgressState({ completed: 0, total });
+    appendConsoleLog(`[批量] 开始检测 · ${total} 个地址`);
+    client.checkBatch(text, undefined, (event: PoolCheckProgressEvent) => {
+      setBatchProgressState({ completed: event.completed, total: event.total });
+      const statusLabel = event.item.status === 'alive' ? '可用' : event.item.status === 'dead' ? '失效' : '未知';
+      const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
+      const detail = event.item.status === 'unknown' && event.item.message ? ` · ${event.item.message}` : '';
+      appendConsoleLog(`[批量 ${event.completed}/${event.total}] ${event.item.address} · ${statusLabel}${detail}`, tone);
+    })
       .then((report) => {
         setBatch({ status: 'ready', data: report });
         const aliveLines = report.items.filter((item) => item.status === 'alive').map((item) => item.line);
         // 检测的语义是“筛出可用项”，因此有可用结果时用合并了元数据的行替换输入框。
         if (aliveLines.length) setIpText(aliveLines.join('\n'));
+        appendConsoleLog(
+          `[批量] 完成 · 可用 ${report.alive} / 失效 ${report.dead} / 未知 ${report.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
+          report.unknown ? 'warning' : report.alive ? 'success' : 'error',
+        );
         notify(
           `检测完成：可用 ${report.alive}，失效 ${report.dead}，未知 ${report.unknown}${report.invalid.length ? `，无效 ${report.invalid.length}` : ''}`,
           report.alive > 0 ? 'success' : 'error',
         );
       })
       .catch((error: unknown) => {
-        setBatch({ status: 'error', message: errorMessage(error) });
-        notify(errorMessage(error), 'error');
+        const message = errorMessage(error);
+        setBatch({ status: 'error', message });
+        appendConsoleLog(`[批量] ${message}`, 'error');
+        notify(message, 'error');
       })
       .finally(() => setCheckingBatch(false));
   };
@@ -168,14 +225,20 @@ export function App() {
       return;
     }
     setSavingPool(true);
+    appendConsoleLog(`[IP池] 正在保存 ${poolKey}`);
     client.savePool(poolKey, normalized)
       .then(async () => {
         const { content } = await client.readPool(poolKey);
         setIpText(content);
         await refreshPools();
+        appendConsoleLog(`[IP池] 已保存 ${countPoolTextLines(normalized)} 条地址`, 'success');
         notify('已保存并规范化到 IP 池');
       })
-      .catch((error: unknown) => notify(errorMessage(error), 'error'))
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        appendConsoleLog(`[IP池] ${message}`, 'error');
+        notify(message, 'error');
+      })
       .finally(() => setSavingPool(false));
   };
 
@@ -351,9 +414,14 @@ export function App() {
     if (maintenanceBusy) return;
     setMaintenanceBusy(true);
     setMaintenance({ status: 'loading' });
+    appendConsoleLog('[维护] 开始执行全部目标');
     client.runMaintenance()
       .then(async (data) => {
         setMaintenance({ status: 'ready', data });
+        appendConsoleLog(
+          `[维护] 完成 · 更新 ${data.results.filter((item) => item.dnsUpdated).length} 个目标 / 探针异常 ${data.probeErrors} 次 / 错误 ${data.errors.length} 项`,
+          data.errors.length || data.probeErrors ? 'warning' : 'success',
+        );
         await refreshBindings();
         await refreshPools();
         notify(
@@ -362,8 +430,10 @@ export function App() {
         );
       })
       .catch((error: unknown) => {
-        setMaintenance({ status: 'error', message: errorMessage(error) });
-        notify(errorMessage(error), 'error');
+        const message = errorMessage(error);
+        setMaintenance({ status: 'error', message });
+        appendConsoleLog(`[维护] ${message}`, 'error');
+        notify(message, 'error');
       })
       .finally(() => setMaintenanceBusy(false));
   };
@@ -419,6 +489,8 @@ export function App() {
             checkingBatch={checkingBatch}
             savingPool={savingPool}
             poolBusy={poolBusy}
+            consoleLogs={consoleLogs}
+            batchProgressState={batchProgressState}
             bindings={bindings}
             maintenance={maintenance}
             maintenanceBusy={maintenanceBusy}

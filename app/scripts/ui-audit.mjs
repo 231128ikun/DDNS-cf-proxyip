@@ -33,6 +33,8 @@ const VIEWPORTS = [
   { name: "768", width: 768, height: 1000, mobile: false },
   { name: "992", width: 992, height: 1000, mobile: false },
   { name: "1265", width: 1265, height: 1000, mobile: false },
+  { name: "1440", width: 1440, height: 1050, mobile: false },
+  { name: "1920", width: 1920, height: 1080, mobile: false },
 ];
 const PAGES = [
   { key: "dashboard", path: "/" },

@@ -25,6 +25,14 @@ export interface PoolCheckReport {
   readonly items: readonly PoolCheckItem[];
 }
 
+export interface PoolCheckProgress {
+  readonly item: PoolCheckItem;
+  readonly completed: number;
+  readonly total: number;
+}
+
+export type PoolCheckProgressHandler = (progress: PoolCheckProgress) => void;
+
 /** 批量检测一段 IP 池文本：解析、去重、限并发检测，并返回可直接入库的结果。 */
 export class CheckPoolText {
   private readonly concurrency: number;
@@ -36,13 +44,21 @@ export class CheckPoolText {
     this.concurrency = Math.max(1, Math.min(16, concurrency));
   }
 
-  async execute(text: string, context: ProbeContext = {}): Promise<PoolCheckReport> {
+  async execute(
+    text: string,
+    context: ProbeContext = {},
+    onProgress?: PoolCheckProgressHandler,
+  ): Promise<PoolCheckReport> {
     const { entries, invalid } = collectEntries(text);
+    let completed = 0;
     const items = await mapWithConcurrency(entries, this.concurrency, async (entry): Promise<PoolCheckItem> => {
       const target = parseProxyTarget(entry.address) ?? parseProxyTarget(entry.address, 443);
       const address = target?.authority ?? entry.address;
       const result = await this.checkProxy.execute(address, context);
-      return { address, entry: updatePoolEntryFromProbe(entry, result), result };
+      const item = { address, entry: updatePoolEntryFromProbe(entry, result), result };
+      completed += 1;
+      onProgress?.({ item, completed, total: entries.length });
+      return item;
     });
 
     return {

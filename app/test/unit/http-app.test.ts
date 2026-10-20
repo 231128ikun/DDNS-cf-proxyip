@@ -259,6 +259,85 @@ describe('HTTP app pool routes', () => {
       items: [{ address: '203.0.113.10:443', status: 'alive' }],
     });
   });
+
+  it('streams batch progress events before the final report', async () => {
+    const app = createHttpApp({
+      checkTarget: createCheckTarget(),
+      version: 'test',
+      checkPool: new CheckPoolText(new CheckProxy(new FakeProbeAdapter()), 1),
+    });
+
+    const response = await postJson(
+      app,
+      '/api/check/batch',
+      { text: '203.0.113.10:443\n203.0.113.11:443' },
+      { accept: 'application/x-ndjson' },
+    );
+    const events = (await response.text()).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(response.headers.get('content-type')).toContain('application/x-ndjson');
+    expect(events.map((event) => event.type)).toEqual(['progress', 'progress', 'complete']);
+    expect(events[0]).toMatchObject({ type: 'progress', completed: 1, total: 2, item: { address: '203.0.113.10:443' } });
+    expect(events[2]).toMatchObject({ type: 'complete', report: { total: 2, alive: 2 } });
+  });
+
+  it('delivers the first result while later probes are still running', async () => {
+    let releaseFirst = (): void => {};
+    let releaseSecond = (): void => {};
+    let markSecondStarted = (): void => {};
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const secondStarted = new Promise<void>((resolve) => { markSecondStarted = resolve; });
+    const adapter: ProbeAdapter = {
+      name: 'gated',
+      async probe(target) {
+        if (target.authority === '203.0.113.10:443') await firstGate;
+        else {
+          markSecondStarted();
+          await secondGate;
+        }
+        return alive(target, { exitFamily: 'ipv4' });
+      },
+    };
+    const app = createHttpApp({
+      checkTarget: createCheckTarget(adapter),
+      version: 'test',
+      checkPool: new CheckPoolText(new CheckProxy(adapter), 1),
+    });
+    const response = await postJson(
+      app,
+      '/api/check/batch',
+      { text: '203.0.113.10:443\n203.0.113.11:443' },
+      { accept: 'application/x-ndjson' },
+    );
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('response stream is missing');
+
+    const firstRead = reader.read();
+    releaseFirst();
+    const firstChunk = await firstRead;
+    expect(firstChunk.done).toBe(false);
+    expect(JSON.parse(new TextDecoder().decode(firstChunk.value))).toMatchObject({
+      type: 'progress',
+      completed: 1,
+      item: { address: '203.0.113.10:443' },
+    });
+
+    await secondStarted;
+    const secondRead = reader.read();
+    let secondResolved = false;
+    void secondRead.then(() => { secondResolved = true; });
+    await Promise.resolve();
+    expect(secondResolved).toBe(false);
+    releaseSecond();
+    const secondChunk = await secondRead;
+    expect(JSON.parse(new TextDecoder().decode(secondChunk.value))).toMatchObject({
+      type: 'progress',
+      completed: 2,
+      item: { address: '203.0.113.11:443' },
+    });
+    await reader.cancel();
+  });
 });
 
 describe('HTTP app config routes', () => {

@@ -11,7 +11,12 @@ import {
   type AppConfig,
   type ConfigResponse,
 } from '../contracts/config';
-import type { CheckPoolRequest, PoolCheckItemResponse, PoolCheckResponse } from '../contracts/pool-check';
+import type {
+  CheckPoolRequest,
+  PoolCheckItemResponse,
+  PoolCheckResponse,
+  PoolCheckStreamEvent,
+} from '../contracts/pool-check';
 import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
 import type {
   CreatePoolRequest,
@@ -113,6 +118,52 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     const text = (body.value as CheckPoolRequest | null)?.text;
     if (typeof text !== 'string' || !text.trim()) return errorResponse('invalid text', 400);
+
+    if (acceptsPoolCheckStream(context.request)) {
+      const abortController = new AbortController();
+      const requestSignal = context.request.signal;
+      const abortFromRequest = (): void => abortController.abort(requestSignal.reason);
+      if (requestSignal.aborted) abortFromRequest();
+      else requestSignal.addEventListener('abort', abortFromRequest, { once: true });
+
+      let cancelled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          const send = (event: PoolCheckStreamEvent): void => {
+            if (!cancelled) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          };
+          const cleanup = (): void => requestSignal.removeEventListener('abort', abortFromRequest);
+
+          void (async () => {
+            try {
+              const report = await checkPool.execute(text, { signal: abortController.signal }, ({ item, completed, total }) => {
+                send({ type: 'progress', completed, total, item: toPoolCheckItemResponse(item) });
+              });
+              send({ type: 'complete', report: toPoolCheckResponse(report) });
+            } catch {
+              send({ type: 'error', error: '批量检测未能完成' });
+            } finally {
+              cleanup();
+              if (!cancelled) controller.close();
+            }
+          })();
+        },
+        cancel(reason) {
+          cancelled = true;
+          abortController.abort(reason);
+          requestSignal.removeEventListener('abort', abortFromRequest);
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
 
     const report = await checkPool.execute(text, { signal: context.request.signal });
     return jsonResponse(toPoolCheckResponse(report));
@@ -420,6 +471,12 @@ function toPoolCheckResponse(report: PoolCheckReport): PoolCheckResponse {
     invalid: report.invalid,
     items: report.items.map(toPoolCheckItemResponse),
   };
+}
+
+function acceptsPoolCheckStream(request: Request): boolean {
+  return (request.headers.get('accept') ?? '')
+    .split(',')
+    .some((mediaType) => mediaType.trim().toLowerCase().startsWith('application/x-ndjson'));
 }
 
 function toPoolCheckItemResponse(item: PoolCheckItem): PoolCheckItemResponse {

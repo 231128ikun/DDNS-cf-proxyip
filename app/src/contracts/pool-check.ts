@@ -24,6 +24,25 @@ export interface PoolCheckResponse {
   readonly items: readonly PoolCheckItemResponse[];
 }
 
+export interface PoolCheckProgressEvent {
+  readonly type: 'progress';
+  readonly completed: number;
+  readonly total: number;
+  readonly item: PoolCheckItemResponse;
+}
+
+export interface PoolCheckCompleteEvent {
+  readonly type: 'complete';
+  readonly report: PoolCheckResponse;
+}
+
+export interface PoolCheckErrorEvent {
+  readonly type: 'error';
+  readonly error: string;
+}
+
+export type PoolCheckStreamEvent = PoolCheckProgressEvent | PoolCheckCompleteEvent | PoolCheckErrorEvent;
+
 export interface CheckPoolRequest {
   readonly text: string;
 }

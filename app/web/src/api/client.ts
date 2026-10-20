@@ -1,4 +1,9 @@
-import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
+import type {
+  PoolCheckItemResponse,
+  PoolCheckProgressEvent,
+  PoolCheckResponse,
+  PoolCheckStreamEvent,
+} from '../../../src/contracts/pool-check';
 import type {
   CleanPoolResponse,
   CreatePoolResponse,
@@ -50,8 +55,13 @@ export class ApiClient {
     return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal);
   }
 
-  /** 批量检测复用服务端解析与并发控制，前端不再重复实现 IP 池文本解析。 */
-  async checkBatch(text: string, signal?: AbortSignal): Promise<PoolCheckResponse> {
+  /** 单请求读取服务端逐项进度；没有回调时兼容 JSON 响应。 */
+  async checkBatch(
+    text: string,
+    signal?: AbortSignal,
+    onProgress?: (event: PoolCheckProgressEvent) => void,
+  ): Promise<PoolCheckResponse> {
+    if (onProgress) return await this.streamPoolCheck(text, signal, onProgress);
     return await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text }, signal);
   }
 
@@ -144,6 +154,84 @@ export class ApiClient {
     return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);
   }
 
+  private async streamPoolCheck(
+    text: string,
+    signal: AbortSignal | undefined,
+    onProgress: (event: PoolCheckProgressEvent) => void,
+  ): Promise<PoolCheckResponse> {
+    const headers = new Headers({ Accept: 'application/x-ndjson' });
+    headers.set('Content-Type', 'application/json');
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/check/batch`, {
+        method: 'POST',
+        headers,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ text }),
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      throw new ApiError('无法连接到 Worker API', 0);
+    }
+
+    if (!response.ok) {
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
+      }
+      throw new ApiError(isApiError(payload) ? payload.error : `API 请求失败 (HTTP ${response.status})`, response.status);
+    }
+    if (!response.body) throw new ApiError('批量检测接口没有返回进度流', response.status);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let report: PoolCheckResponse | undefined;
+    const consumeLine = (line: string): void => {
+      const textLine = line.trim();
+      if (!textLine) return;
+      let value: unknown;
+      try {
+        value = JSON.parse(textLine);
+      } catch {
+        throw new ApiError('批量检测进度格式无效', response.status);
+      }
+      const event = parsePoolCheckStreamEvent(value);
+      if (!event) throw new ApiError('批量检测进度格式无效', response.status);
+      if (event.type === 'progress') onProgress(event);
+      else if (event.type === 'complete') report = event.report;
+      else throw new ApiError(event.error, response.status);
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          consumeLine(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) consumeLine(buffer);
+    } catch (error) {
+      if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      throw new ApiError('批量检测进度读取失败', response.status);
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!report) throw new ApiError('批量检测未返回最终结果', response.status);
+    return report;
+  }
+
   private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
@@ -183,4 +271,42 @@ function poolPath(key: string): string {
 
 function isApiError(value: unknown): value is ApiErrorResponse {
   return value !== null && typeof value === 'object' && 'error' in value && typeof value.error === 'string';
+}
+
+function parsePoolCheckStreamEvent(value: unknown): PoolCheckStreamEvent | null {
+  if (!isRecord(value)) return null;
+  const event = value;
+  if (event.type === 'error' && typeof event.error === 'string') {
+    return { type: 'error', error: event.error };
+  }
+  if (event.type === 'progress' && typeof event.completed === 'number' && typeof event.total === 'number') {
+    if (!isPoolCheckItemResponse(event.item)) return null;
+    return { type: 'progress', completed: event.completed, total: event.total, item: event.item };
+  }
+  if (event.type === 'complete' && isPoolCheckResponse(event.report)) return { type: 'complete', report: event.report };
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function isPoolCheckItemResponse(value: unknown): value is PoolCheckItemResponse {
+  if (!isRecord(value)) return false;
+  return typeof value.address === 'string' &&
+    typeof value.line === 'string' &&
+    ['alive', 'dead', 'unknown'].includes(String(value.status)) &&
+    ['ipv4', 'ipv6', 'dual', 'unknown'].includes(String(value.exitFamily));
+}
+
+function isPoolCheckResponse(value: unknown): value is PoolCheckResponse {
+  if (!isRecord(value)) return false;
+  return typeof value.total === 'number' &&
+    typeof value.alive === 'number' &&
+    typeof value.dead === 'number' &&
+    typeof value.unknown === 'number' &&
+    Array.isArray(value.invalid) &&
+    value.invalid.every((item) => typeof item === 'string') &&
+    Array.isArray(value.items) &&
+    value.items.every(isPoolCheckItemResponse);
 }

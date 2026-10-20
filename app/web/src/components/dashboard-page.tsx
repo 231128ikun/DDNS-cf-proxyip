@@ -12,6 +12,19 @@ import { probeStatusLabel } from './probe-status';
 
 /** IP 池写操作的忙碌标记：比起给每个按钮单独维护 loading 状态更省代码。 */
 export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
+export type ConsoleTone = 'info' | 'success' | 'warning' | 'error';
+
+export interface ConsoleLogEntry {
+  readonly id: number;
+  readonly time: string;
+  readonly tone: ConsoleTone;
+  readonly message: string;
+}
+
+export interface PoolCheckProgressState {
+  readonly completed: number;
+  readonly total: number;
+}
 
 /** 所有交互回调集中成一个对象，避免 props 列表随功能增长而失控。 */
 export interface DashboardActions {
@@ -53,6 +66,8 @@ interface DashboardPageProps {
   readonly checkingBatch: boolean;
   readonly savingPool: boolean;
   readonly poolBusy: PoolActionKey | null;
+  readonly consoleLogs: readonly ConsoleLogEntry[];
+  readonly batchProgressState: PoolCheckProgressState | null;
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly maintenance: RequestState<MaintenanceRunResponse>;
   readonly maintenanceBusy: boolean;
@@ -85,6 +100,8 @@ export function DashboardPage({
   checkingBatch,
   savingPool,
   poolBusy,
+  consoleLogs,
+  batchProgressState,
   bindings,
   maintenance,
   maintenanceBusy,
@@ -96,7 +113,6 @@ export function DashboardPage({
   onPoolChange,
 }: DashboardPageProps) {
   const [filterHelpOpen, setFilterHelpOpen] = useState(false);
-  const [sortingBindings, setSortingBindings] = useState(false);
   const busy = poolBusy !== null;
   const inTrash = poolKey === TRASH_POOL_KEY;
 
@@ -318,122 +334,12 @@ export function DashboardPage({
               )}
             </div>
           </div>
-            <details class="card p-4 mb-3 domain-binding-card">
-              <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
-                <div class="domain-binding-title">
-                  <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 域名池绑定</h2>
-                  {bindings.status === 'ready' && <span class="text-secondary small">{bindings.data.items.length} 个目标</span>}
-                </div>
-                <div class="domain-binding-actions">
-                  {bindings.status === 'ready' && bindings.data.items.length > 1 && (
-                    <button
-                      class={`btn btn-sm btn-outline-primary${sortingBindings ? ' active' : ''}`}
-                      type="button"
-                      aria-pressed={sortingBindings}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setSortingBindings((current) => !current);
-                      }}
-                    >
-                      {sortingBindings ? '完成排序' : '调整顺序'}
-                    </button>
-                  )}
-                  <button
-                    class="btn btn-sm btn-outline-secondary"
-                    type="button"
-                    aria-label="刷新域名池绑定"
-                    title="刷新域名池绑定"
-                    disabled={bindings.status === 'loading'}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      actions.refreshBindings();
-                    }}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </div>
-              </summary>
-              {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
-              {bindings.status === 'error' && <p class="text-danger small mb-0">{bindings.message}</p>}
-              {bindings.status === 'ready' && (
-                bindings.data.items.length === 0 ? (
-                  <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
-                ) : (
-                  <div class="domain-binding-table-wrap">
-                    <table class={`table table-sm mb-0${sortingBindings ? ' binding-sorting' : ''}`}>
-                      <thead>
-                        <tr>
-                          <th>域名</th>
-                          <th>IP 池</th>
-                          {sortingBindings && <th class="domain-binding-order-col">顺序</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {bindings.data.items.map((item, index) => (
-                          <tr key={item.key}>
-                            <td>
-                              <div class="domain-binding-domain">
-                                <RecordBadge mode={item.mode} />
-                                <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
-                              </div>
-                            </td>
-                            <td>
-                              <select
-                                class="form-select form-select-sm domain-binding-select"
-                                value={item.poolKey}
-                                disabled={!item.enabled}
-                                aria-label={`${item.domain} 绑定的 IP 池`}
-                                onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
-                              >
-                                {poolOptions(pools, item.poolKey).filter((pool) => isUserPoolKey(pool.key)).map((pool) => (
-                                  <option key={pool.key} value={pool.key}>{pool.name}</option>
-                                ))}
-                              </select>
-                            </td>
-                            {sortingBindings && (
-                              <td class="domain-binding-order-col">
-                                <div class="domain-binding-order-actions">
-                                  <button
-                                    type="button"
-                                    class="binding-order-btn"
-                                    title={`上移 ${item.domain}`}
-                                    aria-label={`上移 ${item.domain}`}
-                                    disabled={index === 0}
-                                    onClick={() => actions.moveBinding(index, -1)}
-                                  >
-                                    ↑
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="binding-order-btn"
-                                    title={`下移 ${item.domain}`}
-                                    aria-label={`下移 ${item.domain}`}
-                                    disabled={index === bindings.data.items.length - 1}
-                                    onClick={() => actions.moveBinding(index, 1)}
-                                  >
-                                    ↓
-                                  </button>
-                                </div>
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )
-              )}
-            </details>
         </div>
 
         <div class="col-lg-5">
           <div class="card p-4">
             <h2 class="card-title mb-3 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
-            <div id="log-window" class="console mb-3">
-              <Console health={health} check={check} pools={pools} batch={batch} />
-            </div>
+            <Console health={health} pools={pools} logs={consoleLogs} />
             {/* 只在批量检测进行中显示进度条：空闲时留一条空槽会被误读成控件。 */}
             {batch.status === 'loading' && (
               <div
@@ -442,9 +348,10 @@ export function DashboardPage({
                 aria-label="批量检测进度"
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-valuenow={batchProgress(batch)}
+                aria-valuenow={batchProgress(batch, batchProgressState)}
+                aria-valuetext={batchProgressLabel(batchProgressState)}
               >
-                <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch)}%` }} />
+                <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch, batchProgressState)}%` }} />
               </div>
             )}
             <button
@@ -457,6 +364,9 @@ export function DashboardPage({
             </button>
             <MaintenanceSummary state={maintenance} />
           </div>
+        </div>
+        <div class="col-12">
+          <DomainBindingsCard bindings={bindings} pools={pools} actions={actions} />
         </div>
       </div>
     </div>
@@ -600,45 +510,173 @@ function ProbeBadge({ status }: { readonly status: ProbeResponse['status'] }) {
   return <span class={`record-badge ddns-probe-${status}`}>{probeStatusLabel(status)}</span>;
 }
 
-function Console({
-  health,
-  check,
-  pools,
-  batch,
-}: {
+function Console({ health, pools, logs }: {
   readonly health: RequestState<HealthResponse>;
-  readonly check: RequestState<CheckTargetResponse>;
   readonly pools: RequestState<PoolsResponse>;
-  readonly batch: RequestState<PoolCheckResponse>;
+  readonly logs: readonly ConsoleLogEntry[];
 }) {
+  const consoleRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = consoleRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [logs]);
+
   return (
-    <>
-      <div class="console-line console-dim">DDNS Pro · Cloudflare Worker</div>
-      {health.status === 'loading' && <div class="console-line">[API] 正在连接 Worker…</div>}
-      {health.status === 'ready' && (
-        <>
-          <div class="console-line console-ok">✓ Worker API 在线 · v{health.data.version}</div>
-          <div class="console-line">[配置] 来源：{configSourceLabel(health.data.configSource)}</div>
-        </>
-      )}
-      {health.status === 'error' && <div class="console-line console-error">✗ {health.message}</div>}
-      {pools.status === 'loading' && <div class="console-line">[IP池] 正在读取列表…</div>}
-      {pools.status === 'ready' && <div class="console-line console-ok">✓ IP池已加载 · {pools.data.pools.length} 个</div>}
-      {pools.status === 'error' && <div class="console-line console-error">✗ {pools.message}</div>}
-      {check.status === 'ready' && (
-        <div class="console-line">
-          [探测] {check.data.items.length} 个目标 · 可用 {check.data.items.filter((item) => item.result.status === 'alive').length} / 失效 {check.data.items.filter((item) => item.result.status === 'dead').length} / 未知 {check.data.items.filter((item) => item.result.status === 'unknown').length}
+    <div id="log-window" class="console mb-3" role="log" aria-live="polite" aria-relevant="additions text" ref={consoleRef}>
+      <div class="console-head">
+        <span class="console-line console-dim">DDNS Pro · Cloudflare Worker</span>
+        <span class="console-live"><span class="console-live-dot" />实时日志</span>
+      </div>
+      <div class="console-status-row">
+        <span class={`console-status ${health.status === 'ready' ? 'console-status-ok' : health.status === 'error' ? 'console-status-error' : ''}`}>
+          API {health.status === 'ready' ? '在线' : health.status === 'error' ? '异常' : '连接中'}
+          {health.status === 'ready' ? ` · v${health.data.version} · ${configSourceLabel(health.data.configSource)}` : ''}
+        </span>
+        <span class={`console-status ${pools.status === 'ready' ? 'console-status-ok' : pools.status === 'error' ? 'console-status-error' : ''}`}>
+          IP 池 {pools.status === 'ready' ? `· ${pools.data.pools.length} 个` : pools.status === 'error' ? '读取异常' : '读取中'}
+        </span>
+      </div>
+      <div class="console-event-list">
+        {logs.length === 0 && <div class="console-empty">执行探测、池操作或维护后，过程日志会显示在这里。</div>}
+        {logs.map((entry) => (
+          <div key={entry.id} class={`console-event console-event-${entry.tone}`}>
+            <time class="console-time">{entry.time}</time>
+            <span class="console-level">{consoleToneLabel(entry.tone)}</span>
+            <span class="console-message">{entry.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function consoleToneLabel(tone: ConsoleTone): string {
+  if (tone === 'success') return 'OK';
+  if (tone === 'warning') return 'WARN';
+  if (tone === 'error') return 'ERR';
+  return 'INFO';
+}
+
+function DomainBindingsCard({
+  bindings,
+  pools,
+  actions,
+}: {
+  readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly pools: RequestState<PoolsResponse>;
+  readonly actions: DashboardActions;
+}) {
+  const [sortingBindings, setSortingBindings] = useState(false);
+
+  return (
+    <details class="card p-4 mb-3 domain-binding-card">
+      <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
+        <div class="domain-binding-title">
+          <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 域名池绑定</h2>
+          {bindings.status === 'ready' && <span class="text-secondary small">{bindings.data.items.length} 个目标</span>}
         </div>
-      )}
-      {check.status === 'error' && <div class="console-line console-error">✗ {check.message}</div>}
-      {batch.status === 'loading' && <div class="console-line">[批量] 正在检测输入框中的地址…</div>}
-      {batch.status === 'ready' && (
-        <div class="console-line console-ok">
-          ✓ 批量完成 · 可用 {batch.data.alive} / 失效 {batch.data.dead} / 未知 {batch.data.unknown}
+        <div class="domain-binding-actions">
+          {bindings.status === 'ready' && bindings.data.items.length > 1 && (
+            <button
+              class={`btn btn-sm btn-outline-primary${sortingBindings ? ' active' : ''}`}
+              type="button"
+              aria-pressed={sortingBindings}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setSortingBindings((current) => !current);
+              }}
+            >
+              {sortingBindings ? '完成排序' : '调整顺序'}
+            </button>
+          )}
+          <button
+            class="btn btn-sm btn-outline-secondary"
+            type="button"
+            aria-label="刷新域名池绑定"
+            title="刷新域名池绑定"
+            disabled={bindings.status === 'loading'}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              actions.refreshBindings();
+            }}
+          >
+            <Icon name="refresh" />
+          </button>
         </div>
+      </summary>
+      {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
+      {bindings.status === 'error' && <p class="text-danger small mb-0">{bindings.message}</p>}
+      {bindings.status === 'ready' && (
+        bindings.data.items.length === 0 ? (
+          <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
+        ) : (
+          <div class="domain-binding-table-wrap">
+            <table class={`table table-sm mb-0${sortingBindings ? ' binding-sorting' : ''}`}>
+              <thead>
+                <tr>
+                  <th>域名</th>
+                  <th>IP 池</th>
+                  {sortingBindings && <th class="domain-binding-order-col">顺序</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {bindings.data.items.map((item, index) => (
+                  <tr key={item.key}>
+                    <td>
+                      <div class="domain-binding-domain">
+                        <RecordBadge mode={item.mode} />
+                        <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <select
+                        class="form-select form-select-sm domain-binding-select"
+                        value={item.poolKey}
+                        disabled={!item.enabled}
+                        aria-label={`${item.domain} 绑定的 IP 池`}
+                        onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
+                      >
+                        {poolOptions(pools, item.poolKey).filter((pool) => isUserPoolKey(pool.key)).map((pool) => (
+                          <option key={pool.key} value={pool.key}>{pool.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    {sortingBindings && (
+                      <td class="domain-binding-order-col">
+                        <div class="domain-binding-order-actions">
+                          <button
+                            type="button"
+                            class="binding-order-btn"
+                            title={`上移 ${item.domain}`}
+                            aria-label={`上移 ${item.domain}`}
+                            disabled={index === 0}
+                            onClick={() => actions.moveBinding(index, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            class="binding-order-btn"
+                            title={`下移 ${item.domain}`}
+                            aria-label={`下移 ${item.domain}`}
+                            disabled={index === bindings.data.items.length - 1}
+                            onClick={() => actions.moveBinding(index, 1)}
+                          >
+                            ↓
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
       )}
-      {batch.status === 'error' && <div class="console-line console-error">✗ {batch.message}</div>}
-    </>
+    </details>
   );
 }
 
@@ -675,10 +713,21 @@ function currentPoolCount(state: RequestState<PoolsResponse>, key: string): numb
   return state.data.pools.find((pool) => pool.key === key)?.count ?? 0;
 }
 
-function batchProgress(state: RequestState<PoolCheckResponse>): number {
-  if (state.status === 'loading') return 60;
+function batchProgress(
+  state: RequestState<PoolCheckResponse>,
+  progress: PoolCheckProgressState | null,
+): number {
+  if (state.status === 'loading') {
+    if (!progress?.total) return 0;
+    return Math.round((progress.completed / progress.total) * 100);
+  }
   if (state.status === 'ready') return 100;
   return 0;
+}
+
+function batchProgressLabel(progress: PoolCheckProgressState | null): string {
+  if (!progress?.total) return '正在准备批量检测';
+  return `已完成 ${progress.completed} / ${progress.total} 个地址`;
 }
 
 function formatExits(result: ProbeResponse): string {

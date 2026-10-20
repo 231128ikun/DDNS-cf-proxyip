@@ -30,6 +30,28 @@ describe('web API client', () => {
 });
 
 describe('web API client pool endpoints', () => {
+  it('reads streamed batch progress and returns the completed report', async () => {
+    const events = [
+      { type: 'progress', completed: 1, total: 1, item: { address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' } },
+      { type: 'complete', report: { total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] } },
+    ];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('Accept')).toContain('application/x-ndjson');
+      return new Response(`${events.map((event) => JSON.stringify(event)).join('\n')}\n`, {
+        headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const progress: Array<{ completed: number; total: number }> = [];
+
+    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => {
+      progress.push({ completed: event.completed, total: event.total });
+    });
+
+    expect(progress).toEqual([{ completed: 1, total: 1 }]);
+    expect(report).toMatchObject({ total: 1, alive: 1 });
+  });
+
   it('uses the shared pool and batch contracts', async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
