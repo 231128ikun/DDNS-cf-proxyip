@@ -24,11 +24,109 @@ export interface PoolMetadata {
 
 export function parsePoolText(text: string): PoolLine[] {
   if (!text) return [];
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((raw) => ({ raw, entry: parsePoolEntry(raw) }));
+  const lines: PoolLine[] = [];
+  for (const physicalLine of text.split(/\r?\n/)) {
+    for (const chunk of splitPoolChunks(physicalLine)) {
+      const raw = chunk.trim();
+      if (!raw) continue;
+      if (raw.startsWith('#')) {
+        lines.push({ raw, entry: null });
+        continue;
+      }
+      for (const entryLine of normalizeLooseEntryChunk(raw)) {
+        lines.push({ raw: entryLine, entry: parsePoolEntry(entryLine) });
+      }
+    }
+  }
+  return lines;
+}
+
+interface LoosePoolEntryDraft {
+  readonly address: string;
+  readonly fields: string[];
+}
+
+/**
+ * 用户经常会把地址用逗号、竖线、Tab 或空格混在一起粘贴。
+ * 这里先按不会出现在元数据里的分隔符切块，再逐 token 判断地址与元数据。
+ */
+function splitPoolChunks(line: string): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  let inComment = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '#') inComment = true;
+    if (char === '|') {
+      chunks.push(line.slice(start, index));
+      start = index + 1;
+      inComment = false;
+      continue;
+    }
+    if (inComment || (char !== ';' && char !== '；' && char !== '\t')) continue;
+    chunks.push(line.slice(start, index));
+    start = index + 1;
+  }
+  chunks.push(line.slice(start));
+  return chunks;
+}
+
+function normalizeLooseEntryChunk(chunk: string): string[] {
+  const commentIndex = chunk.indexOf('#');
+  const body = (commentIndex >= 0 ? chunk.slice(0, commentIndex) : chunk).trim();
+  const comment = commentIndex >= 0 ? chunk.slice(commentIndex).trim() : '';
+  const tokens = body.split(/[,\uFF0C\s]+/).map((token) => token.trim()).filter(Boolean);
+  if (tokens.length === 0) return comment ? [comment] : [];
+
+  const drafts: LoosePoolEntryDraft[] = [];
+  const invalid: string[] = [];
+  const invalidBuffer: string[] = [];
+  let current: LoosePoolEntryDraft | null = null;
+  const flushInvalid = (): void => {
+    if (!invalidBuffer.length) return;
+    invalid.push(invalidBuffer.join(' '));
+    invalidBuffer.length = 0;
+  };
+  for (const token of tokens) {
+    if (!current) {
+      if (isLooseAddressToken(token) && parseProxyTarget(token, 443)) {
+        flushInvalid();
+        current = { address: token, fields: [] };
+        drafts.push(current);
+      } else {
+        invalidBuffer.push(token);
+      }
+      continue;
+    }
+
+    if (isPoolMetadataToken(token) && current.fields.length < 3) {
+      current.fields.push(token);
+      continue;
+    }
+    if (isLooseAddressToken(token) && parseProxyTarget(token, 443)) {
+      current = { address: token, fields: [] };
+      drafts.push(current);
+      continue;
+    }
+    current.fields.push(token);
+  }
+
+  flushInvalid();
+  const result = drafts.map((draft) => [draft.address, ...draft.fields].join(','));
+  if (comment && result.length > 0) result[result.length - 1] = `${result[result.length - 1]} ${comment}`;
+  return [...invalid, ...result];
+}
+
+function isLooseAddressToken(token: string): boolean {
+  return /^(?:https?:\/\/|\[|\d)/i.test(token) || token.includes('.') || token.includes(':');
+}
+
+function isPoolMetadataToken(token: string): boolean {
+  const normalized = token.trim();
+  if (normalizePoolStack(normalized) !== null) return true;
+  if (/^(?:null|unknown|n\/a|-)$/i.test(normalized)) return true;
+  if (/^(?:AS)?\d+(?:\/(?:AS)?\d+)*$/i.test(normalized)) return true;
+  return /^[A-Z]{2}(?:\/[A-Z]{2})*$/i.test(normalized);
 }
 
 export function serializePoolText(lines: readonly PoolLine[]): string {

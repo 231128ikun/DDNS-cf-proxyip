@@ -1,4 +1,4 @@
-import { parsePoolEntry, normalizePoolStack, type PoolStack } from './pool-entry';
+import { parsePoolEntry, parsePoolText, normalizePoolStack, type PoolStack } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
 
 export interface PortFilterRange {
@@ -44,12 +44,12 @@ export function countPoolFilterMatches(text: string, filter: PoolFilter): number
 /** 去重保留后出现的条目，与既有 Map.set 覆盖顺序保持一致。 */
 export function dedupePoolText(text: string): string {
   const entries = new Map<string, string>();
-  for (const line of splitPoolLines(text)) {
-    const entry = parsePoolEntry(line);
+  for (const line of parsePoolText(text)) {
+    const entry = line.entry;
     if (!entry) continue;
     const target = parseProxyTarget(entry.address, 443);
     if (!target) continue;
-    entries.set(target.key, line);
+    entries.set(target.key, line.raw);
   }
   return [...entries.values()].join('\n');
 }
@@ -144,6 +144,5 @@ function splitMetadata(value: string): string[] {
 }
 
 function splitPoolLines(text: string): string[] {
-  return String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return parsePoolText(String(text ?? '')).map((line) => line.raw);
 }
-

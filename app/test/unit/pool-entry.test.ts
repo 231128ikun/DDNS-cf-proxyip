@@ -9,6 +9,7 @@ import {
   poolMetadataFromProbe,
   serializePoolText,
 } from '../../src/domain/pool-entry';
+import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 
 const target = parseProxyTarget('203.0.113.10:443');
 if (!target) throw new Error('test target is invalid');
@@ -69,5 +70,29 @@ describe('pool entries', () => {
     });
     expect(poolMetadataFromProbe(result)).toEqual({ asn: '64500/64501', country: 'JP/SG', stack: 'v4/v6' });
     expect(poolMetadataFromProbe(unknown(target, 'NO_API', 'offline'))).toEqual({});
+  });
+
+  it('splits mixed common separators into individual entries', () => {
+    const text = '203.0.113.10:443, 203.0.113.11:8443|203.0.113.12:443\t198.51.100.2:443\n[2001:db8::1]:443 2001:db8::2';
+    const lines = parsePoolText(text);
+
+    expect(lines.filter((line) => line.entry).map((line) => line.entry?.address)).toEqual([
+      '203.0.113.10:443',
+      '203.0.113.11:8443',
+      '203.0.113.12:443',
+      '198.51.100.2:443',
+      '[2001:db8::1]:443',
+      '2001:db8::2',
+    ]);
+    expect(countPoolTextLines(text)).toBe(6);
+  });
+
+  it('keeps metadata and comments separate from adjacent entries', () => {
+    const text = '203.0.113.10:443, AS64500, US, v4 # primary | 198.51.100.2:443,AS64501,JP,v6';
+
+    expect(cleanPoolText(text)).toBe([
+      '203.0.113.10:443,AS64500,US,v4 # primary',
+      '198.51.100.2:443,AS64501,JP,v6',
+    ].join('\n'));
   });
 });

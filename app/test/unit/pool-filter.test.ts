@@ -74,4 +74,13 @@ describe('pool filter', () => {
       '[2001:db8::1]:443 # same ipv6',
     ].join('\n'));
   });
+
+  it('filters and deduplicates mixed-separator input as individual entries', () => {
+    const text = '203.0.113.10:443,AS64500,US,v4|203.0.113.11:8443,AS64501,KR,v4\t203.0.113.10:443,AS64500,US,v4';
+    expect(filterPoolText(text, filter('port:443'), 'keep')).toBe('203.0.113.10:443,AS64500,US,v4\n203.0.113.10:443,AS64500,US,v4');
+    expect(dedupePoolText(text)).toBe([
+      '203.0.113.10:443,AS64500,US,v4',
+      '203.0.113.11:8443,AS64501,KR,v4',
+    ].join('\n'));
+  });
 });

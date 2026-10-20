@@ -1,4 +1,4 @@
-import { formatPoolEntry, parsePoolEntry } from './pool-entry';
+import { formatPoolEntry, parsePoolText } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
 
 /**
@@ -8,23 +8,15 @@ import { parseProxyTarget } from './proxy-target';
 export function cleanPoolText(text: string): string {
   const entries = new Map<string, string>();
 
-  for (const rawLine of String(text ?? '').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-
-    const entry = parsePoolEntry(line);
-    if (!entry) continue;
-
-    const target = parseProxyTarget(entry.address, 443);
+  for (const line of parsePoolText(String(text ?? ''))) {
+    if (!line.entry) continue;
+    const target = parseProxyTarget(line.entry.address, 443);
     if (!target) continue;
-
-    entries.set(target.key, formatPoolEntry({ ...entry, address: target.authority }));
+    entries.set(target.key, formatPoolEntry({ ...line.entry, address: target.authority }));
   }
 
   return [...entries.values()].join('\n');
 }
-
 export function countPoolTextLines(text: string): number {
-  const trimmed = String(text ?? '').trim();
-  return trimmed ? trimmed.split('\n').length : 0;
+  return parsePoolText(text).filter((line) => line.entry !== null).length;
 }
