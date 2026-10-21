@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * UI 验收审计：响应式布局 + 对比度 + 点击目标 + 语义/可访问性 + 截图。
+ * UI 验收审计：响应式布局 + 对比度 + 点击目标 + 语义/可访问性 + 检测流程 + 截图。
  *
  * 用法：
  *   1) 另开一个终端启动本地服务：npm run dev（默认 http://127.0.0.1:8787）
@@ -330,6 +330,128 @@ async function waitForCdp(timeoutMs = 20000) {
   throw new Error(`CDP 未在 ${timeoutMs}ms 内就绪：${CDP}`);
 }
 
+/**
+ * 用确定性的浏览器内响应跑一次真实检测流程。
+ * 测试不依赖外部探针，只验证页面能否消费流式结果并把结论呈现出来。
+ */
+async function runBatchFlowCheck(cdp, sessionId, viewport) {
+  const events = [
+    {
+      type: "progress",
+      completed: 1,
+      total: 2,
+      item: { address: "203.0.113.10:443", status: "alive", exitFamily: "ipv4", line: "203.0.113.10:443" },
+    },
+    {
+      type: "progress",
+      completed: 2,
+      total: 2,
+      item: {
+        address: "203.0.113.11:443",
+        status: "unknown",
+        exitFamily: "unknown",
+        line: "203.0.113.11:443",
+        code: "TIMEOUT",
+        message: "检测超时",
+      },
+    },
+    {
+      type: "complete",
+      report: {
+        total: 2,
+        alive: 1,
+        dead: 0,
+        unknown: 1,
+        invalid: [],
+        items: [
+          { address: "203.0.113.10:443", status: "alive", exitFamily: "ipv4", line: "203.0.113.10:443" },
+          {
+            address: "203.0.113.11:443",
+            status: "unknown",
+            exitFamily: "unknown",
+            line: "203.0.113.11:443",
+            code: "TIMEOUT",
+            message: "检测超时",
+          },
+        ],
+      },
+    },
+  ];
+  const source = `(() => {
+    const nativeFetch = window.fetch.bind(window);
+    const body = ${JSON.stringify(events.map((event) => JSON.stringify(event)).join("\n") + "\n")};
+    window.fetch = (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith("/api/check/batch")) {
+        return Promise.resolve(new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
+        }));
+      }
+      return nativeFetch(input, init);
+    };
+  })();`;
+
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile },
+    sessionId,
+  );
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source }, sessionId);
+  const loaded = cdp.wait(sessionId, "Page.loadEventFired");
+  await cdp.send("Page.navigate", { url: `${BASE}/` }, sessionId);
+  await loaded.catch(() => {});
+  await sleep(1000);
+
+  const interact = await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression: `(async () => {
+        const waitFor = async (read, timeout = 6000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const value = read();
+            if (value) return value;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          return null;
+        };
+        const input = await waitFor(() => document.querySelector("#ip-input"));
+        const button = await waitFor(() => document.querySelector('button[aria-label="批量检测输入框中的 IP"]'));
+        if (!input || !button) return { failures: ["检测控件未渲染"] };
+
+        const original = "203.0.113.10:443\\n203.0.113.11:443";
+        input.value = original;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: original }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        button.click();
+
+        const panel = await waitFor(() => document.querySelector('[data-testid="batch-results"]'));
+        const failures = [];
+        if (!panel) failures.push("批量检测完成后没有可见的结果面板");
+        if (input.value !== original) failures.push("检测尚未确认结果就改写了输入框");
+        if (panel && !panel.textContent.includes("203.0.113.10:443")) failures.push("结果面板缺少检测地址");
+        if (panel && !panel.textContent.includes("检测超时")) failures.push("结果面板没有展示未知态原因");
+        if (panel && panel.scrollWidth > panel.clientWidth + 1) failures.push("结果面板在窄屏出现横向溢出");
+
+        const keepAlive = panel?.querySelector('button[data-action="keep-alive"]');
+        if (!keepAlive) failures.push("结果面板缺少仅保留可用操作");
+        else {
+          keepAlive.click();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          if (input.value !== "203.0.113.10:443") failures.push("仅保留可用没有生成正确的输入文本");
+        }
+        return { failures };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    sessionId,
+  );
+  if (interact.exceptionDetails) throw new Error(`检测流程执行失败：${JSON.stringify(interact.exceptionDetails)}`);
+  return interact.result?.value?.failures ?? ["检测流程没有返回结果"];
+}
+
 async function main() {
   const chrome = findChrome();
   if (!chrome) throw new Error("未找到 Chrome/Edge，可用 --chrome <path> 或 CHROME_PATH 指定");
@@ -407,9 +529,23 @@ async function main() {
         writeFileSync(join(OUT, `${page.key}-${viewport.name}.png`), Buffer.from(shot.data, "base64"));
       }
     }
+    const interactionFailures = [];
+    for (const viewport of [VIEWPORTS[0], VIEWPORTS[4]]) {
+      const flowTarget = await cdp.send("Target.createTarget", { url: "about:blank" });
+      const flowSession = await cdp.send("Target.attachToTarget", { targetId: flowTarget.targetId, flatten: true });
+      await cdp.send("Page.enable", {}, flowSession.sessionId);
+      await cdp.send("Runtime.enable", {}, flowSession.sessionId);
+      const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport);
+      interactionFailures.push(...failures.map((failure) => `${viewport.name}: ${failure}`));
+      await cdp.send("Target.closeTarget", { targetId: flowTarget.targetId });
+    }
+
     await cdp.send("Target.closeTarget", { targetId });
 
-    writeFileSync(join(OUT, "report.json"), JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, results }, null, 2));
+    writeFileSync(
+      join(OUT, "report.json"),
+      JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, results, interactionFailures }, null, 2),
+    );
 
     for (const r of results) {
       console.log(
@@ -433,9 +569,13 @@ async function main() {
       return levels.some((level, i) => i > 0 && level - levels[i - 1] > 1);
     });
     for (const r of headingSkips) console.log(`  A11Y ${r.page}@${r.viewport} 标题层级跳级：${r.headings.map((h) => h.level).join(" > ")}`);
+    for (const failure of interactionFailures) console.log(`  FLOW ${failure}`);
 
     const problems =
-      results.filter((r) => r.overflow || r.contrastFailures.length || r.smallTargets.length || r.a11y.unnamedControls.length || r.a11y.duplicateIds.length).length + headingSkips.length;
+      results.filter((r) => r.overflow || r.contrastFailures.length || r.smallTargets.length || r.a11y.unnamedControls.length || r.a11y.duplicateIds.length).length +
+      headingSkips.length +
+      interactionFailures.length;
+    if (problems > 0) exitCode = 1;
     console.log(`\n报告与截图输出目录：${OUT}`);
     console.log(problems === 0 ? "结论：全部视口通过（无横向溢出、无对比度失败、无小于 32px 目标、无 a11y 问题）" : `结论：存在 ${problems} 类问题，见上方明细`);
   } finally {

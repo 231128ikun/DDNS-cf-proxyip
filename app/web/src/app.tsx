@@ -65,6 +65,13 @@ export function App() {
     setConsoleLogs((current) => [...current.slice(-199), entry]);
   }, []);
 
+  /** 输入内容改变后，上一轮结果已不再对应当前文本，必须立即收起。 */
+  const handleIpTextChange = useCallback((value: string): void => {
+    setIpText(value);
+    setBatch({ status: 'idle' });
+    setBatchProgressState(null);
+  }, []);
+
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
   const [pools, refreshPools] = useResource((signal) => client.pools(signal));
@@ -193,9 +200,6 @@ export function App() {
     })
       .then((report) => {
         setBatch({ status: 'ready', data: report });
-        const aliveLines = report.items.filter((item) => item.status === 'alive').map((item) => item.line);
-        // 检测的语义是“筛出可用项”，因此有可用结果时用合并了元数据的行替换输入框。
-        if (aliveLines.length) setIpText(aliveLines.join('\n'));
         appendConsoleLog(
           `[批量] 完成 · 可用 ${report.alive} / 失效 ${report.dead} / 未知 ${report.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
           report.unknown ? 'warning' : report.alive ? 'success' : 'error',
@@ -212,6 +216,21 @@ export function App() {
         notify(message, 'error');
       })
       .finally(() => setCheckingBatch(false));
+  };
+
+  const handleKeepAlive = (): void => {
+    if (batch.status !== 'ready') return;
+    const aliveLines = batch.data.items.filter((item) => item.status === 'alive').map((item) => item.line);
+    if (aliveLines.length === 0) {
+      notify('本轮没有可用地址，输入框保持原样', 'error');
+      appendConsoleLog('[批量] 没有可保留的可用地址', 'warning');
+      return;
+    }
+    setIpText(aliveLines.join('\n'));
+    setBatch({ status: 'idle' });
+    setBatchProgressState(null);
+    notify(`已保留 ${aliveLines.length} 个可用地址`, 'success');
+    appendConsoleLog(`[批量] 已仅保留 ${aliveLines.length} 个可用地址`, 'success');
   };
 
   const handleSavePool = (): void => {
@@ -443,6 +462,7 @@ export function App() {
     refresh: handleRefresh,
     loadPool: handleLoadPool,
     checkBatch: handleCheckBatch,
+    keepAlive: handleKeepAlive,
     savePool: handleSavePool,
     loadRemote: handleLoadRemote,
     applyFilter: handleApplyFilter,
@@ -496,7 +516,7 @@ export function App() {
             maintenanceBusy={maintenanceBusy}
             actions={actions}
             onLookupChange={setLookup}
-            onIpTextChange={setIpText}
+            onIpTextChange={handleIpTextChange}
             onFilterChange={setFilterText}
             onRemoteUrlChange={setRemoteUrl}
             onPoolChange={setPoolKey}

@@ -32,6 +32,7 @@ export interface DashboardActions {
   readonly refresh: () => void;
   readonly loadPool: () => void;
   readonly checkBatch: () => void;
+  readonly keepAlive: () => void;
   readonly savePool: () => void;
   readonly loadRemote: () => void;
   readonly applyFilter: (mode: PoolFilterMode) => void;
@@ -118,7 +119,7 @@ export function DashboardPage({
 
   return (
     <div id="page-dashboard" class="page-panel active" role="tabpanel" aria-labelledby="tab-dashboard">
-      <div class="card p-3">
+      <div class="card p-3 probe-overview-card">
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
           <h2 class="card-title m-0 fw-bold"><Icon name="activity" /> 解析实况</h2>
           <form class="d-flex gap-2 align-items-center flex-grow-1 ddns-lookup-form" onSubmit={actions.lookupSubmit}>
@@ -175,7 +176,10 @@ export function DashboardPage({
         <div class="col-lg-7">
           <div class="card p-4 dashboard-card">
             <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-              <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
+              <div>
+                <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP 池工作台</h2>
+                <p class="dashboard-section-hint">粘贴、筛选并检测节点。检测结果先在本页展示，确认后再入库。</p>
+              </div>
               <div class="pool-tools">
                 <select
                   id="pool-selector"
@@ -251,6 +255,12 @@ export function DashboardPage({
                   尚未配置主复检或备用复检接口。检测会返回“探针异常”，请先在配置中心保存检测接口。
                 </div>
               )}
+
+              <BatchResults
+                state={batch}
+                progress={batchProgressState}
+                onKeepAlive={actions.keepAlive}
+              />
 
               <div class="mb-2 filter-toolbar">
                 <div class="filter-line">
@@ -338,22 +348,14 @@ export function DashboardPage({
 
         <div class="col-lg-5">
           <div class="card p-4 dashboard-card dashboard-console-card">
-            <h2 class="card-title mb-3 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
-            <Console health={health} pools={pools} logs={consoleLogs} />
-            {/* 只在批量检测进行中显示进度条：空闲时留一条空槽会被误读成控件。 */}
-            {batch.status === 'loading' && (
-              <div
-                class="progress batch-progress mb-3"
-                role="progressbar"
-                aria-label="批量检测进度"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={batchProgress(batch, batchProgressState)}
-                aria-valuetext={batchProgressLabel(batchProgressState)}
-              >
-                <div class="progress-bar batch-progress-bar" style={{ width: `${batchProgress(batch, batchProgressState)}%` }} />
+            <div class="dashboard-section-heading">
+              <div>
+                <h2 class="card-title mb-1 fw-bold"><Icon name="dashboard" /> 运行活动</h2>
+                <p class="dashboard-section-hint mb-0">检测、池操作和维护的结果会按时间记录。</p>
               </div>
-            )}
+              <span class="dashboard-section-tag">LIVE</span>
+            </div>
+            <Console health={health} pools={pools} logs={consoleLogs} />
             <button
               class="btn btn-dark w-100 mb-3"
               type="button"
@@ -371,6 +373,110 @@ export function DashboardPage({
       </div>
     </div>
   );
+}
+
+/**
+ * 批量检测的可见结果面板。
+ *
+ * 检测完成后保留用户的原始输入，由用户明确选择“仅保留可用”；
+ * 失效和探针异常分别展示，避免异常响应被静默当成节点失效。
+ */
+function BatchResults({
+  state,
+  progress,
+  onKeepAlive,
+}: {
+  readonly state: RequestState<PoolCheckResponse>;
+  readonly progress: PoolCheckProgressState | null;
+  readonly onKeepAlive: () => void;
+}) {
+  if (state.status === 'idle') return null;
+
+  const percent = batchProgress(state, progress);
+  const ready = state.status === 'ready' ? state.data : null;
+  return (
+    <section class="batch-result-panel" data-testid="batch-results" aria-labelledby="batch-result-title">
+      <div class="batch-result-head">
+        <div>
+          <h3 id="batch-result-title" class="batch-result-title">检测结果</h3>
+          <p class="batch-result-caption">
+            {state.status === 'loading'
+              ? batchProgressLabel(progress)
+              : ready
+                ? '结果已就绪。输入框保持不变，可先查看异常原因再决定是否筛选。'
+                : '检测没有完成，请根据错误信息处理后重试。'}
+          </p>
+        </div>
+        {ready && (
+          <button
+            class="btn btn-sm btn-primary"
+            type="button"
+            data-action="keep-alive"
+            disabled={ready.alive === 0}
+            onClick={onKeepAlive}
+          >
+            仅保留可用
+          </button>
+        )}
+      </div>
+
+      {state.status === 'loading' && (
+        <div
+          class="progress batch-progress"
+          role="progressbar"
+          aria-label="批量检测进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          aria-valuetext={batchProgressLabel(progress)}
+        >
+          <div class="progress-bar batch-progress-bar" style={{ width: `${percent}%` }} />
+        </div>
+      )}
+
+      {state.status === 'error' && <p class="batch-result-error">{state.message}</p>}
+
+      {ready && (
+        <>
+          <div class="batch-result-summary" aria-label="检测汇总">
+            <span class="batch-result-stat"><strong>{ready.total}</strong><small>检测</small></span>
+            <span class="batch-result-stat success"><strong>{ready.alive}</strong><small>可用</small></span>
+            <span class="batch-result-stat danger"><strong>{ready.dead}</strong><small>失效</small></span>
+            <span class="batch-result-stat warning"><strong>{ready.unknown}</strong><small>异常</small></span>
+          </div>
+
+          <div class="batch-result-list" role="list" aria-label="逐项检测结果">
+            {ready.items.map((item) => (
+              <div class="batch-result-row" role="listitem" key={item.address}>
+                <ProbeBadge status={item.status} />
+                <code class="batch-result-address">{item.address}</code>
+                <span class="batch-result-latency">
+                  {item.latencyMs === undefined ? item.exitFamily : `${item.latencyMs} ms`}
+                </span>
+                <span class="batch-result-message" title={item.message ?? item.code}>
+                  {batchItemDetail(item)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {ready.invalid.length > 0 && (
+            <details class="batch-invalid">
+              <summary>{ready.invalid.length} 条输入无法识别</summary>
+              <pre>{ready.invalid.join('\n')}</pre>
+            </details>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function batchItemDetail(item: PoolCheckResponse['items'][number]): string {
+  const metadata = [item.country, item.asn ? `AS${item.asn.replace(/^AS/i, '')}` : undefined, item.exitIp]
+    .filter(Boolean)
+    .join(' · ');
+  return [item.message, item.code, metadata].filter(Boolean).join(' · ') || '检测完成';
 }
 
 /**
