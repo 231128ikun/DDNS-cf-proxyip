@@ -5,9 +5,8 @@
  *   1) `/` 由 Cloudflare 静态资源返回 HTML；
  *   2) `/api/health` 由 Worker 返回 JSON 与版本号；
  *   3) 缺失的静态资源必须 404，不能被兜底成 200 HTML；
- *   4) 批量检测的 JSON 与 NDJSON 两条响应路径都能完整返回；
- *   5) 超过单次安全上限的批检请求必须返回 400；
- *   6) 未知 API 路由返回 JSON 404。
+ *   4) 单目标检测路由由 Worker 正常返回；
+ *   5) 未知 API 路由返回 JSON 404。
  *
  * 用法：node scripts/smoke.mjs [--port 8799]
  * 需要先 `npm run build`（要读 app/dist/web 与 app/src）。
@@ -46,36 +45,16 @@ try {
     const body = await response.json();
     return body?.ok === true && typeof body.version === 'string' && body.version.length > 0;
   });
-  await checkRequest('批量检测返回完整 JSON', '/api/check/batch', {
+  await checkRequest('单目标检测返回完整 JSON', '/api/check', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ text: '203.0.113.10:443' }),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ proxyip: '203.0.113.10:443' }),
   }, 200, async (response) => {
     const body = await response.json();
-    return body?.total === 1 && body?.unknown === 1 && Array.isArray(body?.items) && body.items.length === 1;
-  });
-  await checkRequest('批量检测返回完整进度流', '/api/check/batch', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/x-ndjson' },
-    body: JSON.stringify({ text: '203.0.113.10:443' }),
-  }, 200, async (response) => {
-    if (!response.headers.get('content-type')?.includes('application/x-ndjson')) return false;
-    const events = (await response.text()).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
-    return events.length === 2 &&
-      events[0]?.type === 'progress' &&
-      events[0]?.completed === 1 &&
-      events[1]?.type === 'complete' &&
-      events[1]?.report?.total === 1;
-  });
-  await checkRequest('超限批检返回 400', '/api/check/batch', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      text: Array.from({ length: 5 }, (_, index) => `203.0.113.${index + 10}:443`).join('\n'),
-    }),
-  }, 400, async (response) => {
-    const body = await response.json();
-    return typeof body?.error === 'string' && body.error.includes('4');
+    return body?.ok === true &&
+      Array.isArray(body?.items) &&
+      body.items.length === 1 &&
+      typeof body.items[0]?.result?.status === 'string';
   });
   await check('缺失的静态资源必须 404', '/assets/definitely-missing.js', 404);
   await check('未知 API 路由返回 404', '/api/definitely-missing', 404);

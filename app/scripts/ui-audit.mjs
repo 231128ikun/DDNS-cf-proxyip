@@ -332,62 +332,20 @@ async function waitForCdp(timeoutMs = 20000) {
 
 /**
  * 用确定性的浏览器内响应跑一次真实检测流程。
- * 测试不依赖外部探针，只验证页面能否消费流式结果并把结论呈现出来。
+ * 测试不依赖外部探针，只验证页面能否消费逐地址检测结果并把结论呈现出来。
  */
 async function runBatchFlowCheck(cdp, sessionId, viewport) {
-  const events = [
-    {
-      type: "progress",
-      completed: 1,
-      total: 2,
-      item: { address: "203.0.113.10:443", status: "alive", exitFamily: "ipv4", line: "203.0.113.10:443" },
-    },
-    {
-      type: "progress",
-      completed: 2,
-      total: 2,
-      item: {
-        address: "203.0.113.11:443",
-        status: "unknown",
-        exitFamily: "unknown",
-        line: "203.0.113.11:443",
-        code: "TIMEOUT",
-        message: "检测超时",
-      },
-    },
-    {
-      type: "complete",
-      report: {
-        total: 2,
-        alive: 1,
-        dead: 0,
-        unknown: 1,
-        invalid: [],
-        items: [
-          { address: "203.0.113.10:443", status: "alive", exitFamily: "ipv4", line: "203.0.113.10:443" },
-          {
-            address: "203.0.113.11:443",
-            status: "unknown",
-            exitFamily: "unknown",
-            line: "203.0.113.11:443",
-            code: "TIMEOUT",
-            message: "检测超时",
-          },
-        ],
-      },
-    },
-  ];
   const source = `(() => {
     const nativeFetch = window.fetch.bind(window);
-    const body = ${JSON.stringify(events.map((event) => JSON.stringify(event)).join("\n") + "\n")};
     window.__batchDelayMs = 0;
     window.fetch = (input, init) => {
       const url = String(input instanceof Request ? input.url : input);
-      if (url.endsWith("/api/check/batch")) {
-        const response = () => new Response(body, {
-          status: 200,
-          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
-        });
+      if (url.endsWith("/api/check")) {
+        const proxyip = JSON.parse(init?.body).proxyip;
+        const payload = proxyip === "203.0.113.11:443"
+          ? { ok: true, input: proxyip, source: { kind: "direct" }, items: [{ address: proxyip, result: { status: "unknown", exitFamily: "unknown", exits: [], code: "TIMEOUT", message: "检测超时" } }], skipped: [] }
+          : { ok: true, input: proxyip, source: { kind: "direct" }, items: [{ address: proxyip, result: { status: "alive", exitFamily: "ipv4", exits: [] } }], skipped: [] };
+        const response = () => Response.json(payload);
         if (!window.__batchDelayMs) return Promise.resolve(response());
         return new Promise((resolve, reject) => {
           const signal = init?.signal;
@@ -453,7 +411,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         else {
           keepAlive.click();
           await new Promise((resolve) => setTimeout(resolve, 50));
-          if (input.value !== "203.0.113.10:443") failures.push("仅保留可用没有生成正确的输入文本");
+          if (input.value !== "203.0.113.10:443,null,null,v4") failures.push("仅保留可用没有生成标准池格式");
         }
 
         window.__batchDelayMs = 250;

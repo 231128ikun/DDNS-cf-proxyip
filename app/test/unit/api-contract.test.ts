@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { CheckProxy } from '../../src/application/check-proxy';
-import { CheckPoolText } from '../../src/application/check-pool';
 import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import type { ProbeAdapter } from '../../src/ports/probe';
@@ -23,7 +22,7 @@ interface ClientOperation {
 const CLIENT_OPERATIONS: readonly ClientOperation[] = [
   { name: 'health', invoke: (client) => client.health(), method: 'GET', path: '/api/health' },
   { name: 'checkTarget', invoke: (client) => client.checkTarget('203.0.113.10:443'), method: 'POST', path: '/api/check' },
-  { name: 'checkBatch', invoke: (client) => client.checkBatch('203.0.113.10:443'), method: 'POST', path: '/api/check/batch' },
+  { name: 'checkBatch', invoke: (client) => client.checkBatch('203.0.113.10:443'), method: 'POST', path: '/api/check' },
   { name: 'pools', invoke: (client) => client.pools(), method: 'GET', path: '/api/pools' },
   { name: 'readPool', invoke: (client) => client.readPool('ip_pool_001'), method: 'GET', path: '/api/pools/ip_pool_001' },
   {
@@ -99,7 +98,7 @@ class FakeProbeAdapter implements ProbeAdapter {
 describe('web and Worker API contract', () => {
   it('keeps every public ApiClient method mapped to a real Worker route', async () => {
     const publicMethods = Object.getOwnPropertyNames(ApiClient.prototype)
-      .filter((name) => !['constructor', 'request', 'checkBatchChunk', 'streamPoolCheck'].includes(name))
+      .filter((name) => !['constructor', 'request', 'checkPoolTarget'].includes(name))
       .sort();
     expect(publicMethods).toEqual(CLIENT_OPERATIONS.map((operation) => operation.name).sort());
 
@@ -112,8 +111,17 @@ describe('web and Worker API contract', () => {
           method: init?.method ?? 'GET',
           ...(typeof init?.body === 'string' ? { body: init.body } : {}),
         });
-        if (url === '/api/check/batch') {
-          return Response.json({ total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] });
+        if (url === '/api/check') {
+          return Response.json({
+            ok: true,
+            input: '203.0.113.10:443',
+            source: { kind: 'direct' },
+            items: [{
+              address: '203.0.113.10:443',
+              result: { status: 'alive', exitFamily: 'ipv4', exits: [] },
+            }],
+            skipped: [],
+          });
         }
         return Response.json({ ok: true });
       },
@@ -150,20 +158,21 @@ describe('web and Worker API contract', () => {
     }
   });
 
-  it('runs a split batch through the real ApiClient and Worker route', async () => {
+  it('runs browser-scheduled targets through the real single-target Worker route', async () => {
     const checkProxy = new CheckProxy(new FakeProbeAdapter());
     const app = createHttpApp({
       checkTarget: new CheckTarget({
         resolver: new ResolveTarget({ query: async () => ({ ok: true, values: [] }) }),
         checkProxy,
       }),
-      checkPool: new CheckPoolText(checkProxy),
       version: 'contract-test',
     });
+    let requestCount = 0;
     const client = new ApiClient({
-      fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) => (
-        app.request(String(input), init)
-      )) as typeof fetch,
+      fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) => {
+        requestCount += 1;
+        return app.request(String(input), init);
+      }) as typeof fetch,
     });
     const addresses = Array.from({ length: 5 }, (_, index) => `203.0.113.${index + 10}:443`);
     const progress: number[] = [];
@@ -172,6 +181,7 @@ describe('web and Worker API contract', () => {
       progress.push(event.completed);
     });
 
+    expect(requestCount).toBe(5);
     expect(progress).toEqual([1, 2, 3, 4, 5]);
     expect(report).toMatchObject({ total: 5, alive: 5, dead: 0, unknown: 0, invalid: [] });
     expect(report.items.map((item) => item.address)).toEqual(addresses);

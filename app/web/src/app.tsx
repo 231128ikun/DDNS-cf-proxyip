@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
-import { MAX_BATCH_REQUEST_TARGETS } from '../../src/contracts/pool-check';
 import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
-import { cleanPoolText, countPoolTextLines, planPoolCheckChunks } from '../../src/domain/pool-text';
-import { ApiClient } from './api/client';
+import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
+import { ApiClient, WEB_CHECK_CONCURRENCY } from './api/client';
 import { errorMessage, isAbort } from './api/errors';
 import {
   DashboardPage,
@@ -199,10 +198,9 @@ export function App() {
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
-    const chunkCount = planPoolCheckChunks(text, MAX_BATCH_REQUEST_TARGETS).chunks.length;
     setBatchProgressState({ completed: 0, total });
     appendConsoleLog(`[批量] 开始检测 · ${total} 个地址`);
-    appendConsoleLog(`[批量] 已拆分为 ${chunkCount} 个安全批次`);
+    appendConsoleLog(`[批量] 浏览器并发 ${WEB_CHECK_CONCURRENCY}，每个地址独立请求`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });

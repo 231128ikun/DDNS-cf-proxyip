@@ -30,168 +30,188 @@ describe('web API client', () => {
 });
 
 describe('web API client pool endpoints', () => {
-  it('reads streamed batch progress and returns the completed report', async () => {
-    const events = [
-      { type: 'progress', completed: 1, total: 1, item: { address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' } },
-      {
-        type: 'complete',
-        report: {
-          total: 1,
-          alive: 1,
-          dead: 0,
-          unknown: 0,
-          invalid: [],
-          items: [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' }],
-        },
-      },
-    ];
+  it('checks one target per API request and keeps batch concurrency bounded', async () => {
+    let active = 0;
+    let peak = 0;
+    const requests: string[] = [];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get('Accept')).toContain('application/x-ndjson');
-      return new Response(`${events.map((event) => JSON.stringify(event)).join('\n')}\n`, {
-        headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      requests.push(proxyip);
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return Response.json({
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
       });
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
-    const progress: Array<{ completed: number; total: number }> = [];
-
-    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => {
-      progress.push({ completed: event.completed, total: event.total });
-    });
-
-    expect(progress).toEqual([{ completed: 1, total: 1 }]);
-    expect(report).toMatchObject({ total: 1, alive: 1 });
-  });
-
-  it('splits large batches into safe requests and keeps global progress', async () => {
-    const calls: string[] = [];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const text = JSON.parse(String(init?.body)).text as string;
-      const addresses = text.split('\n');
-      calls.push(text);
-      const items = addresses.map((address, index) => ({
-        address,
-        status: 'alive' as const,
-        exitFamily: 'ipv4' as const,
-        line: address,
-        ...(index === 0 ? { latencyMs: 120 } : {}),
-      }));
-      const events = [
-        ...items.map((item, index) => ({
-          type: 'progress',
-          completed: index + 1,
-          total: items.length,
-          item,
-        })),
-        {
-          type: 'complete',
-          report: {
-            total: items.length,
-            alive: items.length,
-            dead: 0,
-            unknown: 0,
-            invalid: [],
-            items,
-          },
-        },
-      ];
-      return new Response(`${events.map((event) => JSON.stringify(event)).join('\n')}\n`, {
-        headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
-      });
-    });
-    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
-    const text = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 10}:443`).join('\n');
+    const text = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 10}:443 # node${index}`).join('\n');
     const progress: number[] = [];
 
     const report = await client.checkBatch(text, undefined, (event) => progress.push(event.completed));
 
-    expect(calls.map((call) => call.split('\n').length)).toEqual(Array.from({ length: 34 }, () => 4));
+    expect(fetchMock).toHaveBeenCalledTimes(136);
+    expect(new Set(requests).size).toBe(136);
+    expect(peak).toBeLessThanOrEqual(32);
     expect(progress).toEqual(Array.from({ length: 136 }, (_, index) => index + 1));
     expect(report).toMatchObject({ total: 136, alive: 136, dead: 0, unknown: 0, invalid: [] });
+    expect(report.items[0]?.line).toBe('203.0.113.10:443,null,null,v4 # node0');
   });
 
-  it('falls back to JSON when the streaming request cannot connect', async () => {
-    let attempt = 0;
+  it('turns an individual request failure into unknown and keeps checking later targets', async () => {
+    const calls: string[] = [];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      attempt += 1;
-      if (attempt === 1) throw new TypeError('Failed to fetch');
-      expect(new Headers(init?.headers).get('Accept')).toBe('application/json');
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      calls.push(proxyip);
+      if (proxyip === '203.0.113.10:443') throw new TypeError('Failed to fetch');
       return Response.json({
-        total: 1,
-        alive: 1,
-        dead: 0,
-        unknown: 0,
-        invalid: [],
-        items: [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' }],
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
       });
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
-    const progress: number[] = [];
+    const progress: string[] = [];
 
-    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => progress.push(event.completed));
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(progress).toEqual([1]);
-    expect(report).toMatchObject({ total: 1, alive: 1 });
-  });
-
-  it('falls back once and replays buffered progress when the stream ends without a final report', async () => {
-    let attempt = 0;
-    const item = {
-      address: '203.0.113.10:443',
-      status: 'alive' as const,
-      exitFamily: 'ipv4' as const,
-      line: '203.0.113.10:443',
-    };
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      attempt += 1;
-      if (attempt === 1) {
-        expect(new Headers(init?.headers).get('Accept')).toContain('application/x-ndjson');
-        return new Response(`${JSON.stringify({ type: 'progress', completed: 1, total: 1, item })}\n`, {
-          headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
-        });
-      }
-      expect(new Headers(init?.headers).get('Accept')).toBe('application/json');
-      return Response.json({
-        total: 1,
-        alive: 1,
-        dead: 0,
-        unknown: 0,
-        invalid: [],
-        items: [item],
-      });
-    });
-    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
-    const progress: number[] = [];
-
-    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => progress.push(event.completed));
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(progress).toEqual([1]);
-    expect(report).toMatchObject({ total: 1, alive: 1 });
-  });
-
-  it('does not retry an explicit error event from the batch stream', async () => {
-    const fetchMock = vi.fn(async () => new Response(
-      `${JSON.stringify({ type: 'error', error: '批量检测未能完成' })}\n`,
-      { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } },
-    ));
-    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
-
-    await expect(client.checkBatch(
-      '203.0.113.10:443',
+    const report = await client.checkBatch(
+      '203.0.113.10:443\n203.0.113.11:443',
       undefined,
-      () => undefined,
-    )).rejects.toMatchObject({ message: '批量检测未能完成', status: 200 });
+      (event) => progress.push(`${event.completed}:${event.item.address}:${event.item.status}`),
+    );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
+    expect(progress).toEqual(['1:203.0.113.10:443:unknown', '2:203.0.113.11:443:alive']);
+    expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
+  });
+
+  it('returns final items in source order when requests finish out of order', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      const lastOctet = Number(proxyip.match(/\.(\d+):/)?.[1] ?? 0);
+      await new Promise((resolve) => setTimeout(resolve, (12 - lastOctet) * 5));
+      return Response.json({
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const addresses = ['203.0.113.10:443', '203.0.113.11:443', '203.0.113.12:443'];
+
+    const report = await client.checkBatch(addresses.join('\n'));
+
+    expect(report.items.map((item) => item.address)).toEqual(addresses);
+  });
+
+  it('treats an empty target response as unknown and keeps checking the batch', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      return Response.json({
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: proxyip === '203.0.113.10:443'
+          ? []
+          : [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('203.0.113.10:443 # first\n203.0.113.11:443 # second');
+
+    expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
+    expect(report.items).toEqual([
+      expect.objectContaining({
+        address: '203.0.113.10:443',
+        status: 'unknown',
+        line: '203.0.113.10:443 # first',
+      }),
+      expect.objectContaining({ address: '203.0.113.11:443', status: 'alive' }),
+    ]);
+  });
+
+  it('treats a malformed successful response as unknown instead of failing the batch', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      if (proxyip === '203.0.113.10:443') return Response.json({ ok: true });
+      return Response.json({
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443');
+
+    expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
+    expect(report.items.map((item) => item.status)).toEqual(['unknown', 'alive']);
+  });
+
+  it('writes resolved addresses instead of duplicating the source domain line', async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      ok: true,
+      input: 'edge.example.com',
+      source: { kind: 'dns', host: 'edge.example.com', addresses: ['203.0.113.10', '2001:db8::1'] },
+      items: [
+        { address: '203.0.113.10:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } },
+        { address: '[2001:db8::1]:443', result: { status: 'alive', exitFamily: 'ipv6', exits: [] } },
+      ],
+      skipped: [],
+    }));
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('edge.example.com # source');
+
+    expect(report.items.map((item) => item.line)).toEqual([
+      '203.0.113.10:443,null,null,v4 # source',
+      '[2001:db8::1]:443,null,null,v6 # source',
+    ]);
+  });
+
+  it('does not call the removed server batch route', async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return Response.json({
+        ok: true,
+        input: '203.0.113.10:443',
+        source: { kind: 'direct' },
+        items: [{ address: '203.0.113.10:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    await client.checkBatch('203.0.113.10:443');
+
+    expect(urls).toEqual(['/api/check']);
   });
 
   it('uses the shared pool and batch contracts', async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init: init ?? {} });
-      if (String(input) === '/api/check/batch') {
-        return Response.json({ total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] });
+      if (String(input) === '/api/check') {
+        return Response.json({
+          ok: true,
+          input: '203.0.113.9:443',
+          source: { kind: 'direct' },
+          items: [{ address: '203.0.113.9:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+          skipped: [],
+        });
       }
       return Response.json({ ok: true });
     });
@@ -206,10 +226,10 @@ describe('web API client pool endpoints', () => {
       init: { method: 'PUT', body: JSON.stringify({ content: '203.0.113.9:443\n', mode: 'replace' }) },
     });
     expect(calls[1]).toMatchObject({
-      url: '/api/check/batch',
+      url: '/api/check',
       init: {
         method: 'POST',
-        body: JSON.stringify({ text: '203.0.113.9:443' }),
+        body: JSON.stringify({ proxyip: '203.0.113.9:443' }),
         headers: expect.any(Headers),
       },
     });

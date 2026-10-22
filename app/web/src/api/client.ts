@@ -2,10 +2,9 @@ import type {
   PoolCheckItemResponse,
   PoolCheckProgressEvent,
   PoolCheckResponse,
-  PoolCheckStreamEvent,
 } from '../../../src/contracts/pool-check';
-import { MAX_BATCH_REQUEST_TARGETS } from '../../../src/contracts/pool-check';
-import { planPoolCheckChunks } from '../../../src/domain/pool-text';
+import { formatPoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
+import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import type {
   CleanPoolResponse,
   CreatePoolResponse,
@@ -29,11 +28,13 @@ export interface OkResponse {
   readonly ok: true;
 }
 
+/** 与 main 的 CONCURRENT_CHECKS 默认值一致；每个槽位同时只占用一个 Worker 请求。 */
+export const WEB_CHECK_CONCURRENCY = 32;
+
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly retryable = false,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -58,31 +59,31 @@ export class ApiClient {
     return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal);
   }
 
-  /** 按安全上限拆分请求，并合并逐项进度与最终报告。 */
+  /**
+   * 与 main 的批量检测模型一致：浏览器限制并发，每个地址单独请求 Worker。
+   * 单个 Worker 请求只承担一个目标的主/备探测，避免整批耗尽子请求预算。
+   */
   async checkBatch(
     text: string,
     signal?: AbortSignal,
     onProgress?: (event: PoolCheckProgressEvent) => void,
   ): Promise<PoolCheckResponse> {
-    const plan = planPoolCheckChunks(text, MAX_BATCH_REQUEST_TARGETS);
-    const items: PoolCheckItemResponse[] = [];
-    const invalid: string[] = [];
+    const { targets, invalid } = parsePoolCheckTargets(text);
+    const itemGroups: Array<readonly PoolCheckItemResponse[]> = new Array(targets.length);
     let completed = 0;
+    let total = targets.length;
 
-    for (const chunk of plan.chunks) {
-      const report = onProgress
-        ? await this.checkBatchChunk(chunk, signal, (event) => {
-            onProgress({
-              ...event,
-              completed: completed + event.completed,
-              total: plan.total,
-            });
-          })
-        : await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text: chunk }, signal);
-      items.push(...report.items);
-      invalid.push(...report.invalid);
-      completed += report.total;
-    }
+    await mapWithLimit(targets, WEB_CHECK_CONCURRENCY, async (target, index) => {
+      if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
+      const checked = await this.checkPoolTarget(target, signal);
+      itemGroups[index] = checked;
+      total += checked.length - 1;
+      for (const item of checked) {
+        completed += 1;
+        onProgress?.({ type: 'progress', completed, total, item });
+      }
+    });
+    const items = itemGroups.flat();
 
     return {
       total: items.length,
@@ -94,33 +95,62 @@ export class ApiClient {
     };
   }
 
-  private async checkBatchChunk(
-    text: string,
-    signal: AbortSignal | undefined,
-    onProgress: (event: PoolCheckProgressEvent) => void,
-  ): Promise<PoolCheckResponse> {
-    const bufferedProgress: PoolCheckProgressEvent[] = [];
+  private async checkPoolTarget(
+    target: ParsedPoolCheckTarget,
+    signal?: AbortSignal,
+  ): Promise<readonly PoolCheckItemResponse[]> {
+    let results: CheckTargetResponse['items'] = [];
     try {
-      const report = await this.streamPoolCheck(text, signal, (event) => {
-        bufferedProgress.push(event);
-      });
-      bufferedProgress.forEach(onProgress);
-      return report;
+      const response = await this.checkTarget(target.target.authority, signal);
+      results = Array.isArray(response.items) ? response.items : [];
     } catch (error) {
-      if (
-        signal?.aborted ||
-        !(error instanceof ApiError) ||
-        !error.retryable
-      ) {
-        throw error;
-      }
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      results = [{
+        address: target.target.authority,
+        result: {
+          status: 'unknown',
+          exitFamily: 'unknown',
+          exits: [],
+          code: error instanceof ApiError ? `HTTP_${error.status}` : 'REQUEST_FAILED',
+          message: error instanceof Error ? error.message : '检测请求异常',
+        },
+      }];
+    }
+    if (results.length === 0) {
+      results = [{
+        address: target.target.authority,
+        result: {
+          status: 'unknown',
+          exitFamily: 'unknown',
+          exits: [],
+          code: 'EMPTY_RESPONSE',
+          message: '检测响应缺少目标结果',
+        },
+      }];
     }
 
-    const report = await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text }, signal);
-    report.items.forEach((item, index) => {
-      onProgress({ type: 'progress', completed: index + 1, total: report.total, item });
+    return results.map(({ address, result }) => {
+      const resolvedTarget = parseProxyTarget(address, 443) ?? target.target;
+      const sourceEntry = resolvedTarget.key === target.target.key
+        ? target.entry
+        : { ...target.entry, address: resolvedTarget.authority };
+      const entry = updatePoolEntryFromProbe(sourceEntry, { ...result, target: resolvedTarget });
+      const primary = result.exits[0];
+      const asn = primary?.asn ?? entry.asn ?? undefined;
+      const country = primary?.country ?? entry.country ?? undefined;
+      return {
+        address,
+        status: result.status,
+        exitFamily: result.exitFamily,
+        ...(result.exitIp ? { exitIp: result.exitIp } : {}),
+        ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.message ? { message: result.message } : {}),
+        ...(asn ? { asn } : {}),
+        ...(country ? { country } : {}),
+        line: result.status === 'unknown' ? target.sourceLine : formatPoolEntry(entry),
+      };
     });
-    return report;
   }
 
   async pools(signal?: AbortSignal): Promise<PoolsResponse> {
@@ -212,85 +242,6 @@ export class ApiClient {
     return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);
   }
 
-  private async streamPoolCheck(
-    text: string,
-    signal: AbortSignal | undefined,
-    onProgress: (event: PoolCheckProgressEvent) => void,
-  ): Promise<PoolCheckResponse> {
-    const headers = new Headers({ Accept: 'application/x-ndjson' });
-    headers.set('Content-Type', 'application/json');
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.baseUrl}/api/check/batch`, {
-        method: 'POST',
-        headers,
-        credentials: 'same-origin',
-        cache: 'no-store',
-        body: JSON.stringify({ text }),
-        ...(signal ? { signal } : {}),
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
-      const detail = error instanceof Error && error.message ? `：${error.message}` : '';
-      throw new ApiError(`无法连接到 Worker API${detail}`, 0, true);
-    }
-
-    if (!response.ok) {
-      let payload: unknown;
-      try {
-        payload = await response.json();
-      } catch {
-        throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
-      }
-      throw new ApiError(isApiError(payload) ? payload.error : `API 请求失败 (HTTP ${response.status})`, response.status);
-    }
-    if (!response.body) throw new ApiError('批量检测接口没有返回进度流', response.status, true);
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let report: PoolCheckResponse | undefined;
-    const consumeLine = (line: string): void => {
-      const textLine = line.trim();
-      if (!textLine) return;
-      let value: unknown;
-      try {
-        value = JSON.parse(textLine);
-      } catch {
-        throw new ApiError('批量检测进度格式无效', response.status, true);
-      }
-      const event = parsePoolCheckStreamEvent(value);
-      if (!event) throw new ApiError('批量检测进度格式无效', response.status, true);
-      if (event.type === 'progress') onProgress(event);
-      else if (event.type === 'complete') report = event.report;
-      else throw new ApiError(event.error, response.status);
-    };
-
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let newline = buffer.indexOf('\n');
-        while (newline >= 0) {
-          consumeLine(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf('\n');
-        }
-      }
-      buffer += decoder.decode();
-      if (buffer.trim()) consumeLine(buffer);
-    } catch (error) {
-      if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-      throw new ApiError('批量检测进度读取失败', response.status, true);
-    } finally {
-      reader.releaseLock();
-    }
-
-    if (!report) throw new ApiError('批量检测未返回最终结果', response.status, true);
-    return report;
-  }
-
   private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
@@ -332,40 +283,50 @@ function isApiError(value: unknown): value is ApiErrorResponse {
   return value !== null && typeof value === 'object' && 'error' in value && typeof value.error === 'string';
 }
 
-function parsePoolCheckStreamEvent(value: unknown): PoolCheckStreamEvent | null {
-  if (!isRecord(value)) return null;
-  const event = value;
-  if (event.type === 'error' && typeof event.error === 'string') {
-    return { type: 'error', error: event.error };
+interface ParsedPoolCheckTarget {
+  readonly entry: NonNullable<ReturnType<typeof parsePoolEntry>>;
+  readonly target: NonNullable<ReturnType<typeof parseProxyTarget>>;
+  readonly sourceLine: string;
+}
+
+/** 复用池文本与地址规则，只负责把用户输入整理成逐个请求的目标。 */
+function parsePoolCheckTargets(text: string): {
+  readonly targets: readonly ParsedPoolCheckTarget[];
+  readonly invalid: readonly string[];
+} {
+  const targets: ParsedPoolCheckTarget[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const line of parsePoolText(text)) {
+    if (!line.entry) {
+      invalid.push(line.raw);
+      continue;
+    }
+    const target = parseProxyTarget(line.entry.address, 443);
+    if (!target) {
+      invalid.push(line.entry.address);
+      continue;
+    }
+    if (seen.has(target.key)) continue;
+    seen.add(target.key);
+    targets.push({ entry: line.entry, target, sourceLine: line.raw });
   }
-  if (event.type === 'progress' && typeof event.completed === 'number' && typeof event.total === 'number') {
-    if (!isPoolCheckItemResponse(event.item)) return null;
-    return { type: 'progress', completed: event.completed, total: event.total, item: event.item };
-  }
-  if (event.type === 'complete' && isPoolCheckResponse(event.report)) return { type: 'complete', report: event.report };
-  return null;
+  return { targets, invalid };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
-}
-
-function isPoolCheckItemResponse(value: unknown): value is PoolCheckItemResponse {
-  if (!isRecord(value)) return false;
-  return typeof value.address === 'string' &&
-    typeof value.line === 'string' &&
-    ['alive', 'dead', 'unknown'].includes(String(value.status)) &&
-    ['ipv4', 'ipv6', 'dual', 'unknown'].includes(String(value.exitFamily));
-}
-
-function isPoolCheckResponse(value: unknown): value is PoolCheckResponse {
-  if (!isRecord(value)) return false;
-  return typeof value.total === 'number' &&
-    typeof value.alive === 'number' &&
-    typeof value.dead === 'number' &&
-    typeof value.unknown === 'number' &&
-    Array.isArray(value.invalid) &&
-    value.invalid.every((item) => typeof item === 'string') &&
-    Array.isArray(value.items) &&
-    value.items.every(isPoolCheckItemResponse);
+async function mapWithLimit<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      const item = items[index];
+      cursor += 1;
+      if (item !== undefined) await task(item, index);
+    }
+  });
+  await Promise.all(workers);
 }

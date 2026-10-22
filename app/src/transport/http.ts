@@ -1,4 +1,4 @@
-import type { CheckPoolText, PoolCheckItem, PoolCheckReport } from '../application/check-pool';
+import type { CheckPoolText } from '../application/check-pool';
 import type { CheckTarget, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
@@ -11,13 +11,6 @@ import {
   type AppConfig,
   type ConfigResponse,
 } from '../contracts/config';
-import type {
-  CheckPoolRequest,
-  PoolCheckItemResponse,
-  PoolCheckResponse,
-  PoolCheckStreamEvent,
-} from '../contracts/pool-check';
-import { MAX_BATCH_REQUEST_TARGETS } from '../contracts/pool-check';
 import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
 import type {
   CreatePoolRequest,
@@ -39,8 +32,7 @@ import {
 } from '../contracts/probe';
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
-import { formatPoolEntry } from '../domain/pool-entry';
-import { countPoolTextLines, planPoolCheckChunks } from '../domain/pool-text';
+import { countPoolTextLines } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
 import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 
@@ -108,70 +100,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     if (!outcome.ok) return errorResponse(outcome.message, 400);
 
     return jsonResponse(toCheckTargetResponse(outcome.report));
-  });
-
-  router.post('/api/check/batch', async (context) => {
-    const checkPool = dependencies.checkPool;
-    if (!checkPool) return errorResponse('probe unavailable', 503);
-
-    const body = await readJsonBody(context.request);
-    if (!body.ok) return errorResponse('invalid json', 400);
-
-    const text = (body.value as CheckPoolRequest | null)?.text;
-    if (typeof text !== 'string' || !text.trim()) return errorResponse('invalid text', 400);
-    const plan = planPoolCheckChunks(text, MAX_BATCH_REQUEST_TARGETS);
-    if (plan.chunks.length > 1) {
-      return errorResponse(`单次批量检测最多 ${MAX_BATCH_REQUEST_TARGETS} 个地址`, 400);
-    }
-
-    if (acceptsPoolCheckStream(context.request)) {
-      const abortController = new AbortController();
-      const requestSignal = context.request.signal;
-      const abortFromRequest = (): void => abortController.abort(requestSignal.reason);
-      if (requestSignal.aborted) abortFromRequest();
-      else requestSignal.addEventListener('abort', abortFromRequest, { once: true });
-
-      let cancelled = false;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          const encoder = new TextEncoder();
-          const send = (event: PoolCheckStreamEvent): void => {
-            if (!cancelled) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-          };
-          const cleanup = (): void => requestSignal.removeEventListener('abort', abortFromRequest);
-
-          void (async () => {
-            try {
-              const report = await checkPool.execute(text, { signal: abortController.signal }, ({ item, completed, total }) => {
-                send({ type: 'progress', completed, total, item: toPoolCheckItemResponse(item) });
-              });
-              send({ type: 'complete', report: toPoolCheckResponse(report) });
-            } catch {
-              send({ type: 'error', error: '批量检测未能完成' });
-            } finally {
-              cleanup();
-              if (!cancelled) controller.close();
-            }
-          })();
-        },
-        cancel(reason) {
-          cancelled = true;
-          abortController.abort(reason);
-          requestSignal.removeEventListener('abort', abortFromRequest);
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'application/x-ndjson; charset=utf-8',
-          'Cache-Control': 'no-store',
-          'X-Content-Type-Options': 'nosniff',
-        },
-      });
-    }
-
-    const report = await checkPool.execute(text, { signal: context.request.signal });
-    return jsonResponse(toPoolCheckResponse(report));
   });
 
   router.get('/api/pools', async () => {
@@ -466,41 +394,4 @@ function toCheckTargetResponse(report: CheckTargetReport): CheckTargetResponse {
 function toProbeResponse(result: ProbeResult): ProbeResponse {
   const { target: _target, ...response } = result;
   return response;
-}
-
-function toPoolCheckResponse(report: PoolCheckReport): PoolCheckResponse {
-  return {
-    total: report.total,
-    alive: report.alive,
-    dead: report.dead,
-    unknown: report.unknown,
-    invalid: report.invalid,
-    items: report.items.map(toPoolCheckItemResponse),
-  };
-}
-
-function acceptsPoolCheckStream(request: Request): boolean {
-  return (request.headers.get('accept') ?? '')
-    .split(',')
-    .some((mediaType) => mediaType.trim().toLowerCase().startsWith('application/x-ndjson'));
-}
-
-function toPoolCheckItemResponse(item: PoolCheckItem): PoolCheckItemResponse {
-  const { result, entry } = item;
-  const primary = result.exits[0];
-  const asn = primary?.asn ?? entry.asn ?? undefined;
-  const country = primary?.country ?? entry.country ?? undefined;
-  return {
-    address: item.address,
-    status: result.status,
-    exitFamily: result.exitFamily,
-    ...(result.exitIp ? { exitIp: result.exitIp } : {}),
-    ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
-    ...(result.code ? { code: result.code } : {}),
-    ...(result.message ? { message: result.message } : {}),
-    ...(asn ? { asn } : {}),
-    ...(country ? { country } : {}),
-    // 复用领域层的序列化规则，保证入库文本与监控流程完全一致。
-    line: formatPoolEntry(entry),
-  };
 }
