@@ -1,5 +1,11 @@
 import type { ExitFamily, ProbeStatus } from '../domain/probe-result';
 
+/**
+ * 单个 HTTP 批量检测请求的安全上限。
+ * 前端会按此值拆分并在本地合并结果，避免单个 Worker 调用耗尽子请求或执行时间。
+ */
+export const MAX_BATCH_REQUEST_TARGETS = 8;
+
 /** 批量检测的响应条目：只保留面板需要的字段，不回传大的原始响应。 */
 export interface PoolCheckItemResponse {
   readonly address: string;

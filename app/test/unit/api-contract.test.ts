@@ -105,11 +105,15 @@ describe('web and Worker API contract', () => {
     const requests: Array<{ readonly url: string; readonly method: string; readonly body?: string }> = [];
     const client = new ApiClient({
       fetchImpl: async (input, init) => {
+        const url = String(input);
         requests.push({
-          url: String(input),
+          url,
           method: init?.method ?? 'GET',
           ...(typeof init?.body === 'string' ? { body: init.body } : {}),
         });
+        if (url === '/api/check/batch') {
+          return Response.json({ total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] });
+        }
         return Response.json({ ok: true });
       },
     });

@@ -1,4 +1,4 @@
-import { formatPoolEntry, parsePoolText } from './pool-entry';
+import { formatPoolEntry, parsePoolText, serializePoolText, type PoolLine } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
 
 /**
@@ -19,4 +19,48 @@ export function cleanPoolText(text: string): string {
 }
 export function countPoolTextLines(text: string): number {
   return parsePoolText(text).filter((line) => line.entry !== null).length;
+}
+
+export interface PoolCheckTextPlan {
+  readonly chunks: readonly string[];
+  readonly total: number;
+}
+
+/**
+ * 按唯一目标地址拆分检测请求，保留原始备注和无法识别的输入用于最终汇总。
+ * 服务端与 Web 客户端共用这一份规则，避免两边出现不同的分批边界。
+ */
+export function planPoolCheckChunks(text: string, maxTargets: number): PoolCheckTextPlan {
+  const limit = Math.max(1, Math.floor(maxTargets));
+  const chunks: string[] = [];
+  const seen = new Set<string>();
+  let lines: PoolLine[] = [];
+  let count = 0;
+
+  const flush = (): void => {
+    if (lines.length === 0) return;
+    chunks.push(serializePoolText(lines));
+    lines = [];
+    count = 0;
+  };
+
+  for (const line of parsePoolText(text)) {
+    if (!line.entry) {
+      lines.push(line);
+      continue;
+    }
+    const target = parseProxyTarget(line.entry.address, 443);
+    if (!target) {
+      lines.push(line);
+      continue;
+    }
+    if (seen.has(target.key)) continue;
+    if (count >= limit) flush();
+    seen.add(target.key);
+    lines.push(line);
+    count += 1;
+  }
+  flush();
+
+  return { chunks, total: seen.size };
 }

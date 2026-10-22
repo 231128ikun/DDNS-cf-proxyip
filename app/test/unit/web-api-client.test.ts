@@ -33,7 +33,17 @@ describe('web API client pool endpoints', () => {
   it('reads streamed batch progress and returns the completed report', async () => {
     const events = [
       { type: 'progress', completed: 1, total: 1, item: { address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' } },
-      { type: 'complete', report: { total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] } },
+      {
+        type: 'complete',
+        report: {
+          total: 1,
+          alive: 1,
+          dead: 0,
+          unknown: 0,
+          invalid: [],
+          items: [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' }],
+        },
+      },
     ];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(new Headers(init?.headers).get('Accept')).toContain('application/x-ndjson');
@@ -52,10 +62,60 @@ describe('web API client pool endpoints', () => {
     expect(report).toMatchObject({ total: 1, alive: 1 });
   });
 
+  it('splits large batches into safe requests and keeps global progress', async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const text = JSON.parse(String(init?.body)).text as string;
+      const addresses = text.split('\n');
+      calls.push(text);
+      const items = addresses.map((address, index) => ({
+        address,
+        status: 'alive' as const,
+        exitFamily: 'ipv4' as const,
+        line: address,
+        ...(index === 0 ? { latencyMs: 120 } : {}),
+      }));
+      const events = [
+        ...items.map((item, index) => ({
+          type: 'progress',
+          completed: index + 1,
+          total: items.length,
+          item,
+        })),
+        {
+          type: 'complete',
+          report: {
+            total: items.length,
+            alive: items.length,
+            dead: 0,
+            unknown: 0,
+            invalid: [],
+            items,
+          },
+        },
+      ];
+      return new Response(`${events.map((event) => JSON.stringify(event)).join('\n')}\n`, {
+        headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const text = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 10}:443`).join('\n');
+    const progress: number[] = [];
+
+    const report = await client.checkBatch(text, undefined, (event) => progress.push(event.completed));
+
+    expect(calls.map((call) => call.split('\n').length)).toEqual(Array.from({ length: 17 }, () => 8));
+    expect(progress).toEqual(Array.from({ length: 136 }, (_, index) => index + 1));
+    expect(report).toMatchObject({ total: 136, alive: 136, dead: 0, unknown: 0, invalid: [] });
+  });
+
   it('uses the shared pool and batch contracts', async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init: init ?? {} });
+      if (String(input) === '/api/check/batch') {
+        return Response.json({ total: 1, alive: 1, dead: 0, unknown: 0, invalid: [], items: [] });
+      }
       return Response.json({ ok: true });
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });

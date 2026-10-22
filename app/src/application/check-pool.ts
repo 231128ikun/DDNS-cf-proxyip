@@ -84,7 +84,7 @@ function collectEntries(text: string): { entries: readonly PoolEntry[]; invalid:
       continue;
     }
     if (entries.length >= MAX_BATCH_TARGETS) break;
-    const target = parseProxyTarget(line.entry.address);
+    const target = parseProxyTarget(line.entry.address, 443);
     if (!target) {
       invalid.push(line.entry.address);
       continue;

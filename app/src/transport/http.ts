@@ -17,6 +17,7 @@ import type {
   PoolCheckResponse,
   PoolCheckStreamEvent,
 } from '../contracts/pool-check';
+import { MAX_BATCH_REQUEST_TARGETS } from '../contracts/pool-check';
 import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
 import type {
   CreatePoolRequest,
@@ -39,7 +40,7 @@ import {
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { formatPoolEntry } from '../domain/pool-entry';
-import { countPoolTextLines } from '../domain/pool-text';
+import { countPoolTextLines, planPoolCheckChunks } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
 import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 
@@ -118,6 +119,10 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     const text = (body.value as CheckPoolRequest | null)?.text;
     if (typeof text !== 'string' || !text.trim()) return errorResponse('invalid text', 400);
+    const plan = planPoolCheckChunks(text, MAX_BATCH_REQUEST_TARGETS);
+    if (plan.chunks.length > 1) {
+      return errorResponse(`单次批量检测最多 ${MAX_BATCH_REQUEST_TARGETS} 个地址`, 400);
+    }
 
     if (acceptsPoolCheckStream(context.request)) {
       const abortController = new AbortController();

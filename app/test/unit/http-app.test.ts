@@ -340,6 +340,22 @@ describe('HTTP app pool routes', () => {
   });
 });
 
+describe('HTTP app batch request limits', () => {
+  it('rejects a single batch above the safe Worker subrequest limit', async () => {
+    const app = createHttpApp({
+      checkTarget: createCheckTarget(),
+      version: 'test',
+      checkPool: new CheckPoolText(new CheckProxy(new FakeProbeAdapter())),
+    });
+    const text = Array.from({ length: 9 }, (_, index) => `203.0.113.${index + 10}:443`).join('\n');
+
+    const response = await postJson(app, '/api/check/batch', { text });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: '单次批量检测最多 8 个地址' });
+  });
+});
+
 describe('HTTP app config routes', () => {
   function createConfigGateway(initial: AppConfig) {
     const gateway: ConfigGateway & { current: AppConfig } = {

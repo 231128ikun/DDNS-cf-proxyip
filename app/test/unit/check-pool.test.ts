@@ -16,7 +16,7 @@ describe('CheckPoolText progress', () => {
     const checkPool = new CheckPoolText(new CheckProxy(adapter), 1);
 
     const report = await checkPool.execute(
-      '203.0.113.10:443\n203.0.113.11:443',
+      '203.0.113.10\n203.0.113.11:443',
       {},
       ({ item, completed, total }) => events.push({ address: item.address, completed, total }),
     );
