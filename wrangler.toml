@@ -1,5 +1,5 @@
 # 源码即入口：Wrangler 直接打包 app/src/index.ts，仓库不提交任何构建产物。
-name = "ddns-cf-proxyip"
+name = "ddns-pro-refactor"
 main = "app/src/index.ts"
 compatibility_date = "2026-09-24"
 

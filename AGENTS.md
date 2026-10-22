@@ -162,7 +162,7 @@ npm run build
 
 - 面板是 Cloudflare 静态资源（目录 `app/dist/web/`），由边缘直接分发；
 - Worker 只处理 `/api/*`，前端不再打包进 Worker；
-- 通过 `wrangler deploy` 或 Cloudflare Git 集成部署，构建命令为 `cd app && npm ci && npm run build`；
+- 通过 `npm run deploy` 或 Cloudflare Git 集成部署；构建命令为 `cd app && npm ci`，部署命令为 `cd app && npm run deploy`，部署脚本必须先跑完整 `npm run check`；
 - 仓库不提交 `_worker.js` 或任何构建产物，也不再提供“复制单个文件到控制台”的部署方式。
 
 构建产物、源码、测试、sourcemap、截图、`node_modules/`、`.wrangler/` 或缓存不得进入版本库，也不得进入静态资源目录。
@@ -188,7 +188,7 @@ cd app
 npm run check
 ```
 
-`npm run check` 必须依次完成类型检查、单元测试、构建和体积门禁。体积门禁分两条：Worker 打包体积和首屏页面重量（JS 与 CSS 的 gzip 合计）。体积超预算时先删除重复实现、减少依赖或调整设计，不得直接抬高预算掩盖增长。
+`npm run check` 必须依次完成类型检查、接口契约测试、单元测试、构建、体积门禁和部署形态冒烟。接口契约测试必须证明所有 Web API 客户端方法都有对应的 Worker 路由；冒烟测试必须证明同一次构建下首页由静态资源返回、`/api/health` 可用、未知 API 返回 JSON 404。体积门禁分两条：Worker 打包体积和首屏页面重量（JS 与 CSS 的 gzip 合计）。体积超预算时先删除重复实现、减少依赖或调整设计，不得直接抬高预算掩盖增长。
 
 UI 改动额外验证桌面与窄屏；涉及 KV、探针或 DNS 改动时增加对应模拟测试，不能用静态语法检查代替行为验证。
 

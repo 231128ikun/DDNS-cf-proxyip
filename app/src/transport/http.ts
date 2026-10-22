@@ -381,7 +381,8 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
       const matched = await router.handle(request);
       if (matched) return matched;
 
-      return errorResponse('not found', 404);    } catch (error) {
+      return errorResponse('not found', 404);
+    } catch (error) {
       console.error('Unhandled worker error', error);
       return errorResponse('internal error', 500);
     }

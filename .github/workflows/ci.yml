@@ -22,7 +22,7 @@ defaults:
 
 jobs:
   check:
-    name: typecheck / test / build / size
+    name: typecheck / test / build / size / deployment shape
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,14 +38,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `npm run check`：类型检查、单元测试、构建前端与 Worker、体积门禁。
+      # `npm run check`：类型检查、接口契约、单元测试、构建、体积门禁和部署形态冒烟。
       # 面板由 Cloudflare 静态资源分发，Worker 只处理 /api/*；全部用例使用内存 KV 与 mock fetch。
       - name: Check
         run: npm run check
-
-      # 冒烟检查本地起一个 Worker，确认静态资源与 /api/* 的分工没有被改坏。
-      - name: Deployment shape smoke check
-        run: npm run smoke
 
       # 部署入口是源码，仓库里不应再出现构建产物。
       - name: Reject committed build artifacts

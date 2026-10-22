@@ -1,7 +1,7 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
 > [!NOTE]
-> 本分支 `codex/modular-refactor` 是独立重构线，与 `main` 并行演进、不合并。当前状态、与 `main` 的差异和验证结果见 [docs/refactor-status.md](./docs/refactor-status.md)。
+> `main` 仍是旧版入口；当前唯一维护实现位于 `codex/modular-refactor`。部署、构建和页面文档均以 `app/` 与根目录 `wrangler.toml` 为准，当前状态见 [docs/refactor-status.md](./docs/refactor-status.md)。
 
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
@@ -37,21 +37,18 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 > 推荐部署顺序：准备 Node.js 22 -> 构建源码 -> 绑定 KV -> 部署 -> 打开面板保存配置。
 > 仓库不再提供“复制单文件到 Worker 编辑器”的部署方式，也不提交 `_worker.js`。
 
-### ☁️ 一键部署
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip)
-
-点击按钮后授权仓库，并在 Cloudflare 给出的部署设置里确认两项：
+### ☁️ Cloudflare 构建设置
 
 | 设置项 | 值 |
 | --- | --- |
-| Build command | `cd app && npm ci && npm run build` |
-| Deploy command | `npx wrangler deploy` |
+| Build command | `cd app && npm ci` |
+| Deploy command | `cd app && npm run deploy` |
 
 - Worker 名称、入口和静态资源目录都由仓库根目录的 [`wrangler.toml`](./wrangler.toml) 决定：入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`。
+- `npm run deploy` 会先执行 `npm run check`；类型检查、接口契约、单测、构建、体积门禁或部署形态冒烟任一失败时，不会发布。
 - Cloudflare 会读取 `wrangler.toml` 并自动创建/绑定 `IP_DATA` KV 命名空间；如果这一步没有自动完成，按下面的手动步骤补一个同名绑定，功能不受影响。
 - 部署完成后打开 Worker 地址，在 **配置中心** 填写 Zone ID、CF Key、维护域名与检测 API。
-- 当前测试阶段 API 不启用面板 key 校验；公开 Worker 地址上的 API 可直接访问。
+- 当前测试阶段 API 不启用面板 key 校验；只应部署到测试账户，并避免在公开实例中保存生产凭据。
 
 ### ⚙️ Wrangler 本地部署
 
@@ -94,7 +91,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 4. 部署：
 
    ```powershell
-   npx wrangler deploy --config ../wrangler.toml
+   npm run deploy
    ```
 
 5. 打开面板并进入配置中心：
@@ -119,13 +116,13 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 <details>
 <summary><code><strong>「 Git 集成部署文字教程 」</strong></code></summary>
 
-1. Fork 本仓库并在 Cloudflare Workers 中连接该仓库。
-2. Worker 项目名称需与 `wrangler.toml` 里的 `name` 一致，例如 `ddns-cf-proxyip`。
+1. 在 Cloudflare Workers 中连接本仓库。
+2. 生产分支选择 `codex/modular-refactor`；Worker 项目名称需与 `wrangler.toml` 里的 `name` 一致，即 `ddns-pro-refactor`。
 3. 在构建配置中填写：
 
    ```text
-   Build command: cd app && npm ci && npm run build
-   Deploy command: npx wrangler deploy --config wrangler.toml
+   Build command: cd app && npm ci
+   Deploy command: cd app && npm run deploy
    ```
 
 4. 为 Worker 绑定 KV，变量名必须是 `IP_DATA`。
