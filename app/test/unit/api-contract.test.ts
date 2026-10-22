@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CheckProxy } from '../../src/application/check-proxy';
+import { CheckPoolText } from '../../src/application/check-pool';
 import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import type { ProbeAdapter } from '../../src/ports/probe';
@@ -98,7 +99,7 @@ class FakeProbeAdapter implements ProbeAdapter {
 describe('web and Worker API contract', () => {
   it('keeps every public ApiClient method mapped to a real Worker route', async () => {
     const publicMethods = Object.getOwnPropertyNames(ApiClient.prototype)
-      .filter((name) => !['constructor', 'request', 'streamPoolCheck'].includes(name))
+      .filter((name) => !['constructor', 'request', 'checkBatchChunk', 'streamPoolCheck'].includes(name))
       .sort();
     expect(publicMethods).toEqual(CLIENT_OPERATIONS.map((operation) => operation.name).sort());
 
@@ -147,5 +148,32 @@ describe('web and Worker API contract', () => {
       expect(response.status, `${request.method} ${request.url} must be routed by the Worker`).not.toBe(404);
       expect(response.status, `${request.method} ${request.url} must accept the client method`).not.toBe(405);
     }
+  });
+
+  it('runs a split batch through the real ApiClient and Worker route', async () => {
+    const checkProxy = new CheckProxy(new FakeProbeAdapter());
+    const app = createHttpApp({
+      checkTarget: new CheckTarget({
+        resolver: new ResolveTarget({ query: async () => ({ ok: true, values: [] }) }),
+        checkProxy,
+      }),
+      checkPool: new CheckPoolText(checkProxy),
+      version: 'contract-test',
+    });
+    const client = new ApiClient({
+      fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) => (
+        app.request(String(input), init)
+      )) as typeof fetch,
+    });
+    const addresses = Array.from({ length: 5 }, (_, index) => `203.0.113.${index + 10}:443`);
+    const progress: number[] = [];
+
+    const report = await client.checkBatch(addresses.join('\n'), undefined, (event) => {
+      progress.push(event.completed);
+    });
+
+    expect(progress).toEqual([1, 2, 3, 4, 5]);
+    expect(report).toMatchObject({ total: 5, alive: 5, dead: 0, unknown: 0, invalid: [] });
+    expect(report.items.map((item) => item.address)).toEqual(addresses);
   });
 });

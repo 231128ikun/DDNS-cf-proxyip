@@ -352,7 +352,7 @@ describe('HTTP app batch request limits', () => {
     const response = await postJson(app, '/api/check/batch', { text });
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: '单次批量检测最多 8 个地址' });
+    await expect(response.json()).resolves.toEqual({ error: '单次批量检测最多 4 个地址' });
   });
 });
 

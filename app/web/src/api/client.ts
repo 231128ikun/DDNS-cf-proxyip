@@ -4,6 +4,8 @@ import type {
   PoolCheckResponse,
   PoolCheckStreamEvent,
 } from '../../../src/contracts/pool-check';
+import { MAX_BATCH_REQUEST_TARGETS } from '../../../src/contracts/pool-check';
+import { planPoolCheckChunks } from '../../../src/domain/pool-text';
 import type {
   CleanPoolResponse,
   CreatePoolResponse,
@@ -31,6 +33,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryable = false,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -55,14 +58,69 @@ export class ApiClient {
     return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal);
   }
 
-  /** 单请求读取服务端逐项进度；没有回调时兼容 JSON 响应。 */
+  /** 按安全上限拆分请求，并合并逐项进度与最终报告。 */
   async checkBatch(
     text: string,
     signal?: AbortSignal,
     onProgress?: (event: PoolCheckProgressEvent) => void,
   ): Promise<PoolCheckResponse> {
-    if (onProgress) return await this.streamPoolCheck(text, signal, onProgress);
-    return await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text }, signal);
+    const plan = planPoolCheckChunks(text, MAX_BATCH_REQUEST_TARGETS);
+    const items: PoolCheckItemResponse[] = [];
+    const invalid: string[] = [];
+    let completed = 0;
+
+    for (const chunk of plan.chunks) {
+      const report = onProgress
+        ? await this.checkBatchChunk(chunk, signal, (event) => {
+            onProgress({
+              ...event,
+              completed: completed + event.completed,
+              total: plan.total,
+            });
+          })
+        : await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text: chunk }, signal);
+      items.push(...report.items);
+      invalid.push(...report.invalid);
+      completed += report.total;
+    }
+
+    return {
+      total: items.length,
+      alive: items.filter((item) => item.status === 'alive').length,
+      dead: items.filter((item) => item.status === 'dead').length,
+      unknown: items.filter((item) => item.status === 'unknown').length,
+      invalid,
+      items,
+    };
+  }
+
+  private async checkBatchChunk(
+    text: string,
+    signal: AbortSignal | undefined,
+    onProgress: (event: PoolCheckProgressEvent) => void,
+  ): Promise<PoolCheckResponse> {
+    const bufferedProgress: PoolCheckProgressEvent[] = [];
+    try {
+      const report = await this.streamPoolCheck(text, signal, (event) => {
+        bufferedProgress.push(event);
+      });
+      bufferedProgress.forEach(onProgress);
+      return report;
+    } catch (error) {
+      if (
+        signal?.aborted ||
+        !(error instanceof ApiError) ||
+        !error.retryable
+      ) {
+        throw error;
+      }
+    }
+
+    const report = await this.request<PoolCheckResponse>('/api/check/batch', 'POST', { text }, signal);
+    report.items.forEach((item, index) => {
+      onProgress({ type: 'progress', completed: index + 1, total: report.total, item });
+    });
+    return report;
   }
 
   async pools(signal?: AbortSignal): Promise<PoolsResponse> {
@@ -173,7 +231,8 @@ export class ApiClient {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
-      throw new ApiError('无法连接到 Worker API', 0);
+      const detail = error instanceof Error && error.message ? `：${error.message}` : '';
+      throw new ApiError(`无法连接到 Worker API${detail}`, 0, true);
     }
 
     if (!response.ok) {
@@ -185,7 +244,7 @@ export class ApiClient {
       }
       throw new ApiError(isApiError(payload) ? payload.error : `API 请求失败 (HTTP ${response.status})`, response.status);
     }
-    if (!response.body) throw new ApiError('批量检测接口没有返回进度流', response.status);
+    if (!response.body) throw new ApiError('批量检测接口没有返回进度流', response.status, true);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -198,10 +257,10 @@ export class ApiClient {
       try {
         value = JSON.parse(textLine);
       } catch {
-        throw new ApiError('批量检测进度格式无效', response.status);
+        throw new ApiError('批量检测进度格式无效', response.status, true);
       }
       const event = parsePoolCheckStreamEvent(value);
-      if (!event) throw new ApiError('批量检测进度格式无效', response.status);
+      if (!event) throw new ApiError('批量检测进度格式无效', response.status, true);
       if (event.type === 'progress') onProgress(event);
       else if (event.type === 'complete') report = event.report;
       else throw new ApiError(event.error, response.status);
@@ -223,12 +282,12 @@ export class ApiClient {
       if (buffer.trim()) consumeLine(buffer);
     } catch (error) {
       if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-      throw new ApiError('批量检测进度读取失败', response.status);
+      throw new ApiError('批量检测进度读取失败', response.status, true);
     } finally {
       reader.releaseLock();
     }
 
-    if (!report) throw new ApiError('批量检测未返回最终结果', response.status);
+    if (!report) throw new ApiError('批量检测未返回最终结果', response.status, true);
     return report;
   }
 

@@ -104,9 +104,86 @@ describe('web API client pool endpoints', () => {
 
     const report = await client.checkBatch(text, undefined, (event) => progress.push(event.completed));
 
-    expect(calls.map((call) => call.split('\n').length)).toEqual(Array.from({ length: 17 }, () => 8));
+    expect(calls.map((call) => call.split('\n').length)).toEqual(Array.from({ length: 34 }, () => 4));
     expect(progress).toEqual(Array.from({ length: 136 }, (_, index) => index + 1));
     expect(report).toMatchObject({ total: 136, alive: 136, dead: 0, unknown: 0, invalid: [] });
+  });
+
+  it('falls back to JSON when the streaming request cannot connect', async () => {
+    let attempt = 0;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      attempt += 1;
+      if (attempt === 1) throw new TypeError('Failed to fetch');
+      expect(new Headers(init?.headers).get('Accept')).toBe('application/json');
+      return Response.json({
+        total: 1,
+        alive: 1,
+        dead: 0,
+        unknown: 0,
+        invalid: [],
+        items: [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:443' }],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const progress: number[] = [];
+
+    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => progress.push(event.completed));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(progress).toEqual([1]);
+    expect(report).toMatchObject({ total: 1, alive: 1 });
+  });
+
+  it('falls back once and replays buffered progress when the stream ends without a final report', async () => {
+    let attempt = 0;
+    const item = {
+      address: '203.0.113.10:443',
+      status: 'alive' as const,
+      exitFamily: 'ipv4' as const,
+      line: '203.0.113.10:443',
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      attempt += 1;
+      if (attempt === 1) {
+        expect(new Headers(init?.headers).get('Accept')).toContain('application/x-ndjson');
+        return new Response(`${JSON.stringify({ type: 'progress', completed: 1, total: 1, item })}\n`, {
+          headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+        });
+      }
+      expect(new Headers(init?.headers).get('Accept')).toBe('application/json');
+      return Response.json({
+        total: 1,
+        alive: 1,
+        dead: 0,
+        unknown: 0,
+        invalid: [],
+        items: [item],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const progress: number[] = [];
+
+    const report = await client.checkBatch('203.0.113.10:443', undefined, (event) => progress.push(event.completed));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(progress).toEqual([1]);
+    expect(report).toMatchObject({ total: 1, alive: 1 });
+  });
+
+  it('does not retry an explicit error event from the batch stream', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      `${JSON.stringify({ type: 'error', error: '批量检测未能完成' })}\n`,
+      { headers: { 'content-type': 'application/x-ndjson; charset=utf-8' } },
+    ));
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    await expect(client.checkBatch(
+      '203.0.113.10:443',
+      undefined,
+      () => undefined,
+    )).rejects.toMatchObject({ message: '批量检测未能完成', status: 200 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses the shared pool and batch contracts', async () => {
@@ -130,8 +207,13 @@ describe('web API client pool endpoints', () => {
     });
     expect(calls[1]).toMatchObject({
       url: '/api/check/batch',
-      init: { method: 'POST', body: JSON.stringify({ text: '203.0.113.9:443' }) },
+      init: {
+        method: 'POST',
+        body: JSON.stringify({ text: '203.0.113.9:443' }),
+        headers: expect.any(Headers),
+      },
     });
+    expect(new Headers(calls[1]?.init.headers).get('Accept')).toBe('application/json');
     expect(calls[2]).toMatchObject({ url: '/api/pools/ip_pool_001', init: { method: 'DELETE' } });
   });
 

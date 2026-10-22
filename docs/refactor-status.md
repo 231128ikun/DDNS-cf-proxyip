@@ -21,21 +21,15 @@
 
 - Worker 源码拆分为 `contracts / domain / application / ports / adapters / transport / jobs / config`，依赖单向。
 - 面板改为 `app/web/` 的 Preact 源码，样式收敛为语义变量，并抽取复用组件。
-- 面板由 Workers Static Assets 分发，`npm run smoke` 校验“静态资源 + `/api/*`”分工。
+- 面板由 Workers Static Assets 分发，`npm run smoke` 校验“静态资源 + `/api/*`”分工，并实际调用批量检测的 JSON、NDJSON 与超限 400 路径。
 - 移除重构期间夹带的 socket 探针与接口自检。
 - 一键洗库为服务端用例；垃圾桶只保留统一写入入口。
-- 批量检测按每批 8 个唯一地址拆分请求并合并进度，避免大批量输入触发单次 Worker 子请求上限。
+- 批量检测按每批 4 个唯一地址拆分请求并合并进度；进度流无法完整结束时，当前批自动退回普通 JSON 请求，避免大批量输入触发单次 Worker 限制。
 - 维护通知按“距上次成功通知”的池数量基线对比。
 - 维护补货改为有界探索窗口并按延迟择优，避免全失效的池探测到池底。
 - 死代码、不可达样式、空转配置项已清理；文档与实际行为对齐。
 - IP 池与存储取舍记录在 [`ip-pool-design.md`](./ip-pool-design.md)。
 
-## 最近验证（2026-10-22）
+## 验证入口
 
-在 `app/` 下运行 `npm run check`、`npm run audit:ui`：
-
-- 类型检查与接口契约检查通过；单元测试 30 个文件 / 212 项通过。
-- 构建与体积门禁通过：Worker 145.67 KB raw / 35.27 KB gzip；首屏 js + css 116.18 KB raw / 35.15 KB gzip。
-- 部署形态冒烟通过：`/`、`/api/health`、缺失静态资源和未知 API 均符合预期。
-- UI 验收通过：桌面与窄屏共 12 个页面状态无横向溢出、对比度失败、小于 32px 点击目标或 a11y 问题，交互流程通过。
-- 线上 `ddns-pro-refactor` 的 `/api/health` 与 `/api/pools` 已返回 200。
+在 `app/` 下运行 `npm run check`、`npm run audit:ui`。接口契约测试以真实 `ApiClient -> Worker route -> application` 闭环覆盖拆批、进度和最终合并；部署形态冒烟同时检查静态资源、健康接口、批量检测 JSON/NDJSON、超限 400 与未知 API 404。
