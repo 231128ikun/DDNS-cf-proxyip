@@ -7,7 +7,7 @@ import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { ApiClient } from './api/client';
-import { errorMessage } from './api/errors';
+import { errorMessage, isAbort } from './api/errors';
 import {
   DashboardPage,
   type ConsoleLogEntry,
@@ -50,6 +50,7 @@ export function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const client = useMemo(() => new ApiClient(), []);
   const logSequence = useRef(0);
+  const activeBatch = useRef<AbortController | null>(null);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -65,12 +66,17 @@ export function App() {
     setConsoleLogs((current) => [...current.slice(-199), entry]);
   }, []);
 
-  /** 输入内容改变后，上一轮结果已不再对应当前文本，必须立即收起。 */
-  const handleIpTextChange = useCallback((value: string): void => {
+  /** 所有输入替换都走这里：旧检测必须中止，旧结果也必须立即失效。 */
+  const replaceIpText = useCallback((value: string): void => {
+    activeBatch.current?.abort();
+    activeBatch.current = null;
+    setCheckingBatch(false);
     setIpText(value);
     setBatch({ status: 'idle' });
     setBatchProgressState(null);
   }, []);
+
+  useEffect(() => () => activeBatch.current?.abort(), []);
 
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
@@ -168,7 +174,7 @@ export function App() {
     appendConsoleLog(`[IP池] 正在读取 ${poolKey}`);
     client.readPool(poolKey)
       .then(({ content }) => {
-        setIpText(content.replace(/\n$/, ''));
+        replaceIpText(content.replace(/\n$/, ''));
         appendConsoleLog(`[IP池] 已读取 ${countPoolTextLines(content)} 条地址`, 'success');
         notify(content.trim() ? '已从库中加载' : '该池当前为空', content.trim() ? 'success' : 'error');
       })
@@ -186,12 +192,16 @@ export function App() {
       notify('请先输入或从库加载 IP', 'error');
       return;
     }
+    activeBatch.current?.abort();
+    const controller = new AbortController();
+    activeBatch.current = controller;
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: 0, total });
     appendConsoleLog(`[批量] 开始检测 · ${total} 个地址`);
-    client.checkBatch(text, undefined, (event: PoolCheckProgressEvent) => {
+    client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
+      if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });
       const statusLabel = event.item.status === 'alive' ? '可用' : event.item.status === 'dead' ? '失效' : '未知';
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
@@ -199,6 +209,7 @@ export function App() {
       appendConsoleLog(`[批量 ${event.completed}/${event.total}] ${event.item.address} · ${statusLabel}${detail}`, tone);
     })
       .then((report) => {
+        if (activeBatch.current !== controller) return;
         setBatch({ status: 'ready', data: report });
         appendConsoleLog(
           `[批量] 完成 · 可用 ${report.alive} / 失效 ${report.dead} / 未知 ${report.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
@@ -210,12 +221,17 @@ export function App() {
         );
       })
       .catch((error: unknown) => {
+        if (isAbort(error) || activeBatch.current !== controller) return;
         const message = errorMessage(error);
         setBatch({ status: 'error', message });
         appendConsoleLog(`[批量] ${message}`, 'error');
         notify(message, 'error');
       })
-      .finally(() => setCheckingBatch(false));
+      .finally(() => {
+        if (activeBatch.current !== controller) return;
+        activeBatch.current = null;
+        setCheckingBatch(false);
+      });
   };
 
   const handleKeepAlive = (): void => {
@@ -226,9 +242,7 @@ export function App() {
       appendConsoleLog('[批量] 没有可保留的可用地址', 'warning');
       return;
     }
-    setIpText(aliveLines.join('\n'));
-    setBatch({ status: 'idle' });
-    setBatchProgressState(null);
+    replaceIpText(aliveLines.join('\n'));
     notify(`已保留 ${aliveLines.length} 个可用地址`, 'success');
     appendConsoleLog(`[批量] 已仅保留 ${aliveLines.length} 个可用地址`, 'success');
   };
@@ -248,7 +262,7 @@ export function App() {
     client.savePool(poolKey, normalized)
       .then(async () => {
         const { content } = await client.readPool(poolKey);
-        setIpText(content);
+        replaceIpText(content);
         await refreshPools();
         appendConsoleLog(`[IP池] 已保存 ${countPoolTextLines(normalized)} 条地址`, 'success');
         notify('已保存并规范化到 IP 池');
@@ -276,7 +290,7 @@ export function App() {
     }
     void runPoolAction('remote-load', async () => {
       const result = await client.remoteLoad(url);
-      setIpText(result.content.replace(/\n$/, ''));
+      replaceIpText(result.content.replace(/\n$/, ''));
       return `已加载 ${result.count} 条`;
     });
   };
@@ -288,7 +302,7 @@ export function App() {
       return;
     }
     const next = filterPoolText(ipText, filter, mode);
-    setIpText(next);
+    replaceIpText(next);
     notify(mode === 'keep' ? `已保留 ${countPoolTextLines(next)} 条` : `已排除，剩余 ${countPoolTextLines(next)} 条`);
   };
 
@@ -298,7 +312,7 @@ export function App() {
       notify('没有发现重复条目', 'error');
       return;
     }
-    setIpText(next);
+    replaceIpText(next);
     notify(`去重后保留 ${countPoolTextLines(next)} 条`);
   };
 
@@ -367,7 +381,7 @@ export function App() {
       const report = await client.cleanPool(poolKey);
       // 服务端已经重写过池内容，回读一次让输入框和库保持一致。
       const { content } = await client.readPool(poolKey);
-      setIpText(content);
+      replaceIpText(content);
       if (report.skipped) return `${report.unknown} 条未确认，本次未写回也未入桶`;
       const trashed = report.trashed > 0 ? `，移入垃圾桶 ${report.trashed} 条` : '';
       return `洗库完成：保留 ${report.kept} 条${trashed}`;
@@ -516,7 +530,7 @@ export function App() {
             maintenanceBusy={maintenanceBusy}
             actions={actions}
             onLookupChange={setLookup}
-            onIpTextChange={handleIpTextChange}
+            onIpTextChange={replaceIpText}
             onFilterChange={setFilterText}
             onRemoteUrlChange={setRemoteUrl}
             onPoolChange={setPoolKey}

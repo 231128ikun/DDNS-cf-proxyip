@@ -380,13 +380,27 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
   const source = `(() => {
     const nativeFetch = window.fetch.bind(window);
     const body = ${JSON.stringify(events.map((event) => JSON.stringify(event)).join("\n") + "\n")};
+    window.__batchDelayMs = 0;
     window.fetch = (input, init) => {
       const url = String(input instanceof Request ? input.url : input);
       if (url.endsWith("/api/check/batch")) {
-        return Promise.resolve(new Response(body, {
+        const response = () => new Response(body, {
           status: 200,
           headers: { "content-type": "application/x-ndjson; charset=utf-8" },
-        }));
+        });
+        if (!window.__batchDelayMs) return Promise.resolve(response());
+        return new Promise((resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          const timer = setTimeout(() => resolve(response()), window.__batchDelayMs);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
       }
       return nativeFetch(input, init);
     };
@@ -440,6 +454,37 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
           keepAlive.click();
           await new Promise((resolve) => setTimeout(resolve, 50));
           if (input.value !== "203.0.113.10:443") failures.push("仅保留可用没有生成正确的输入文本");
+        }
+
+        window.__batchDelayMs = 250;
+        input.value = original;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: original }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        button.click();
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        const editedWhileChecking = "203.0.113.99:443";
+        input.value = editedWhileChecking;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: editedWhileChecking }));
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        window.__batchDelayMs = 0;
+        if (document.querySelector('[data-testid="batch-results"]')) failures.push("取消检测后旧结果重新出现在页面");
+        if (input.value !== editedWhileChecking) failures.push("取消检测后输入框被旧请求覆盖");
+
+        const duplicate = "203.0.113.10:443\\n203.0.113.10:443";
+        input.value = duplicate;
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: duplicate }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        button.click();
+        const stalePanel = await waitFor(() => document.querySelector('[data-testid="batch-results"]'));
+        const dedupeButton = await waitFor(() =>
+          [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "去重")
+        );
+        if (!stalePanel) failures.push("程序化输入检查前没有生成检测结果");
+        if (!dedupeButton) failures.push("找不到去重操作");
+        if (stalePanel && dedupeButton) {
+          dedupeButton.click();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (document.querySelector('[data-testid="batch-results"]')) failures.push("程序化修改输入后旧检测结果仍然可见");
         }
         return { failures };
       })()`,
