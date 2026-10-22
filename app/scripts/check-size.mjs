@@ -22,6 +22,16 @@ const BUDGETS = {
   pageTotal: { rawKb: 140, gzipKb: 50 },
 };
 
+// 调整预算时最多只能相对上一轮生效值放宽 20%，避免连续追涨掩盖体积膨胀。
+const BUDGET_BASELINE = {
+  worker: { rawKb: 230, gzipKb: 60 },
+  script: { rawKb: 60, gzipKb: 22 },
+  scriptTotal: { rawKb: 90, gzipKb: 35 },
+  style: { rawKb: 40, gzipKb: 10 },
+  pageTotal: { rawKb: 130, gzipKb: 46 },
+};
+const MAX_BUDGET_GROWTH = 0.2;
+
 const appRoot = new URL('../', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 const assetsDir = fileURLToPath(new URL('dist/web/assets', appRoot));
@@ -33,6 +43,18 @@ let scriptRaw = 0;
 let scriptGzip = 0;
 let styleRaw = 0;
 let styleGzip = 0;
+
+for (const [name, budget] of Object.entries(BUDGETS)) {
+  const baseline = BUDGET_BASELINE[name];
+  const maxRaw = baseline.rawKb * (1 + MAX_BUDGET_GROWTH);
+  const maxGzip = baseline.gzipKb * (1 + MAX_BUDGET_GROWTH);
+  if (budget.rawKb > maxRaw || budget.gzipKb > maxGzip) {
+    throw new Error(
+      `预算 ${name} 单次放宽超过 ${MAX_BUDGET_GROWTH * 100}%：` +
+      `raw ${baseline.rawKb}->${budget.rawKb} KB，gzip ${baseline.gzipKb}->${budget.gzipKb} KB`,
+    );
+  }
+}
 
 for (const file of readdirSync(assetsDir)) {
   const path = join(assetsDir, file);
