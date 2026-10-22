@@ -134,7 +134,7 @@ export function DashboardPage({
               spellcheck={false}
             />
             <button
-              class="btn btn-info btn-sm"
+              class="btn btn-primary btn-sm"
               type="submit"
               disabled={check.status === 'loading'}
             >

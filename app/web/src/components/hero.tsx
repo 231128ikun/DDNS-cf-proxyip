@@ -16,7 +16,7 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
   return (
     <div class="container hero">
       <div class="hero-copy">
-        <p class="hero-eyebrow">DDNS PRO · EDGE CONTROL</p>
+        <p class="hero-eyebrow">DDNS PRO · CLOUDFLARE WORKER</p>
         <h1><Icon name="globe" /> 多域名管理</h1>
         <div class="hero-actions">
           <button
@@ -28,7 +28,7 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
           >
             <Icon name="help" /> 使用说明
           </button>
-          <div class="config-info"><Icon name="settings" /> 导入节点 <span>→</span> 检测 <span>→</span> 入库 <span>→</span> DNS 维护</div>
+          <div class="config-info"><Icon name="settings" /> 建议流程：导入 IP <span>→</span> 检测 <span>→</span> 入库 <span>→</span> 执行维护</div>
         </div>
       </div>
 
