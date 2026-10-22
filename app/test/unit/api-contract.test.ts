@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
+import type { DnsLookup } from '../../src/ports/dns-lookup';
 import type { ProbeAdapter } from '../../src/ports/probe';
 import type { ProxyTarget } from '../../src/domain/proxy-target';
 import { alive, type ProbeResult } from '../../src/domain/probe-result';
@@ -185,5 +186,40 @@ describe('web and Worker API contract', () => {
     expect(progress).toEqual([1, 2, 3, 4, 5]);
     expect(report).toMatchObject({ total: 5, alive: 5, dead: 0, unknown: 0, invalid: [] });
     expect(report.items.map((item) => item.address)).toEqual(addresses);
+  });
+
+  it('lets the Worker resolve a bare domain from the original browser input', async () => {
+    const lookup: DnsLookup = {
+      async query(_name, type) {
+        return type === 'A'
+          ? { ok: true, values: ['203.0.113.20'] }
+          : { ok: false, code: 'DNS_STATUS', message: 'no AAAA record' };
+      },
+    };
+    const app = createHttpApp({
+      checkTarget: new CheckTarget({
+        resolver: new ResolveTarget(lookup),
+        checkProxy: new CheckProxy(new FakeProbeAdapter()),
+      }),
+      version: 'contract-test',
+    });
+    const requestBodies: string[] = [];
+    const client = new ApiClient({
+      fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) => {
+        requestBodies.push(JSON.parse(String(init?.body)).proxyip as string);
+        return app.request(String(input), init);
+      }) as typeof fetch,
+    });
+
+    const report = await client.checkBatch('edge.example.com # source');
+
+    expect(requestBodies).toEqual(['edge.example.com']);
+    expect(report.items).toEqual([
+      expect.objectContaining({
+        address: '203.0.113.20:443',
+        status: 'alive',
+        line: '203.0.113.20:443,null,null,v4 # source',
+      }),
+    ]);
   });
 });

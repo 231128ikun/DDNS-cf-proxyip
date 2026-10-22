@@ -101,8 +101,13 @@ export class ApiClient {
   ): Promise<readonly PoolCheckItemResponse[]> {
     let results: CheckTargetResponse['items'] = [];
     try {
-      const response = await this.checkTarget(target.target.authority, signal);
-      results = Array.isArray(response.items) ? response.items : [];
+      const response = await this.checkTarget(target.entry.address, signal);
+      if (Array.isArray(response.items) && response.items.length > 0) {
+        if (!response.items.every(isCheckTargetItemResponse)) {
+          throw new ApiError('检测响应格式无效', 200);
+        }
+        results = response.items;
+      }
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
       results = [{
@@ -281,6 +286,19 @@ function poolPath(key: string): string {
 
 function isApiError(value: unknown): value is ApiErrorResponse {
   return value !== null && typeof value === 'object' && 'error' in value && typeof value.error === 'string';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+function isCheckTargetItemResponse(value: unknown): value is CheckTargetResponse['items'][number] {
+  if (!isRecord(value) || typeof value.address !== 'string' || !parseProxyTarget(value.address, 443)) return false;
+  if (!isRecord(value.result)) return false;
+  const result = value.result;
+  if (!['alive', 'dead', 'unknown'].includes(String(result.status))) return false;
+  if (!['ipv4', 'ipv6', 'dual', 'unknown'].includes(String(result.exitFamily))) return false;
+  return Array.isArray(result.exits) && result.exits.every((exit) => isRecord(exit));
 }
 
 interface ParsedPoolCheckTarget {

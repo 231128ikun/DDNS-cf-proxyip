@@ -160,17 +160,55 @@ describe('web API client pool endpoints', () => {
     expect(report.items.map((item) => item.status)).toEqual(['unknown', 'alive']);
   });
 
+  it('treats a malformed item inside a successful response as unknown', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      if (proxyip === '203.0.113.10:443') {
+        return Response.json({
+          ok: true,
+          input: proxyip,
+          source: { kind: 'direct' },
+          items: [null],
+          skipped: [],
+        });
+      }
+      return Response.json({
+        ok: true,
+        input: proxyip,
+        source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
+        skipped: [],
+      });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('203.0.113.10:443 # first\n203.0.113.11:443 # second');
+
+    expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
+    expect(report.items).toEqual([
+      expect.objectContaining({
+        address: '203.0.113.10:443',
+        status: 'unknown',
+        line: '203.0.113.10:443 # first',
+      }),
+      expect.objectContaining({ address: '203.0.113.11:443', status: 'alive' }),
+    ]);
+  });
+
   it('writes resolved addresses instead of duplicating the source domain line', async () => {
-    const fetchMock = vi.fn(async () => Response.json({
-      ok: true,
-      input: 'edge.example.com',
-      source: { kind: 'dns', host: 'edge.example.com', addresses: ['203.0.113.10', '2001:db8::1'] },
-      items: [
-        { address: '203.0.113.10:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } },
-        { address: '[2001:db8::1]:443', result: { status: 'alive', exitFamily: 'ipv6', exits: [] } },
-      ],
-      skipped: [],
-    }));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).proxyip).toBe('edge.example.com');
+      return Response.json({
+        ok: true,
+        input: 'edge.example.com',
+        source: { kind: 'dns', host: 'edge.example.com', addresses: ['203.0.113.10', '2001:db8::1'] },
+        items: [
+          { address: '203.0.113.10:443', result: { status: 'alive', exitFamily: 'ipv4', exits: [] } },
+          { address: '[2001:db8::1]:443', result: { status: 'alive', exitFamily: 'ipv6', exits: [] } },
+        ],
+        skipped: [],
+      });
+    });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
 
     const report = await client.checkBatch('edge.example.com # source');
