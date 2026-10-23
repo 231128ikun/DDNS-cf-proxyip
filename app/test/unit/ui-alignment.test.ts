@@ -50,6 +50,43 @@ describe('dashboard visual alignment', () => {
     expect(dashboard).toContain('<div class="col-12">');
   });
 
+  it('uses the compact main-aligned card system across dashboard and configuration', () => {
+    const styles = readSource('web/src/styles.css');
+    const hero = cssRule(styles, '.hero');
+    const card = cssRule(styles, '.card');
+    const grid = cssRule(styles, '.config-card-grid');
+    const miniCard = cssRule(styles, '.config-mini-card');
+    const emptyState = cssRule(styles, '.config-empty-state');
+
+    expect(hero).not.toContain('grid-template-columns');
+    expect(card).toContain('border: 0;');
+    expect(card).toContain('border-radius: 20px;');
+    expect(grid).toContain('grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));');
+    expect(grid).toContain('gap: var(--space-5);');
+    expect(miniCard).toContain('background: var(--color-surface-subtle);');
+    expect(miniCard).toContain('padding: var(--space-6);');
+    expect(miniCard).toContain('min-height: 120px;');
+    expect(miniCard).toContain('border-radius: var(--radius-card-sm);');
+    expect(emptyState).toContain('grid-column: 1 / -1;');
+    expect(emptyState).toContain('min-height: 120px;');
+  });
+
+  it('keeps the hero hierarchy and form rhythm aligned with main', () => {
+    const styles = readSource('web/src/styles.css');
+    const heroMarkup = readSource('web/src/components/hero.tsx');
+    const hero = cssRule(styles, '.hero');
+    const heroTitle = cssRule(styles, '.hero h1');
+    const targetSummary = cssRule(styles, '.target-summary');
+    const configGrid = cssRule(styles, '.config-grid');
+
+    expect(heroMarkup).not.toContain('hero-eyebrow');
+    expect(hero).not.toContain('grid-template-columns');
+    expect(heroTitle).toContain('color: var(--color-text-muted);');
+    expect(heroTitle).toContain('font-weight: 600;');
+    expect(targetSummary).toContain('min-height: 76px;');
+    expect(configGrid).toContain('gap: var(--space-7);');
+  });
+
   it('uses labelled icon controls and keeps the product heading hierarchy', () => {
     const hero = readSource('web/src/components/hero.tsx');
     const dashboard = readSource('web/src/components/dashboard-page.tsx');

@@ -382,12 +382,16 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         const failures = [];
         const rect = (element) => element?.getBoundingClientRect() ?? null;
         const style = (element) => element ? getComputedStyle(element) : null;
-        const heroTitle = document.querySelector(".hero h1")?.textContent?.trim();
+        const heroTitleElement = document.querySelector(".hero h1");
+        const heroTitle = heroTitleElement?.textContent?.trim();
         const bodyBackground = getComputedStyle(document.body).backgroundColor;
         const primaryButton = document.querySelector('#page-dashboard button[aria-label="批量检测输入框中的 IP"]');
         const primaryBackground = primaryButton ? getComputedStyle(primaryButton).backgroundColor : null;
         const helpButton = document.querySelector(".guide-toggle");
         const helpRect = rect(helpButton);
+        const heroCopyRect = rect(document.querySelector(".hero-copy"));
+        const targetSelectorRect = rect(document.querySelector(".domain-selector"));
+        const targetCardRect = rect(document.querySelector(".target-summary"));
         const ipCard = document.querySelector(".dashboard-core-row .col-lg-7 .dashboard-card");
         const consoleCard = document.querySelector(".dashboard-console-card");
         const ipRect = rect(ipCard);
@@ -396,13 +400,22 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         const consoleElement = document.querySelector(".dashboard-console-card .console");
 
         if (!heroTitle?.includes("DDNS Pro 多域名管理")) failures.push("Hero 标题缺失或层级不正确");
+        if (style(heroTitleElement)?.color !== "rgb(98, 108, 122)") failures.push("Hero 标题颜色未对齐 main");
+        if (style(heroTitleElement)?.fontWeight !== "600") failures.push("Hero 标题字重未对齐 main");
         if (bodyBackground !== "rgb(245, 245, 247)") failures.push("页面底色未对齐 main");
         if (primaryBackground !== "rgb(0, 104, 217)") failures.push("主按钮未使用可访问的行动色");
         if (!helpButton?.textContent?.trim()) failures.push("使用说明按钮没有可见名称");
         if (!helpRect || helpRect.height < 32) failures.push("使用说明按钮小于 32px 点击目标");
-        if (style(title)?.fontSize !== "18px") failures.push("卡片标题字号应为 18px");
+        if (style(title)?.fontSize !== "16px") failures.push("卡片标题字号应为 16px");
         if (style(primaryButton)?.fontSize !== "14px") failures.push("主按钮字号应为 14px");
         if (style(consoleElement)?.backgroundColor !== "rgb(28, 28, 30)") failures.push("控制台底色未使用语义变量");
+        if (heroCopyRect && targetSelectorRect && targetSelectorRect.top < heroCopyRect.bottom - 1) {
+          failures.push("Hero 目标卡片没有排在标题信息下方");
+        }
+        const targetCardMinHeight = window.innerWidth > 768 ? 76 : 68;
+        if (!targetCardRect || targetCardRect.height < targetCardMinHeight) {
+          failures.push(\`维护目标卡片高度不足 \${targetCardMinHeight}px\`);
+        }
 
         if (window.innerWidth >= 992) {
           if (!ipRect || !consoleRect) {
@@ -509,6 +522,115 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
   return [...alignmentFailures, ...(interact.result?.value?.failures ?? ["检测流程没有返回结果"])];
 }
 
+/**
+ * 在空的配置中心里实际新增 Zone 和管理域名，验证卡片尺寸不是只对静态空状态成立。
+ */
+async function runConfigCardCheck(cdp, sessionId, viewport) {
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile },
+    sessionId,
+  );
+  const loaded = cdp.wait(sessionId, "Page.loadEventFired");
+  await cdp.send("Page.navigate", { url: `${BASE}/` }, sessionId);
+  await loaded.catch(() => {});
+  await sleep(800);
+
+  const result = await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression: `(async () => {
+        const waitFor = async (read, timeout = 4000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            const value = read();
+            if (value) return value;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return null;
+        };
+        const buttonByText = (text) =>
+          [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === text);
+
+        document.querySelector("#tab-config")?.click();
+        const page = await waitFor(() => document.querySelector("#page-config"));
+        if (!page) return { failures: ["配置中心未渲染"] };
+
+        for (let index = 0; index < 2; index += 1) {
+          const addZone = await waitFor(() => buttonByText("添加 Zone"));
+          if (!addZone) return { failures: ["找不到添加 Zone 按钮"] };
+          addZone.click();
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+
+        const addTarget = await waitFor(() => buttonByText("添加管理域名"));
+        if (!addTarget) return { failures: ["新增 Zone 后找不到添加管理域名按钮"] };
+        addTarget.click();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const failures = [];
+        const grids = [...document.querySelectorAll(".config-card-grid")];
+        const zoneCards = [...(grids[0]?.querySelectorAll(".config-mini-card") ?? [])];
+        const targetCards = [...(grids[1]?.querySelectorAll(".config-mini-card") ?? [])];
+        const cards = [...zoneCards, ...targetCards];
+        if (zoneCards.length !== 2) failures.push(\`新增 Zone 卡片数量为 \${zoneCards.length}/2\`);
+        if (targetCards.length !== 1) failures.push(\`新增管理域名卡片数量为 \${targetCards.length}/1\`);
+
+        const metrics = cards.map((card) => {
+          const box = card.getBoundingClientRect();
+          const cardStyle = getComputedStyle(card);
+          const heading = card.querySelector("h5");
+          return {
+            width: Math.round(box.width * 10) / 10,
+            height: Math.round(box.height * 10) / 10,
+            minHeight: cardStyle.minHeight,
+            padding: cardStyle.padding,
+            radius: cardStyle.borderRadius,
+            background: cardStyle.backgroundColor,
+            headingSize: heading ? getComputedStyle(heading).fontSize : null,
+            title: heading?.textContent?.trim() ?? "",
+          };
+        });
+        const gridStyle = grids[0] ? getComputedStyle(grids[0]) : null;
+        if (gridStyle && gridStyle.columnGap !== "12px") failures.push("配置卡片网格间距应为 12px");
+        const formGrid = document.querySelector("#page-config .config-grid");
+        if (formGrid && getComputedStyle(formGrid).columnGap !== "16px") failures.push("配置表单网格间距未统一为 16px");
+        const formControl = formGrid?.querySelector(".form-control-sm, .form-select-sm");
+        if (formControl && formControl.getBoundingClientRect().height < 38) failures.push("配置表单控件高度不足 38px");
+        for (const metric of metrics) {
+          if (metric.height < 120) failures.push(\`配置卡片高度不足 120px：\${metric.title}\`);
+          if (metric.minHeight !== "120px") failures.push(\`配置卡片最小高度未统一：\${metric.title}\`);
+          if (metric.padding !== "14px") failures.push(\`配置卡片内边距未统一：\${metric.title}\`);
+          if (metric.radius !== "10px") failures.push(\`配置卡片圆角未统一：\${metric.title}\`);
+          if (metric.background !== "rgb(251, 251, 253)") failures.push(\`配置卡片底色未统一：\${metric.title}\`);
+          if (metric.headingSize !== "17px") failures.push(\`配置卡片标题字号未统一：\${metric.title}\`);
+        }
+        if (zoneCards.length > 1 && metrics[0] && metrics[1]) {
+          if (Math.abs(metrics[0].width - metrics[1].width) > 1) failures.push("同一行配置卡片宽度不一致");
+          if (Math.abs(metrics[0].height - metrics[1].height) > 1) failures.push("同一行配置卡片高度不一致");
+        }
+        if (window.innerWidth >= 992 && metrics.some((metric) => metric.width > 360)) {
+          failures.push("桌面端单个新增卡片被拉伸得过宽");
+        }
+        return { failures, metrics };
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    sessionId,
+  );
+  if (result.exceptionDetails) throw new Error(`配置卡片检查失败：${JSON.stringify(result.exceptionDetails)}`);
+  const layout = await cdp.send("Page.getLayoutMetrics", {}, sessionId);
+  const size = layout.cssContentSize;
+  const screenshot = await cdp.send(
+    "Page.captureScreenshot",
+    { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } },
+    sessionId,
+  );
+  writeFileSync(join(OUT, `config-cards-${viewport.name}.png`), Buffer.from(screenshot.data, "base64"));
+  return result.result?.value?.failures ?? ["配置卡片检查没有返回结果"];
+}
+
 async function main() {
   const chrome = findChrome();
   if (!chrome) throw new Error("未找到 Chrome/Edge，可用 --chrome <path> 或 CHROME_PATH 指定");
@@ -594,6 +716,8 @@ async function main() {
       await cdp.send("Runtime.enable", {}, flowSession.sessionId);
       const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport);
       interactionFailures.push(...failures.map((failure) => `${viewport.name}: ${failure}`));
+      const cardFailures = await runConfigCardCheck(cdp, flowSession.sessionId, viewport);
+      interactionFailures.push(...cardFailures.map((failure) => `${viewport.name}: ${failure}`));
       await cdp.send("Target.closeTarget", { targetId: flowTarget.targetId });
     }
 

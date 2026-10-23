@@ -16,7 +16,6 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
   return (
     <div class="container hero">
       <div class="hero-copy">
-        <p class="hero-eyebrow">DDNS PRO · CLOUDFLARE WORKER</p>
         <h1><Icon name="globe" /> DDNS Pro 多域名管理</h1>
         <div class="hero-actions">
           <button
