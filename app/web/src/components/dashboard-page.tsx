@@ -236,7 +236,7 @@ export function DashboardPage({
                   disabled={!ipText}
                   onClick={() => onIpTextChange('')}
                 >
-                  清空
+                  <Icon name="trash" /> 清空
                 </button>
               </div>
 
@@ -536,10 +536,10 @@ function PoolActionMenu({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        IP 池操作 <Icon name="chevron" />
+        <Icon name="database" /> 池操作 <span class="action-menu-caret">▾</span>
       </button>
       {open && (
-        <div class="action-menu-panel" role="menu" aria-label="IP 池操作">
+        <div class="action-menu-panel" role="menu" aria-label="池操作">
           {items.map(([icon, label, needsPool, danger, action]) => (
             <button
               key={label}

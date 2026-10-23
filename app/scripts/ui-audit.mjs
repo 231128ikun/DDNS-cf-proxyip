@@ -375,6 +375,60 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
   await loaded.catch(() => {});
   await sleep(1000);
 
+  const alignment = await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression: `(() => {
+        const failures = [];
+        const rect = (element) => element?.getBoundingClientRect() ?? null;
+        const style = (element) => element ? getComputedStyle(element) : null;
+        const heroTitle = document.querySelector(".hero h1")?.textContent?.trim();
+        const bodyBackground = getComputedStyle(document.body).backgroundColor;
+        const primaryButton = document.querySelector('#page-dashboard button[aria-label="批量检测输入框中的 IP"]');
+        const primaryBackground = primaryButton ? getComputedStyle(primaryButton).backgroundColor : null;
+        const helpButton = document.querySelector(".guide-toggle");
+        const helpRect = rect(helpButton);
+        const ipCard = document.querySelector(".dashboard-core-row .col-lg-7 .dashboard-card");
+        const consoleCard = document.querySelector(".dashboard-console-card");
+        const ipRect = rect(ipCard);
+        const consoleRect = rect(consoleCard);
+        const title = document.querySelector("#page-dashboard .card-title");
+        const consoleElement = document.querySelector(".dashboard-console-card .console");
+
+        if (!heroTitle?.includes("DDNS Pro 多域名管理")) failures.push("Hero 标题缺失或层级不正确");
+        if (bodyBackground !== "rgb(245, 245, 247)") failures.push("页面底色未对齐 main");
+        if (primaryBackground !== "rgb(0, 104, 217)") failures.push("主按钮未使用可访问的行动色");
+        if (!helpButton?.textContent?.trim()) failures.push("使用说明按钮没有可见名称");
+        if (!helpRect || helpRect.height < 32) failures.push("使用说明按钮小于 32px 点击目标");
+        if (style(title)?.fontSize !== "18px") failures.push("卡片标题字号应为 18px");
+        if (style(primaryButton)?.fontSize !== "14px") failures.push("主按钮字号应为 14px");
+        if (style(consoleElement)?.backgroundColor !== "rgb(28, 28, 30)") failures.push("控制台底色未使用语义变量");
+
+        if (window.innerWidth >= 992) {
+          if (!ipRect || !consoleRect) {
+            failures.push("桌面工作区卡片未渲染");
+          } else {
+            if (Math.abs(ipRect.top - consoleRect.top) > 1) failures.push("桌面工作区卡片没有同排对齐");
+            if (Math.abs(ipRect.height - consoleRect.height) > 1) failures.push("桌面工作区卡片没有等高");
+            if (ipRect.height < 580) failures.push("桌面工作区卡片高度不足 580px");
+          }
+        } else if (ipRect && consoleRect && consoleRect.top < ipRect.bottom - 1) {
+          failures.push("窄屏工作区卡片没有按单列堆叠");
+        }
+
+        return { failures, metrics: {
+          heroFontSize: style(document.querySelector(".hero h1"))?.fontSize,
+          titleFontSize: style(title)?.fontSize,
+          ipCard: ipRect && { top: Math.round(ipRect.top), height: Math.round(ipRect.height) },
+          consoleCard: consoleRect && { top: Math.round(consoleRect.top), height: Math.round(consoleRect.height) },
+        } };
+      })()`,
+      returnByValue: true,
+    },
+    sessionId,
+  );
+  const alignmentFailures = alignment.result?.value?.failures ?? [];
+
   const interact = await cdp.send(
     "Runtime.evaluate",
     {
@@ -452,7 +506,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
     sessionId,
   );
   if (interact.exceptionDetails) throw new Error(`检测流程执行失败：${JSON.stringify(interact.exceptionDetails)}`);
-  return interact.result?.value?.failures ?? ["检测流程没有返回结果"];
+  return [...alignmentFailures, ...(interact.result?.value?.failures ?? ["检测流程没有返回结果"])];
 }
 
 async function main() {
