@@ -468,7 +468,9 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
 
         const cleaned = await waitFor(() => {
           const idleButton = document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]');
-          return idleButton ? input.value : null;
+          const value = document.querySelector("#ip-input")?.value ?? "";
+          // 检测结束的标志：清洗按钮重新出现，且输入框已被清洗逻辑重写。
+          return idleButton && value !== original ? value : null;
         });
         if (cleaned !== "203.0.113.10:443,null,null,v4\\n203.0.113.11:443") {
           failures.push("检测清洗没有把可用项标准化、未知项保留原文、失效项剔除");
