@@ -3,8 +3,10 @@ import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, isUserPoolKey, type PoolsResponse } f
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetItemResponse, CheckTargetResponse, HealthResponse, ProbeResponse } from '../../../src/contracts/probe';
+import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
 import { countPoolTextLines } from '../../../src/domain/pool-text';
+import { parseTxtAddresses } from '../../../src/domain/txt-record';
 import type { RequestState } from '../state/request-state';
 import { Icon, type IconName } from './icon';
 import { RecordBadge } from './record-badge';
@@ -32,7 +34,9 @@ export interface DashboardActions {
   readonly refresh: () => void;
   readonly loadPool: () => void;
   readonly checkBatch: () => void;
-  readonly keepAlive: () => void;
+  readonly stopBatch: () => void;
+  readonly resumeBatch: () => void;
+  readonly abandonBatch: () => void;
   readonly savePool: () => void;
   readonly loadRemote: () => void;
   readonly applyFilter: (mode: PoolFilterMode) => void;
@@ -49,6 +53,8 @@ export interface DashboardActions {
   /** 上/下移一条绑定；顺序由服务端整体校验后保存。 */
   readonly moveBinding: (index: number, delta: number) => void;
   readonly refreshBindings: () => void;
+  readonly addRecord: (value: string) => void;
+  readonly deleteRecord: (recordId: string, address?: string) => void;
   readonly runMaintenance: () => void;
 }
 
@@ -70,9 +76,13 @@ interface DashboardPageProps {
   readonly consoleLogs: readonly ConsoleLogEntry[];
   readonly batchProgressState: PoolCheckProgressState | null;
   readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly targetStatus: RequestState<TargetStatusResponse>;
+  readonly selectedTargetKey: string | null;
   readonly maintenance: RequestState<MaintenanceRunResponse>;
   readonly maintenanceBusy: boolean;
   readonly actions: DashboardActions;
+  readonly onCopyToInput: (address: string) => void;
+  readonly onRefreshTargetStatus: () => void;
   readonly onLookupChange: (value: string) => void;
   readonly onIpTextChange: (value: string) => void;
   readonly onFilterChange: (value: string) => void;
@@ -104,9 +114,13 @@ export function DashboardPage({
   consoleLogs,
   batchProgressState,
   bindings,
+  targetStatus,
+  selectedTargetKey,
   maintenance,
   maintenanceBusy,
   actions,
+  onCopyToInput,
+  onRefreshTargetStatus,
   onLookupChange,
   onIpTextChange,
   onFilterChange,
@@ -160,7 +174,7 @@ export function DashboardPage({
                   <th>延迟</th>
                   <th>状态</th>
                   <th>出口IP / 线路</th>
-                  <th>操作</th>
+                  <th>结果</th>
                 </tr>
               </thead>
               <tbody id="status-table">
@@ -170,6 +184,14 @@ export function DashboardPage({
           </div>
           <div id="txt-status" />
         </div>
+        <CurrentStatusPanel
+          state={targetStatus}
+          selectedKey={selectedTargetKey}
+          onCopy={onCopyToInput}
+          onRefresh={onRefreshTargetStatus}
+          onAdd={actions.addRecord}
+          onDelete={actions.deleteRecord}
+        />
       </div>
 
       <div class="row dashboard-core-row">
@@ -256,12 +278,6 @@ export function DashboardPage({
                 </div>
               )}
 
-              <BatchResults
-                state={batch}
-                progress={batchProgressState}
-                onKeepAlive={actions.keepAlive}
-              />
-
               <div class="mb-2 filter-toolbar">
                 <div class="filter-line">
                   <input
@@ -302,13 +318,13 @@ export function DashboardPage({
             <div class="ip-actions-area mt-auto">
               <div class="primary-actions" id="main-actions">
                 <button
-                  class="btn btn-primary"
+                  class={checkingBatch ? 'btn btn-danger' : 'btn btn-primary'}
                   type="button"
-                  aria-label="批量检测输入框中的 IP"
-                  disabled={checkingBatch || !ipText.trim()}
-                  onClick={actions.checkBatch}
+                  aria-label={checkingBatch ? '停止批量检测' : '批量检测清洗输入框中的 IP'}
+                  disabled={!checkingBatch && !ipText.trim()}
+                  onClick={checkingBatch ? actions.stopBatch : actions.checkBatch}
                 >
-                  <Icon name="activity" /> {checkingBatch ? '检测中…' : '检测'}
+                  <Icon name={checkingBatch ? 'stop' : 'activity'} /> {checkingBatch ? '停止检测' : '检测清洗'}
                 </button>
                 <button
                   class="btn btn-success"
@@ -356,6 +372,19 @@ export function DashboardPage({
               <span class="dashboard-section-tag">LIVE</span>
             </div>
             <Console health={health} pools={pools} logs={consoleLogs} />
+            {checkingBatch && (
+              <div
+                class="progress console-progress mb-3"
+                role="progressbar"
+                aria-label="批量检测进度"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={batchProgress(batch, batchProgressState)}
+                aria-valuetext={batchProgressLabel(batchProgressState)}
+              >
+                <div class="progress-bar console-progress-bar" style={{ width: `${batchProgress(batch, batchProgressState)}%` }} />
+              </div>
+            )}
             <button
               class="btn btn-dark w-100 mb-3"
               type="button"
@@ -373,110 +402,6 @@ export function DashboardPage({
       </div>
     </div>
   );
-}
-
-/**
- * 批量检测的可见结果面板。
- *
- * 检测完成后保留用户的原始输入，由用户明确选择“仅保留可用”；
- * 失效和探针异常分别展示，避免异常响应被静默当成节点失效。
- */
-function BatchResults({
-  state,
-  progress,
-  onKeepAlive,
-}: {
-  readonly state: RequestState<PoolCheckResponse>;
-  readonly progress: PoolCheckProgressState | null;
-  readonly onKeepAlive: () => void;
-}) {
-  if (state.status === 'idle') return null;
-
-  const percent = batchProgress(state, progress);
-  const ready = state.status === 'ready' ? state.data : null;
-  return (
-    <section class="batch-result-panel" data-testid="batch-results" aria-labelledby="batch-result-title">
-      <div class="batch-result-head">
-        <div>
-          <h3 id="batch-result-title" class="batch-result-title">检测结果</h3>
-          <p class="batch-result-caption">
-            {state.status === 'loading'
-              ? batchProgressLabel(progress)
-              : ready
-                ? '结果已就绪。输入框保持不变，可先查看异常原因再决定是否筛选。'
-                : '检测没有完成，请根据错误信息处理后重试。'}
-          </p>
-        </div>
-        {ready && (
-          <button
-            class="btn btn-sm btn-primary"
-            type="button"
-            data-action="keep-alive"
-            disabled={ready.alive === 0}
-            onClick={onKeepAlive}
-          >
-            仅保留可用
-          </button>
-        )}
-      </div>
-
-      {state.status === 'loading' && (
-        <div
-          class="progress batch-progress"
-          role="progressbar"
-          aria-label="批量检测进度"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          aria-valuetext={batchProgressLabel(progress)}
-        >
-          <div class="progress-bar batch-progress-bar" style={{ width: `${percent}%` }} />
-        </div>
-      )}
-
-      {state.status === 'error' && <p class="batch-result-error">{state.message}</p>}
-
-      {ready && (
-        <>
-          <div class="batch-result-summary" aria-label="检测汇总">
-            <span class="batch-result-stat"><strong>{ready.total}</strong><small>检测</small></span>
-            <span class="batch-result-stat success"><strong>{ready.alive}</strong><small>可用</small></span>
-            <span class="batch-result-stat danger"><strong>{ready.dead}</strong><small>失效</small></span>
-            <span class="batch-result-stat warning"><strong>{ready.unknown}</strong><small>异常</small></span>
-          </div>
-
-          <div class="batch-result-list" role="list" aria-label="逐项检测结果">
-            {ready.items.map((item) => (
-              <div class="batch-result-row" role="listitem" key={item.address}>
-                <ProbeBadge status={item.status} />
-                <code class="batch-result-address">{item.address}</code>
-                <span class="batch-result-latency">
-                  {item.latencyMs === undefined ? item.exitFamily : `${item.latencyMs} ms`}
-                </span>
-                <span class="batch-result-message" title={item.message ?? item.code}>
-                  {batchItemDetail(item)}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {ready.invalid.length > 0 && (
-            <details class="batch-invalid">
-              <summary>{ready.invalid.length} 条输入无法识别</summary>
-              <pre>{ready.invalid.join('\n')}</pre>
-            </details>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-function batchItemDetail(item: PoolCheckResponse['items'][number]): string {
-  const metadata = [item.country, item.asn ? `AS${item.asn.replace(/^AS/i, '')}` : undefined, item.exitIp]
-    .filter(Boolean)
-    .join(' · ');
-  return [item.message, item.code, metadata].filter(Boolean).join(' · ') || '检测完成';
 }
 
 /**
@@ -614,6 +539,132 @@ function EmptyStatusRow({ text }: { readonly text: string }) {
 
 function ProbeBadge({ status }: { readonly status: ProbeResponse['status'] }) {
   return <span class={`record-badge ddns-probe-${status}`}>{probeStatusLabel(status)}</span>;
+}
+
+/** “解析实况”里当前维护目标的 DNS 记录：支持手动添加、删除，以及复制到池工作台。 */
+function CurrentStatusPanel({
+  state,
+  selectedKey,
+  onCopy,
+  onRefresh,
+  onAdd,
+  onDelete,
+}: {
+  readonly state: RequestState<TargetStatusResponse>;
+  readonly selectedKey: string | null;
+  readonly onCopy: (address: string) => void;
+  readonly onRefresh: () => void;
+  readonly onAdd: (value: string) => void;
+  readonly onDelete: (recordId: string, address?: string) => void;
+}) {
+  const [addValue, setAddValue] = useState('');
+
+  if (!selectedKey) {
+    return <p class="text-secondary small mb-0 mt-3">选择维护域名后显示其当前 DNS 记录。</p>;
+  }
+  if (state.status === 'loading') {
+    return <p class="text-secondary small mb-0 mt-3">正在读取当前 DNS 记录…</p>;
+  }
+  if (state.status === 'error') {
+    return <p class="text-danger small mb-0 mt-3">{state.message}</p>;
+  }
+  if (state.status === 'idle') {
+    return <p class="text-secondary small mb-0 mt-3">等待读取当前 DNS 记录…</p>;
+  }
+
+  const rows = targetStatusRows(state.data);
+  return (
+    <section class="current-status-panel mt-3" aria-label="当前 DNS 记录">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="card-title m-0 fw-bold">当前 DNS 记录</h3>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary" type="button" onClick={onRefresh} aria-label="刷新当前 DNS 记录">
+            <Icon name="refresh" /> 刷新
+          </button>
+        </div>
+      </div>
+      <form
+        class="input-group input-group-sm mb-2 current-status-add"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onAdd(addValue);
+          setAddValue('');
+        }}
+      >
+        <input
+          type="text"
+          class="form-control form-control-sm"
+          placeholder={state.data.mode === 'TXT' ? '手动添加 IP 到 TXT（如 1.2.3.4:443）' : '手动添加 IP（如 1.2.3.4 或 1.2.3.4:443）'}
+          aria-label="手动添加 IP"
+          value={addValue}
+          onInput={(event) => setAddValue(event.currentTarget.value)}
+        />
+        <button class="btn btn-success" type="submit">添加</button>
+      </form>
+      {rows.length === 0 ? (
+        <p class="text-secondary small mb-0">该域名暂无 DNS 记录。</p>
+      ) : (
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 current-status-table">
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>地址</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key}>
+                  <td>{row.type}</td>
+                  <td><code class="current-status-address">{row.address}</code></td>
+                  <td>
+                    <div class="d-flex gap-2">
+                      <button
+                        class="btn btn-sm btn-outline-secondary"
+                        type="button"
+                        aria-label={`复制 ${row.address} 到输入框`}
+                        onClick={() => onCopy(row.address)}
+                      >
+                        复制
+                      </button>
+                      <button
+                        class="btn btn-sm btn-outline-danger"
+                        type="button"
+                        aria-label={`删除 ${row.address}`}
+                        onClick={() => onDelete(row.recordId, row.type === 'TXT' ? row.address : undefined)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function targetStatusRows(data: TargetStatusResponse): readonly { readonly key: string; readonly recordId: string; readonly address: string; readonly type: string }[] {
+  if (data.mode === 'TXT') {
+    return data.records.flatMap((record) =>
+      parseTxtAddresses(record.content).map((address, index) => ({
+        key: `${record.id}:${index}`,
+        recordId: record.id,
+        address,
+        type: 'TXT',
+      })),
+    );
+  }
+  return data.records.map((record) => ({
+    key: record.id,
+    recordId: record.id,
+    address: record.content,
+    type: record.type,
+  }));
 }
 
 function Console({ health, pools, logs }: {

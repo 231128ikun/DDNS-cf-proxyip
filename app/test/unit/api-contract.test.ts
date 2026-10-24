@@ -86,6 +86,9 @@ const CLIENT_OPERATIONS: readonly ClientOperation[] = [
     path: '/api/domain-bindings/order',
   },
   { name: 'runMaintenance', invoke: (client) => client.runMaintenance(), method: 'POST', path: '/api/maintenance/run' },
+  { name: 'currentStatus', invoke: (client) => client.currentStatus('example'), method: 'GET', path: '/api/current-status?target=example' },
+  { name: 'addRecord', invoke: (client) => client.addRecord('example', '203.0.113.10:443'), method: 'POST', path: '/api/add-record' },
+  { name: 'deleteRecord', invoke: (client) => client.deleteRecord('example', 'r1'), method: 'POST', path: '/api/delete-record' },
 ];
 
 class FakeProbeAdapter implements ProbeAdapter {

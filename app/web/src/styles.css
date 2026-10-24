@@ -259,9 +259,12 @@ body {
             font-size: var(--font-size-xs);
             font-weight: 700;
         }
-        .target-summary-button {
-            text-align: left;
-            font: inherit;
+        .target-select-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
             cursor: pointer;
         }
         .target-summary {
@@ -320,11 +323,6 @@ body {
             .domain-selector {
                 width: 100%;
             }
-            .target-summary-button {
-            text-align: left;
-            font: inherit;
-            cursor: pointer;
-        }
         .target-summary {
                 min-height: 68px;
                 width: 100%;
@@ -431,6 +429,8 @@ body {
         .console-event-warning .console-level { color: var(--color-console-warning); }
         .console-event-error .console-level { color: var(--color-console-error); }
         .console-empty { color: var(--color-console-muted); }
+        .console-progress { background: var(--color-console-border); }
+        .console-progress-bar { background: var(--color-console-success); }
         @media (max-width: 768px) {
             .console {
                 height: 250px;
@@ -1413,6 +1413,92 @@ body {
         }
         .toast.success { background: var(--color-success-strong); }
         .toast.error { background: var(--color-danger-strong); }
+        /* 批量检测中断确认弹窗：与 main 的“检测已中断”交互一致，配色走语义变量。 */
+        .custom-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            backdrop-filter: blur(4px);
+        }
+        .custom-modal {
+            background: var(--color-surface);
+            border-radius: var(--radius-xl);
+            padding: var(--space-9);
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modal-in 0.2s ease-out;
+        }
+        @keyframes modal-in {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .custom-modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: var(--space-7);
+            color: var(--color-text);
+        }
+        .custom-modal-stats {
+            background: var(--color-surface-subtle);
+            border-radius: var(--radius-md);
+            padding: var(--space-5);
+            margin-bottom: var(--space-7);
+        }
+        .custom-modal-stats div {
+            display: flex;
+            justify-content: space-between;
+            padding: var(--space-1) 0;
+        }
+        .custom-modal-stats .label { color: var(--color-text-muted); }
+        .custom-modal-stats .value { font-weight: 600; color: var(--color-text); }
+        .custom-modal-buttons {
+            display: flex;
+            gap: var(--space-5);
+        }
+        .custom-modal-buttons button {
+            flex: 1;
+            min-height: 40px;
+            padding: var(--space-5) var(--space-8);
+            border-radius: var(--radius-md);
+            border: none;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .custom-modal-buttons .btn-continue { background: var(--color-primary); color: var(--color-inverse); }
+        .custom-modal-buttons .btn-continue:hover { background: var(--color-primary-strong); }
+        .custom-modal-buttons .btn-abandon { background: var(--color-surface-subtle); color: var(--color-text); }
+        .custom-modal-buttons .btn-abandon:hover { background: var(--color-border); }
+        .github-corner {
+            position: fixed;
+            top: 0;
+            right: 0;
+            z-index: 9999;
+        }
+        .github-corner svg {
+            fill: var(--color-text-muted);
+            color: var(--color-surface);
+            width: 60px;
+            height: 60px;
+            transition: fill 0.3s;
+        }
+        .github-corner:hover svg { fill: var(--color-primary); }
+        .github-corner .octo-arm { transform-origin: 130px 106px; }
+        .github-corner:hover .octo-arm { animation: octocat-wave 560ms ease-in-out; }
+        @keyframes octocat-wave {
+            0%, 100% { transform: rotate(0); }
+            20%, 60% { transform: rotate(-25deg); }
+            40%, 80% { transform: rotate(10deg); }
+        }
+        @media (max-width: 768px) {
+            .github-corner svg { width: 50px; height: 50px; }
+        }
         .switch {
             position: relative;
             display: inline-flex;
@@ -1475,11 +1561,6 @@ body {
             .config-edit-actions .btn {
                 width: 100%;
             }
-        }
-
-        @keyframes modalIn {
-            from { opacity: 0; transform: scale(0.9); }
-            to { opacity: 1; transform: scale(1); }
         }
 
         @media (max-width: 768px) {
@@ -1561,10 +1642,9 @@ body {
                 margin-bottom: 0;
             }
             .dashboard-console-card .console {
-                flex: 1;
-                height: auto;
-                min-height: 360px;
-                max-height: none;
+                height: 380px;
+                max-height: 380px;
+                flex: 0 0 auto;
             }
         }
         @media (min-width: 1200px) {

@@ -3,6 +3,7 @@ import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
+import type { TargetStatusResponse } from '../../src/contracts/target-status';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
@@ -28,6 +29,14 @@ interface Toast {
   readonly type: 'success' | 'error';
 }
 
+/** 批量检测中途停止时展示的确认信息，与 main 的“检测已中断”弹窗对齐。 */
+interface BatchInterrupt {
+  readonly checked: number;
+  readonly total: number;
+  readonly valid: number;
+  readonly unchecked: number;
+}
+
 export function App() {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
@@ -39,6 +48,7 @@ export function App() {
   const [remoteUrl, setRemoteUrl] = useState('');
   const [maintenance, setMaintenance] = useState<RequestState<MaintenanceRunResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
   const [batch, setBatch] = useState<RequestState<PoolCheckResponse>>({ status: 'idle' });
   const [loadingPool, setLoadingPool] = useState(false);
@@ -47,10 +57,12 @@ export function App() {
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
   const [batchProgressState, setBatchProgressState] = useState<PoolCheckProgressState | null>(null);
+  const [batchInterrupt, setBatchInterrupt] = useState<BatchInterrupt | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const client = useMemo(() => new ApiClient(), []);
   const logSequence = useRef(0);
   const activeBatch = useRef<AbortController | null>(null);
+  const aliveSoFar = useRef(0);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -83,12 +95,34 @@ export function App() {
   const [pools, refreshPools] = useResource((signal) => client.pools(signal));
   const [config, refreshConfig] = useResource((signal) => client.config(signal));
   const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal));
+  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusResponse>((signal) => {
+    if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
+    return client.currentStatus(selectedTargetKey, signal);
+  });
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
   useEffect(() => {
     if (pools.status !== 'ready') return;
     setPoolKey((current) => (pools.data.pools.some((pool) => pool.key === current) ? current : DEFAULT_POOL_KEY));
   }, [pools]);
+
+  /** 绑定就绪后默认选中第一个维护目标，并在目标被删后回退到首个仍存在的 key。 */
+  useEffect(() => {
+    if (bindings.status !== 'ready') return;
+    setSelectedTargetKey((current) => {
+      const keys = bindings.data.items.map((item) => item.key);
+      if (current && keys.includes(current)) return current;
+      return keys[0] ?? null;
+    });
+  }, [bindings]);
+
+  /** 选中目标变化时重新读取其当前 DNS 记录；切走时中止旧请求。 */
+  useEffect(() => {
+    if (!selectedTargetKey) return;
+    const controller = new AbortController();
+    void refreshTargetStatus(controller.signal);
+    return () => controller.abort();
+  }, [refreshTargetStatus, selectedTargetKey]);
 
   /**
    * 首屏把配置、维护域名、IP 池和健康度并行拉完，同时预取配置中心分块，
@@ -169,6 +203,63 @@ export function App() {
     void refreshBindings();
   };
 
+  const handleSelectTarget = (key: string | null): void => {
+    setSelectedTargetKey(key);
+  };
+
+  /** 只读地把当前记录复制到池工作台，不在 DNS 层做任何写入。 */
+  const handleCopyToInput = (address: string): void => {
+    const lines = ipText.split('\n').map((line) => line.trim()).filter(Boolean);
+    if (lines.includes(address)) {
+      notify('该地址已在输入框中', 'error');
+      return;
+    }
+    replaceIpText([...lines, address].join('\n'));
+    appendConsoleLog(`[记录] 已复制到输入框 ${address}`, 'success');
+  };
+
+  const handleAddRecord = (value: string): void => {
+    if (!selectedTargetKey) {
+      notify('请先选择维护域名', 'error');
+      return;
+    }
+    const input = value.trim();
+    if (!input) {
+      notify('请输入要添加的 IP', 'error');
+      return;
+    }
+    appendConsoleLog(`[记录] 正在添加 ${input}`);
+    client.addRecord(selectedTargetKey, input)
+      .then(async () => {
+        appendConsoleLog(`[记录] 已添加 ${input}`, 'success');
+        notify('已添加 DNS 记录');
+        await refreshTargetStatus();
+        await refreshPools();
+      })
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        appendConsoleLog(`[记录] ${message}`, 'error');
+        notify(message, 'error');
+      });
+  };
+
+  const handleDeleteRecord = (recordId: string, address?: string): void => {
+    if (!selectedTargetKey) return;
+    if (!window.confirm(address ? `确认删除 ${address}？` : '确认删除该记录？')) return;
+    client.deleteRecord(selectedTargetKey, recordId, address)
+      .then(async () => {
+        appendConsoleLog(`[记录] 已删除 ${address ?? recordId}`, 'success');
+        notify('已删除 DNS 记录');
+        await refreshTargetStatus();
+        await refreshPools();
+      })
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        appendConsoleLog(`[记录] ${message}`, 'error');
+        notify(message, 'error');
+      });
+  };
+
   const handleLoadPool = (): void => {
     setLoadingPool(true);
     appendConsoleLog(`[IP池] 正在读取 ${poolKey}`);
@@ -195,15 +286,17 @@ export function App() {
     activeBatch.current?.abort();
     const controller = new AbortController();
     activeBatch.current = controller;
+    aliveSoFar.current = 0;
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: 0, total });
-    appendConsoleLog(`[批量] 开始检测 · ${total} 个地址`);
+    appendConsoleLog(`[批量] 开始检测清洗 · ${total} 个地址`);
     appendConsoleLog(`[批量] 浏览器并发 ${WEB_CHECK_CONCURRENCY}，每个地址独立请求`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });
+      if (event.item.status === 'alive') aliveSoFar.current += 1;
       const statusLabel = event.item.status === 'alive' ? '可用' : event.item.status === 'dead' ? '失效' : '未知';
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
       const detail = event.item.status === 'unknown' && event.item.message ? ` · ${event.item.message}` : '';
@@ -211,7 +304,12 @@ export function App() {
     })
       .then((report) => {
         if (activeBatch.current !== controller) return;
+        activeBatch.current = null;
+        setCheckingBatch(false);
+        setBatchProgressState({ completed: report.items.length, total: report.items.length });
         setBatch({ status: 'ready', data: report });
+        // 与 main 的“检测清洗”一致：可用项写成标准格式，未知/无效保留原文，失效项移除。
+        setIpText(cleanedBatchText(report));
         appendConsoleLog(
           `[批量] 完成 · 可用 ${report.alive} / 失效 ${report.dead} / 未知 ${report.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
           report.unknown ? 'warning' : report.alive ? 'success' : 'error',
@@ -223,29 +321,42 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (isAbort(error) || activeBatch.current !== controller) return;
+        activeBatch.current = null;
+        setCheckingBatch(false);
         const message = errorMessage(error);
         setBatch({ status: 'error', message });
         appendConsoleLog(`[批量] ${message}`, 'error');
         notify(message, 'error');
-      })
-      .finally(() => {
-        if (activeBatch.current !== controller) return;
-        activeBatch.current = null;
-        setCheckingBatch(false);
       });
   };
 
-  const handleKeepAlive = (): void => {
-    if (batch.status !== 'ready') return;
-    const aliveLines = batch.data.items.filter((item) => item.status === 'alive').map((item) => item.line);
-    if (aliveLines.length === 0) {
-      notify('本轮没有可用地址，输入框保持原样', 'error');
-      appendConsoleLog('[批量] 没有可保留的可用地址', 'warning');
-      return;
-    }
-    replaceIpText(aliveLines.join('\n'));
-    notify(`已保留 ${aliveLines.length} 个可用地址`, 'success');
-    appendConsoleLog(`[批量] 已仅保留 ${aliveLines.length} 个可用地址`, 'success');
+  const handleStopBatch = (): void => {
+    const controller = activeBatch.current;
+    if (!controller) return;
+    controller.abort();
+    activeBatch.current = null;
+    setCheckingBatch(false);
+    const total = batchProgressState?.total ?? 0;
+    const completed = batchProgressState?.completed ?? 0;
+    setBatchInterrupt({
+      checked: completed,
+      total,
+      valid: aliveSoFar.current,
+      unchecked: Math.max(0, total - completed),
+    });
+  };
+
+  const handleResumeBatch = (): void => {
+    setBatchInterrupt(null);
+    void handleCheckBatch();
+  };
+
+  const handleAbandonBatch = (): void => {
+    setBatchInterrupt(null);
+    setBatch({ status: 'idle' });
+    setBatchProgressState(null);
+    aliveSoFar.current = 0;
+    appendConsoleLog('[批量] 已放弃，输入框保持原样', 'warning');
   };
 
   const handleSavePool = (): void => {
@@ -477,7 +588,9 @@ export function App() {
     refresh: handleRefresh,
     loadPool: handleLoadPool,
     checkBatch: handleCheckBatch,
-    keepAlive: handleKeepAlive,
+    stopBatch: handleStopBatch,
+    resumeBatch: handleResumeBatch,
+    abandonBatch: handleAbandonBatch,
     savePool: handleSavePool,
     loadRemote: handleLoadRemote,
     applyFilter: handleApplyFilter,
@@ -493,16 +606,41 @@ export function App() {
     bindPool: handleBindPool,
     moveBinding: (index, delta) => void handleMoveBinding(index, delta),
     refreshBindings: () => void refreshBindings(),
+    addRecord: handleAddRecord,
+    deleteRecord: handleDeleteRecord,
     runMaintenance: handleRunMaintenance,
   };
 
   return (
     <>
+      <a
+        href="https://github.com/231128ikun/DDNS-cf-proxyip"
+        class="github-corner"
+        aria-label="在 GitHub 查看源码"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <svg viewBox="0 0 250 250" aria-hidden="true" focusable="false">
+          <path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z" />
+          <path
+            class="octo-arm"
+            d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2"
+            fill="currentColor"
+          />
+          <path
+            class="octo-body"
+            d="M115.0,115.0 C114.9,115.1 118.7,116.6 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.6 C139.8,137.7 141.6,141.9 141.8,141.8 Z"
+            fill="currentColor"
+          />
+        </svg>
+      </a>
       <Hero
         health={health}
         bindings={bindings}
+        selectedTargetKey={selectedTargetKey}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
+        onSelectTarget={handleSelectTarget}
         onOpenConfig={() => setPage('config')}
       />
 
@@ -527,9 +665,13 @@ export function App() {
             consoleLogs={consoleLogs}
             batchProgressState={batchProgressState}
             bindings={bindings}
+            targetStatus={targetStatus}
+            selectedTargetKey={selectedTargetKey}
             maintenance={maintenance}
             maintenanceBusy={maintenanceBusy}
             actions={actions}
+            onCopyToInput={handleCopyToInput}
+            onRefreshTargetStatus={() => void refreshTargetStatus()}
             onLookupChange={setLookup}
             onIpTextChange={replaceIpText}
             onFilterChange={setFilterText}
@@ -546,9 +688,33 @@ export function App() {
       <footer class="container text-center text-secondary small py-3">
         DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
       </footer>
+      {batchInterrupt && (
+        <div class="custom-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="batch-interrupt-title">
+          <div class="custom-modal">
+            <div class="custom-modal-title" id="batch-interrupt-title">检测已中断</div>
+            <div class="custom-modal-stats">
+              <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
+              <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
+              <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
+            </div>
+            <div class="custom-modal-buttons">
+              <button class="btn-abandon" type="button" onClick={handleAbandonBatch}>放弃检测</button>
+              <button class="btn-continue" type="button" onClick={handleResumeBatch}>继续</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div class={`toast${toast ? ` ${toast.type} show` : ''}`} role="status" aria-live="polite">
         {toast?.message}
       </div>
     </>
   );
+}
+
+/** 批量清洗后的输入：保留可用（标准格式）与未知（原文），丢弃失效项，并追加无法识别的原文。 */
+function cleanedBatchText(report: PoolCheckResponse): string {
+  const kept = report.items
+    .filter((item) => item.status === 'alive' || item.status === 'unknown')
+    .map((item) => item.line);
+  return [...kept, ...report.invalid].join('\n');
 }

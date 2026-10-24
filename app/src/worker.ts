@@ -18,6 +18,8 @@ import { MaintainManagedTargets } from './application/maintain-managed-targets';
 import { PoolService } from './application/pool-service';
 import { RemotePoolLoader } from './application/remote-pool-loader';
 import { ResolveTarget } from './application/resolve-target';
+import { TargetStatus } from './application/target-status';
+import { TargetRecords } from './application/target-records';
 import { createProbeAdapterFromConfig, loadEnvConfig, type RuntimeEnv } from './config/runtime';
 import { toProbeConfig, type AppConfig, type ProbeConfig } from './contracts/config';
 import { runMaintenanceJob } from './jobs/maintenance-job';
@@ -64,7 +66,21 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         configSource: resolved.source,
         config: configService,
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
-        ...(kv ? createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance) : {}),
+        ...(kv
+          ? {
+              ...createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance),
+              targetStatus: new TargetStatus({
+                source: maintenanceSource!,
+                dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
+                fallbackZone: { zoneId: resolved.config.zoneId, apiToken: resolved.config.apiKey },
+              }),
+              targetRecords: new TargetRecords({
+                source: maintenanceSource!,
+                dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
+                fallbackZone: { zoneId: resolved.config.zoneId, apiToken: resolved.config.apiKey },
+              }),
+            }
+          : {}),
       };
 
       return createHttpApp(dependencies).fetch(request, env, executionContext);

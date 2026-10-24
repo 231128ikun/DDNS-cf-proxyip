@@ -31,6 +31,9 @@ import {
   type ProbeResponse,
 } from '../contracts/probe';
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
+import type { TargetStatusResponse } from '../contracts/target-status';
+import { TargetStatusInputError, type TargetStatus } from '../application/target-status';
+import type { TargetRecords } from '../application/target-records';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { countPoolTextLines } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
@@ -54,6 +57,10 @@ export interface HttpAppDependencies {
   readonly domainBindings?: DomainBindings;
   /** 手动维护入口；与 cron 共用同一 runner。 */
   readonly maintenance?: MaintenanceRunner;
+  /** “解析实况”当前域名记录的只读来源；未绑定 KV 时为空。 */
+  readonly targetStatus?: TargetStatus;
+  /** 手动增删当前维护目标 DNS 记录的写入口；未绑定 KV 时为空。 */
+  readonly targetRecords?: TargetRecords;
 }
 
 /** 维护 runner 的窄接口：HTTP 层只负责触发，不接触 KV / Cloudflare 凭据。 */
@@ -267,6 +274,57 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     return jsonResponse(toMaintenanceResponse(run));
   });
 
+  /**
+   * “解析实况”当前域名记录：只读查询 Cloudflare DNS，
+   * 手动新增/删除记录仍由维护流程统一执行，面板不提供旁路写入口。
+   */
+  router.get('/api/current-status', async (context) => {
+    const targetStatus = dependencies.targetStatus;
+    if (!targetStatus) return errorResponse('target status unavailable', 503);
+
+    return await mapApplicationInputError(async () => {
+      const response: TargetStatusResponse = await targetStatus.execute(context.url.searchParams.get('target') ?? '');
+      return jsonResponse(response);
+    });
+  });
+
+  /** 手动添加一条记录到选中的维护目标；与定时维护共用同一个 DNS 写入实现。 */
+  router.post('/api/add-record', async (context) => {
+    const targetRecords = dependencies.targetRecords;
+    if (!targetRecords) return errorResponse('target records unavailable', 503);
+
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse('invalid json', 400);
+
+    return await mapApplicationInputError(async () => {
+      const input = body.value as { target?: unknown; value?: unknown } | null;
+      const response = await targetRecords.add(
+        typeof input?.target === 'string' ? input.target : '',
+        typeof input?.value === 'string' ? input.value : '',
+      );
+      return jsonResponse(response);
+    });
+  });
+
+  /** 手动删除当前维护目标的一条记录；TXT 模式只删单条地址。 */
+  router.post('/api/delete-record', async (context) => {
+    const targetRecords = dependencies.targetRecords;
+    if (!targetRecords) return errorResponse('target records unavailable', 503);
+
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse('invalid json', 400);
+
+    return await mapApplicationInputError(async () => {
+      const input = body.value as { target?: unknown; recordId?: unknown; address?: unknown } | null;
+      const response = await targetRecords.remove(
+        typeof input?.target === 'string' ? input.target : '',
+        typeof input?.recordId === 'string' ? input.recordId : '',
+        typeof input?.address === 'string' ? input.address : undefined,
+      );
+      return jsonResponse(response);
+    });
+  });
+
   router.get('/api/config', async () => {
     const config = dependencies.config;
     if (!config) return errorResponse('config storage unavailable', 503);
@@ -333,7 +391,7 @@ async function mapApplicationInputError(run: () => Promise<Response>): Promise<R
   try {
     return await run();
   } catch (error) {
-    if (error instanceof PoolInputError || error instanceof DomainBindingsInputError) {
+    if (error instanceof PoolInputError || error instanceof DomainBindingsInputError || error instanceof TargetStatusInputError) {
       return errorResponse(error.message, 400);
     }
     throw error;

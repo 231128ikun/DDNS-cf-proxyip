@@ -7,12 +7,22 @@ import { RecordBadge } from './record-badge';
 interface HeroProps {
   readonly health: RequestState<HealthResponse>;
   readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly selectedTargetKey: string | null;
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
+  readonly onSelectTarget: (key: string | null) => void;
   readonly onOpenConfig: () => void;
 }
 
-export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig }: HeroProps) {
+export function Hero({
+  health,
+  bindings,
+  selectedTargetKey,
+  usageOpen,
+  onToggleUsage,
+  onSelectTarget,
+  onOpenConfig,
+}: HeroProps) {
   return (
     <div class="container hero">
       <div class="hero-copy">
@@ -48,11 +58,32 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
 
       <div class="domain-selector">
         <p class="target-summary-label">当前维护目标</p>
-        <button class="target-summary target-summary-button" type="button" onClick={onOpenConfig}>
+        <label class="target-summary">
           <span id="current-target-summary-content">
-            <TargetSummary state={bindings} />
+            <TargetSummary state={bindings} selectedKey={selectedTargetKey} />
           </span>
-        </button>
+          <select
+            class="target-select-overlay"
+            aria-label="选择维护域名"
+            value={selectedTargetKey ?? ''}
+            onChange={(event) => onSelectTarget(event.currentTarget.value || null)}
+          >
+            {bindings.status === 'ready' && bindings.data.items.length > 0 ? (
+              bindings.data.items.map((item) => (
+                <option key={item.key} value={item.key}>
+                  {item.domain} - {item.mode === 'TXT' ? 'TXT' : 'A/AAAA'}
+                </option>
+              ))
+            ) : (
+              <option value="">未配置维护域名</option>
+            )}
+          </select>
+        </label>
+        {bindings.status === 'ready' && bindings.data.items.length === 0 && (
+          <button class="btn btn-sm btn-outline-primary mt-2" type="button" onClick={onOpenConfig}>
+            前往配置中心添加
+          </button>
+        )}
       </div>
     </div>
   );
@@ -64,7 +95,13 @@ export function Hero({ health, bindings, usageOpen, onToggleUsage, onOpenConfig 
  * 这里只陈述"实际读到了什么"：绑定还没读完、接口失败、或一条都没配，
  * 都按各自的事实提示，绝不把"读不到"说成"权限没配"。
  */
-function TargetSummary({ state }: { readonly state: RequestState<DomainBindingsResponse> }) {
+function TargetSummary({
+  state,
+  selectedKey,
+}: {
+  readonly state: RequestState<DomainBindingsResponse>;
+  readonly selectedKey: string | null;
+}) {
   if (state.status === 'loading' || state.status === 'idle') {
     return (
       <>
@@ -91,7 +128,7 @@ function TargetSummary({ state }: { readonly state: RequestState<DomainBindingsR
     );
   }
 
-  const item = state.data.items[0];
+  const item = state.data.items.find((candidate) => candidate.key === selectedKey) ?? state.data.items[0];
   if (!item) {
     return (
       <>

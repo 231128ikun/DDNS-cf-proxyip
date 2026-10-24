@@ -12,6 +12,7 @@ export type IconName =
   | 'save'
   | 'search'
   | 'settings'
+  | 'stop'
   | 'trash'
   | 'up';
 
@@ -30,6 +31,7 @@ const ICONS: Record<IconName, string> = {
   save: 'M5 4h11l3 3v13H5z M8 4v6h8V4 M8 20v-6h8v6',
   search: 'M4.5 11a6.5 6.5 0 1 0 13 0a6.5 6.5 0 1 0-13 0 M16 16l4.5 4.5',
   settings: 'M4 6h16M4 12h16M4 18h16 M7 6a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M13 12a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M6 18a2 2 0 1 0 4 0a2 2 0 1 0-4 0',
+  stop: 'M7 7h10v10H7z',
   trash: 'M5 7h14M9 7V4h6v3M8 7l1 13h6l1-13',
   up: 'M12 19V5M6 11l6-6 6 6',
 };

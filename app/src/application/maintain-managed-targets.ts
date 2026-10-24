@@ -77,7 +77,8 @@ export function shouldNotifyMaintenance(run: MaintenanceRunReport, isManual: boo
     || run.poolStats.changed;
 }
 
-function resolveZone(zones: readonly DnsZone[], config: MaintenanceTargetConfig, fallback: DnsZone): DnsZone {
+/** 目标是“用 Zone 凭据”还是“回退顶层凭据”的唯一规则来源，状态查询同样复用。 */
+export function resolveZone(zones: readonly DnsZone[], config: MaintenanceTargetConfig, fallback: DnsZone): DnsZone {
   const indexed = config.zoneIndex === null ? undefined : zones[config.zoneIndex];
   return {
     apiToken: indexed?.apiToken || fallback.apiToken,

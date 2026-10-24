@@ -18,6 +18,7 @@ import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../.
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 
 export interface ApiClientOptions {
   readonly baseUrl?: string;
@@ -245,6 +246,35 @@ export class ApiClient {
   /** 手动维护与 cron 共用同一个服务端 runner，前端只负责触发并展示结果。 */
   async runMaintenance(signal?: AbortSignal): Promise<MaintenanceRunResponse> {
     return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);
+  }
+
+  /** “解析实况”只读查询：按域名池绑定 key 读取目标当前 DNS 记录。 */
+  async currentStatus(targetKey: string, signal?: AbortSignal): Promise<TargetStatusResponse> {
+    return await this.request<TargetStatusResponse>(
+      `/api/current-status?target=${encodeURIComponent(targetKey)}`,
+      'GET',
+      undefined,
+      signal,
+    );
+  }
+
+  /** 手动添加一条记录到选中的维护目标；A/AAAA 添加单条地址，TXT 合并进单条列表。 */
+  async addRecord(targetKey: string, value: string, signal?: AbortSignal): Promise<OkResponse> {
+    return await this.request<OkResponse>('/api/add-record', 'POST', { target: targetKey, value }, signal);
+  }
+
+  /** 手动删除当前维护目标的一条记录；TXT 模式需要额外给出要删除的地址。 */
+  async deleteRecord(
+    targetKey: string,
+    recordId: string,
+    address?: string,
+    signal?: AbortSignal,
+  ): Promise<OkResponse> {
+    return await this.request<OkResponse>('/api/delete-record', 'POST', {
+      target: targetKey,
+      recordId,
+      ...(address === undefined ? {} : { address }),
+    }, signal);
   }
 
   private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {

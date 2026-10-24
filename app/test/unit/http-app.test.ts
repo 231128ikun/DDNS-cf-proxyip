@@ -5,6 +5,7 @@ import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { PoolService } from '../../src/application/pool-service';
 import { RemotePoolLoader } from '../../src/application/remote-pool-loader';
+import { TargetStatus } from '../../src/application/target-status';
 import { createDefaultConfig, type AppConfig, type ConfigResponse } from '../../src/contracts/config';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
 import { alive, type ProbeResult } from '../../src/domain/probe-result';
@@ -584,5 +585,73 @@ describe('HTTP app domain binding and maintenance routes', () => {
 
   it('returns 503 when manual maintenance is not bound', async () => {
     expect((await createApp().request('/api/maintenance/run', { method: 'POST' })).status).toBe(503);
+  });
+});
+
+describe('HTTP app target status route', () => {
+  it('returns the current DNS records for a target without leaking credentials', async () => {
+    const targetStatus = new TargetStatus({
+      source: {
+        load: async () => ({
+          zones: [{ zoneId: 'zone-a', apiToken: 'token-a' }],
+          targets: [
+            {
+              target: { mode: 'A', domain: 'a.example.com', port: 443, minActive: 1, exitFilter: 'any', countries: [], asns: [] },
+              zoneIndex: 0,
+              enabled: true,
+            },
+          ],
+          poolMapping: {},
+          poolNames: {},
+        }),
+      },
+      dns: {
+        listAddressRecords: async () => [{ id: 'r1', type: 'A', name: 'a.example.com', content: '203.0.113.10' }],
+        listTxtRecords: async () => [],
+        addAddressRecord: async () => ({ id: 'new', type: 'A', name: 'a.example.com', content: '203.0.113.1' }),
+        upsertTxtRecord: async () => ({ id: 'txt', type: 'TXT', name: 'a.example.com', content: '"203.0.113.1:443"' }),
+        deleteRecord: async () => undefined,
+      },
+      fallbackZone: { zoneId: 'zone-fallback', apiToken: 'token-fallback' },
+    });
+    const app = createHttpApp({
+      checkTarget: createCheckTarget(),
+      version: 'test',
+      targetStatus,
+    });
+
+    const response = await app.request('/api/current-status?target=a.example.com%7CA');
+    expect(response.status).toBe(200);
+    const raw = await response.text();
+    expect(raw).not.toContain('token-a');
+    expect(raw).not.toContain('token-fallback');
+    expect(JSON.parse(raw)).toMatchObject({
+      ok: true,
+      domain: 'a.example.com',
+      records: [{ id: 'r1', type: 'A', content: '203.0.113.10' }],
+    });
+  });
+
+  it('returns 503 without KV and 400 for an unknown target', async () => {
+    const unbound = await createApp().request('/api/current-status?target=a.example.com%7CA');
+    expect(unbound.status).toBe(503);
+
+    const targetStatus = new TargetStatus({
+      source: {
+        load: async () => ({ zones: [], targets: [], poolMapping: {}, poolNames: {} }),
+      },
+      dns: {
+        listAddressRecords: async () => [],
+        listTxtRecords: async () => [],
+        addAddressRecord: async () => ({ id: 'new', type: 'A', name: 'a.example.com', content: '203.0.113.1' }),
+        upsertTxtRecord: async () => ({ id: 'txt', type: 'TXT', name: 'a.example.com', content: '"203.0.113.1:443"' }),
+        deleteRecord: async () => undefined,
+      },
+      fallbackZone: { zoneId: 'zone-fallback', apiToken: 'token-fallback' },
+    });
+    const app = createHttpApp({ checkTarget: createCheckTarget(), version: 'test', targetStatus });
+    const missing = await app.request('/api/current-status?target=missing.example.com%7CA');
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toEqual({ error: '管理域名不存在或已被删除，请刷新后重试' });
   });
 });

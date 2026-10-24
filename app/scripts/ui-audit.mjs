@@ -385,7 +385,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         const heroTitleElement = document.querySelector(".hero h1");
         const heroTitle = heroTitleElement?.textContent?.trim();
         const bodyBackground = getComputedStyle(document.body).backgroundColor;
-        const primaryButton = document.querySelector('#page-dashboard button[aria-label="批量检测输入框中的 IP"]');
+        const primaryButton = document.querySelector('#page-dashboard button[aria-label="批量检测清洗输入框中的 IP"]');
         const primaryBackground = primaryButton ? getComputedStyle(primaryButton).backgroundColor : null;
         const helpButton = document.querySelector(".guide-toggle");
         const helpRect = rect(helpButton);
@@ -456,30 +456,24 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
           return null;
         };
         const input = await waitFor(() => document.querySelector("#ip-input"));
-        const button = await waitFor(() => document.querySelector('button[aria-label="批量检测输入框中的 IP"]'));
+        const button = await waitFor(() => document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]'));
         if (!input || !button) return { failures: ["检测控件未渲染"] };
 
+        const failures = [];
         const original = "203.0.113.10:443\\n203.0.113.11:443";
         input.value = original;
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: original }));
         await new Promise((resolve) => setTimeout(resolve, 50));
         button.click();
 
-        const panel = await waitFor(() => document.querySelector('[data-testid="batch-results"]'));
-        const failures = [];
-        if (!panel) failures.push("批量检测完成后没有可见的结果面板");
-        if (input.value !== original) failures.push("检测尚未确认结果就改写了输入框");
-        if (panel && !panel.textContent.includes("203.0.113.10:443")) failures.push("结果面板缺少检测地址");
-        if (panel && !panel.textContent.includes("检测超时")) failures.push("结果面板没有展示未知态原因");
-        if (panel && panel.scrollWidth > panel.clientWidth + 1) failures.push("结果面板在窄屏出现横向溢出");
-
-        const keepAlive = panel?.querySelector('button[data-action="keep-alive"]');
-        if (!keepAlive) failures.push("结果面板缺少仅保留可用操作");
-        else {
-          keepAlive.click();
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          if (input.value !== "203.0.113.10:443,null,null,v4") failures.push("仅保留可用没有生成标准池格式");
+        const cleaned = await waitFor(() => {
+          const idleButton = document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]');
+          return idleButton ? input.value : null;
+        });
+        if (cleaned !== "203.0.113.10:443,null,null,v4\\n203.0.113.11:443") {
+          failures.push("检测清洗没有把可用项标准化、未知项保留原文、失效项剔除");
         }
+        if (document.querySelector('[data-testid="batch-results"]')) failures.push("批量检测后仍出现旧结果面板");
 
         window.__batchDelayMs = 250;
         input.value = original;
@@ -487,29 +481,30 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         await new Promise((resolve) => setTimeout(resolve, 50));
         button.click();
         await new Promise((resolve) => setTimeout(resolve, 80));
+        const stopButton = document.querySelector('button[aria-label="停止批量检测"]');
+        if (!stopButton) failures.push("检测运行中缺少停止按钮");
         const editedWhileChecking = "203.0.113.99:443";
         input.value = editedWhileChecking;
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: editedWhileChecking }));
         await new Promise((resolve) => setTimeout(resolve, 400));
         window.__batchDelayMs = 0;
-        if (document.querySelector('[data-testid="batch-results"]')) failures.push("取消检测后旧结果重新出现在页面");
+        if (!(await waitFor(() => document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]')))) {
+          failures.push("中止检测后没有回到清洗按钮");
+        }
         if (input.value !== editedWhileChecking) failures.push("取消检测后输入框被旧请求覆盖");
 
-        const duplicate = "203.0.113.10:443\\n203.0.113.10:443";
-        input.value = duplicate;
-        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: duplicate }));
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        button.click();
-        const stalePanel = await waitFor(() => document.querySelector('[data-testid="batch-results"]'));
         const dedupeButton = await waitFor(() =>
           [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "去重")
         );
-        if (!stalePanel) failures.push("程序化输入检查前没有生成检测结果");
         if (!dedupeButton) failures.push("找不到去重操作");
-        if (stalePanel && dedupeButton) {
+        else {
+          const duplicate = "203.0.113.10:443\\n203.0.113.10:443";
+          input.value = duplicate;
+          input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: duplicate }));
+          await new Promise((resolve) => setTimeout(resolve, 50));
           dedupeButton.click();
           await new Promise((resolve) => setTimeout(resolve, 100));
-          if (document.querySelector('[data-testid="batch-results"]')) failures.push("程序化修改输入后旧检测结果仍然可见");
+          if (input.value !== "203.0.113.10:443") failures.push("去重后输入框内容不正确");
         }
         return { failures };
       })()`,
@@ -557,8 +552,8 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
         if (!page) return { failures: ["配置中心未渲染"] };
 
         for (let index = 0; index < 2; index += 1) {
-          const addZone = await waitFor(() => buttonByText("添加 Zone"));
-          if (!addZone) return { failures: ["找不到添加 Zone 按钮"] };
+          const addZone = await waitFor(() => buttonByText("添加权限配置"));
+          if (!addZone) return { failures: ["找不到添加权限配置按钮"] };
           addZone.click();
           await new Promise((resolve) => setTimeout(resolve, 80));
         }
