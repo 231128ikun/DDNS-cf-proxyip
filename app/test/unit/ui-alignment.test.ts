@@ -95,7 +95,7 @@ describe('dashboard visual alignment', () => {
     expect(hero).toContain('<Icon name="help" /> {usageOpen ? \'收起说明\' : \'使用说明\'}');
     expect(dashboard).toContain('<Icon name="database" /> IP 池工作台');
     expect(dashboard).toContain('<Icon name="dashboard" /> 运行活动');
-    expect(dashboard).toContain('<Icon name="activity" /> {checkingBatch ? \'检测中…\' : \'检测\'}');
+    expect(dashboard).toContain('<Icon name={checkingBatch ? \'stop\' : \'activity\'} /> {checkingBatch ? \'停止检测\' : \'检测清洗\'}');
     expect(dashboard).toContain('<Icon name="save" /> {savingPool ? \'保存中…\' : \'入库\'}');
   });
 });
