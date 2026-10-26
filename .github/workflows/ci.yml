@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -42,6 +44,20 @@ jobs:
       # 面板由 Cloudflare 静态资源分发，Worker 只处理 /api/*；全部用例使用内存 KV 与 mock fetch。
       - name: Check
         run: npm run check
+
+      - name: UI accessibility and main parity
+        run: npm run audit:ui && npm run audit:parity
+
+      - name: Save UI comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-review
+          path: |
+            app/.wrangler/tmp/ui-parity
+            app/.wrangler/tmp/ui-audit
+          include-hidden-files: true
+          if-no-files-found: ignore
 
       # 部署入口是源码，仓库里不应再出现构建产物。
       - name: Reject committed build artifacts

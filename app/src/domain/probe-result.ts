@@ -20,6 +20,7 @@ export interface ProbeResult {
   readonly endpoint?: string;
   readonly exitIp?: string;
   readonly latencyMs?: number;
+  readonly colo?: string;
   readonly code?: string;
   readonly message?: string;
 }
@@ -71,6 +72,7 @@ function withOptionalDetails(base: Omit<ProbeResult, 'exits'>, details: ProbeDet
     ...(details.endpoint ? { endpoint: details.endpoint } : {}),
     ...(details.exitIp ? { exitIp: details.exitIp } : {}),
     ...(typeof details.latencyMs === 'number' ? { latencyMs: details.latencyMs } : {}),
+    ...(details.colo ? { colo: details.colo } : {}),
     ...(details.code ? { code: details.code } : {}),
     ...(details.message ? { message: details.message } : {}),
   };

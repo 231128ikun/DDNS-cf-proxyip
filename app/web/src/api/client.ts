@@ -150,6 +150,8 @@ export class ApiClient {
         exitFamily: result.exitFamily,
         ...(result.exitIp ? { exitIp: result.exitIp } : {}),
         ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
+        ...(result.colo ? { colo: result.colo } : {}),
+        ...(result.exits.length ? { exits: result.exits } : {}),
         ...(result.code ? { code: result.code } : {}),
         ...(result.message ? { message: result.message } : {}),
         ...(asn ? { asn } : {}),

@@ -275,8 +275,8 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   });
 
   /**
-   * “解析实况”当前域名记录：只读查询 Cloudflare DNS，
-   * 手动新增/删除记录仍由维护流程统一执行，面板不提供旁路写入口。
+   * “解析实况”当前域名记录：只读查询 Cloudflare DNS。
+   * 页面随后复用单目标探测接口；新增/删除走下面的目标记录用例。
    */
   router.get('/api/current-status', async (context) => {
     const targetStatus = dependencies.targetStatus;

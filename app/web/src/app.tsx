@@ -3,7 +3,6 @@ import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
-import type { TargetStatusResponse } from '../../src/contracts/target-status';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
@@ -21,6 +20,7 @@ import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
 import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
+import { loadTargetStatus, type TargetStatusView } from './state/target-status';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 
@@ -62,7 +62,11 @@ export function App() {
   const client = useMemo(() => new ApiClient(), []);
   const logSequence = useRef(0);
   const activeBatch = useRef<AbortController | null>(null);
+  const activeLookup = useRef<AbortController | null>(null);
+  const currentTargetKey = useRef(selectedTargetKey);
+  currentTargetKey.current = selectedTargetKey;
   const aliveSoFar = useRef(0);
+  const startupLogged = useRef(false);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -88,16 +92,29 @@ export function App() {
     setBatchProgressState(null);
   }, []);
 
-  useEffect(() => () => activeBatch.current?.abort(), []);
+  const resetLookup = useCallback((): void => {
+    activeLookup.current?.abort();
+    activeLookup.current = null;
+    setCheck({ status: 'idle' });
+  }, []);
+
+  useEffect(() => () => {
+    activeBatch.current?.abort();
+    activeLookup.current?.abort();
+  }, []);
 
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
   const [pools, refreshPools] = useResource((signal) => client.pools(signal));
   const [config, refreshConfig] = useResource((signal) => client.config(signal));
   const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal));
-  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusResponse>((signal) => {
+  const targetPort = config.status === 'ready'
+    ? config.data.config.targets.find((target) => `${target.domain}|${target.mode}` === selectedTargetKey)?.port ?? 443
+    : 443;
+  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal) => {
     if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
-    return client.currentStatus(selectedTargetKey, signal);
+    if (config.status !== 'ready') return Promise.reject(new Error(config.status === 'error' ? config.message : '正在读取维护配置，请稍后刷新'));
+    return loadTargetStatus(client, selectedTargetKey, targetPort, signal);
   });
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
@@ -116,13 +133,14 @@ export function App() {
     });
   }, [bindings]);
 
-  /** 选中目标变化时重新读取其当前 DNS 记录；切走时中止旧请求。 */
+  /** 配置就绪后读取当前记录；目标或端口变化时中止旧请求并重新检测。 */
   useEffect(() => {
-    if (!selectedTargetKey) return;
+    if (!selectedTargetKey || config.status === 'loading' || config.status === 'idle') return;
+    resetLookup();
     const controller = new AbortController();
     void refreshTargetStatus(controller.signal);
     return () => controller.abort();
-  }, [refreshTargetStatus, selectedTargetKey]);
+  }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort]);
 
   /**
    * 首屏把配置、维护域名、IP 池和健康度并行拉完，同时预取配置中心分块，
@@ -154,6 +172,13 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready') return;
+    startupLogged.current = true;
+    appendConsoleLog('系统就绪', 'success');
+    appendConsoleLog(`配置：并发 ${WEB_CHECK_CONCURRENCY} | 超时 ${config.data.config.settings.CHECK_TIMEOUT}ms`);
+  }, [appendConsoleLog, config, health]);
+
   /** 池级写操作的统一收口：忙碌标记 + 提示 + 刷新列表只实现一次。 */
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
     setPoolBusy(key);
@@ -176,9 +201,13 @@ export function App() {
       return;
     }
     setCheck({ status: 'loading' });
+    activeLookup.current?.abort();
+    const controller = new AbortController();
+    activeLookup.current = controller;
     appendConsoleLog(`[探测] 开始检测 ${value}`);
-    client.checkTarget(value)
+    client.checkTarget(value, controller.signal)
       .then((data) => {
+        if (controller.signal.aborted || activeLookup.current !== controller) return;
         setCheck({ status: 'ready', data });
         const statuses = data.items.reduce((counts, item) => {
           counts[item.result.status] += 1;
@@ -190,20 +219,22 @@ export function App() {
         );
       })
       .catch((error: unknown) => {
+        if (isAbort(error) || controller.signal.aborted || activeLookup.current !== controller) return;
         const message = errorMessage(error);
         setCheck({ status: 'error', message });
         appendConsoleLog(`[探测] ${message}`, 'error');
-      });
+      })
+      .finally(() => { if (activeLookup.current === controller) activeLookup.current = null; });
   };
 
   const handleRefresh = (): void => {
-    appendConsoleLog('[系统] 正在刷新状态和 IP 池');
-    void refreshHealth();
-    void refreshPools();
-    void refreshBindings();
+    resetLookup();
+    appendConsoleLog('[系统] 正在刷新当前域名解析');
+    void refreshTargetStatus();
   };
 
   const handleSelectTarget = (key: string | null): void => {
+    resetLookup();
     setSelectedTargetKey(key);
   };
 
@@ -218,28 +249,36 @@ export function App() {
     appendConsoleLog(`[记录] 已复制到输入框 ${address}`, 'success');
   };
 
-  const handleAddRecord = (value: string): void => {
+  const handleCopyAddress = (address: string): void => {
+    navigator.clipboard.writeText(address)
+      .then(() => notify('维护地址已复制'))
+      .catch(() => notify('复制失败，请手动复制地址', 'error'));
+  };
+
+  const handleAddRecord = (value: string): Promise<boolean> => {
     if (!selectedTargetKey) {
       notify('请先选择维护域名', 'error');
-      return;
+      return Promise.resolve(false);
     }
     const input = value.trim();
     if (!input) {
       notify('请输入要添加的 IP', 'error');
-      return;
+      return Promise.resolve(false);
     }
     appendConsoleLog(`[记录] 正在添加 ${input}`);
-    client.addRecord(selectedTargetKey, input)
+    return client.addRecord(selectedTargetKey, input)
       .then(async () => {
+        if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已添加 ${input}`, 'success');
         notify('已添加 DNS 记录');
         await refreshTargetStatus();
-        await refreshPools();
+        return true;
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
         appendConsoleLog(`[记录] ${message}`, 'error');
         notify(message, 'error');
+        return false;
       });
   };
 
@@ -248,10 +287,10 @@ export function App() {
     if (!window.confirm(address ? `确认删除 ${address}？` : '确认删除该记录？')) return;
     client.deleteRecord(selectedTargetKey, recordId, address)
       .then(async () => {
+        if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已删除 ${address ?? recordId}`, 'success');
         notify('已删除 DNS 记录');
         await refreshTargetStatus();
-        await refreshPools();
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
@@ -638,6 +677,7 @@ export function App() {
         health={health}
         bindings={bindings}
         selectedTargetKey={selectedTargetKey}
+        targetPort={targetPort}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
         onSelectTarget={handleSelectTarget}
@@ -646,9 +686,8 @@ export function App() {
 
       <div class="container">
         <TopNav page={page} onPageChange={setPage} />
-        {page === 'dashboard' ? (
+        <div hidden={page !== 'dashboard'}>
           <DashboardPage
-            health={health}
             check={check}
             pools={pools}
             batch={batch}
@@ -667,22 +706,26 @@ export function App() {
             bindings={bindings}
             targetStatus={targetStatus}
             selectedTargetKey={selectedTargetKey}
+            targetPort={targetPort}
             maintenance={maintenance}
             maintenanceBusy={maintenanceBusy}
             actions={actions}
             onCopyToInput={handleCopyToInput}
-            onRefreshTargetStatus={() => void refreshTargetStatus()}
+            onCopyAddress={handleCopyAddress}
             onLookupChange={setLookup}
             onIpTextChange={replaceIpText}
             onFilterChange={setFilterText}
             onRemoteUrlChange={setRemoteUrl}
             onPoolChange={setPoolKey}
           />
-        ) : ConfigPage ? (
+        </div>
+        <div hidden={page !== 'config'}>
+        {ConfigPage ? (
           <ConfigPage client={client} notify={notify} initialConfig={config} onReload={refreshConfig} />
         ) : (
           <p class="text-secondary text-center py-4">正在加载配置中心…</p>
         )}
+        </div>
       </div>
 
       <footer class="container text-center text-secondary small py-3">

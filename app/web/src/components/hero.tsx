@@ -8,6 +8,7 @@ interface HeroProps {
   readonly health: RequestState<HealthResponse>;
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly selectedTargetKey: string | null;
+  readonly targetPort: number | 'any';
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
   readonly onSelectTarget: (key: string | null) => void;
@@ -18,6 +19,7 @@ export function Hero({
   health,
   bindings,
   selectedTargetKey,
+  targetPort,
   usageOpen,
   onToggleUsage,
   onSelectTarget,
@@ -34,10 +36,11 @@ export function Hero({
             onClick={onToggleUsage}
             aria-expanded={usageOpen}
             aria-controls="usage-guide"
+            aria-label={usageOpen ? '收起使用说明' : '使用说明'}
           >
-            <Icon name="help" /> {usageOpen ? '收起说明' : '使用说明'}
+            <Icon name="help" />
           </button>
-          <div class="config-info"><Icon name="settings" /> 建议流程：导入 IP <span>→</span> 检测 <span>→</span> 入库 <span>→</span> 执行维护</div>
+          <div class="config-info"><Icon name="compass" /> 建议流程：导入IP → 检测 → 入库 → 执行维护</div>
         </div>
       </div>
 
@@ -57,10 +60,9 @@ export function Hero({
       </div>
 
       <div class="domain-selector">
-        <p class="target-summary-label">当前维护目标</p>
         <label class="target-summary">
           <span id="current-target-summary-content">
-            <TargetSummary state={bindings} selectedKey={selectedTargetKey} />
+            <TargetSummary state={bindings} selectedKey={selectedTargetKey} port={targetPort} />
           </span>
           <select
             class="target-select-overlay"
@@ -98,9 +100,11 @@ export function Hero({
 function TargetSummary({
   state,
   selectedKey,
+  port,
 }: {
   readonly state: RequestState<DomainBindingsResponse>;
   readonly selectedKey: string | null;
+  readonly port: number | 'any';
 }) {
   if (state.status === 'loading' || state.status === 'idle') {
     return (
@@ -138,16 +142,12 @@ function TargetSummary({
     );
   }
 
-  const extra = state.data.items.length - 1;
   return (
     <>
+      <RecordBadge mode={item.mode} />
       <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
       <span class="target-summary-meta">
-        <RecordBadge mode={item.mode} />
-        <span>{item.mode === 'TXT' ? 'TXT 记录' : 'A/AAAA 记录'}</span>
-        <span>{item.poolName}</span>
-        {extra > 0 && <span>等 {state.data.items.length} 个目标</span>}
-        {!item.enabled && <span class="text-warning">维护关闭</span>}
+        {item.mode === 'A' && port !== 'any' ? `端口 ${port}` : `${item.mode === 'TXT' ? 'TXT' : 'A/AAAA'} 记录`}
       </span>
     </>
   );

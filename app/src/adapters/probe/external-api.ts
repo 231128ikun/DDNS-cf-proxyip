@@ -140,11 +140,12 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const exits = readProbeExits(record);
   const exitIp = pickExitIp(record, exits);
   const exitFamily = pickExitFamily(record, exitIp);
+  const colo = readText(record.colo)?.toUpperCase();
+  const details = { endpoint, latencyMs, ...(colo && /^[A-Z]{3}$/.test(colo) ? { colo } : {}) };
 
   if (decision === true) {
     return alive(target, {
-      endpoint,
-      latencyMs,
+      ...details,
       exitFamily,
       exits,
       ...(exitIp ? { exitIp } : {}),
@@ -152,15 +153,13 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   }
   if (decision === false) {
     return dead(target, {
-      endpoint,
-      latencyMs,
+      ...details,
       ...(message ? { message } : {}),
     });
   }
   if (exitIp) {
     return alive(target, {
-      endpoint,
-      latencyMs,
+      ...details,
       exitFamily,
       exits,
       exitIp,
@@ -168,8 +167,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   }
 
   return unknown(target, 'INVALID_RESPONSE', message ?? '检测接口未返回可信的成功或失败结论', {
-    endpoint,
-    latencyMs,
+    ...details,
   });
 }
 

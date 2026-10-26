@@ -20,7 +20,7 @@ export class TargetStatusInputError extends Error {
 
 /**
  * “解析实况”的只读数据来源：按域名池绑定 key 找到维护目标，
- * 读取其当前 A/AAAA 或 TXT 记录。这里只读不改，DNS 写入仍走维护流程。
+ * 读取其当前 A/AAAA 或 TXT 记录；此用例不写 DNS。
  */
 export class TargetStatus {
   constructor(private readonly dependencies: TargetStatusDependencies) {}

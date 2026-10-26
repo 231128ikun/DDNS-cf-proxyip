@@ -1,5 +1,3 @@
-import { Icon } from './icon';
-
 export type AppPage = 'dashboard' | 'config';
 
 interface TopNavProps {
@@ -20,7 +18,7 @@ export function TopNav({ page, onPageChange }: TopNavProps) {
         aria-controls="page-dashboard"
         onClick={() => onPageChange('dashboard')}
       >
-        <Icon name="dashboard" /> 运行面板
+        运行面板
       </button>
       <button
         id="tab-config"
@@ -32,7 +30,7 @@ export function TopNav({ page, onPageChange }: TopNavProps) {
         aria-controls="page-config"
         onClick={() => onPageChange('config')}
       >
-        <Icon name="settings" /> 配置中心
+        配置中心
       </button>
     </div>
   );

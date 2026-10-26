@@ -17,13 +17,17 @@ export function useResource<T>(
   const latest = useRef(load);
   latest.current = load;
   const [state, setState] = useState<RequestState<T>>({ status: 'loading' });
+  const latestRequest = useRef(0);
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    const request = ++latestRequest.current;
     setState({ status: 'loading' });
     try {
-      setState({ status: 'ready', data: await latest.current(signal) });
+      const data = await latest.current(signal);
+      if (signal?.aborted || request !== latestRequest.current) return;
+      setState({ status: 'ready', data });
     } catch (error) {
-      if (isAbort(error)) return;
+      if (isAbort(error) || signal?.aborted || request !== latestRequest.current) return;
       setState({
         status: 'error',
         message: errorMessage(error),

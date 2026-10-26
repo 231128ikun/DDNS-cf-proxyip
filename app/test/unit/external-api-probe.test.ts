@@ -55,6 +55,7 @@ describe('ExternalApiProbeAdapter', () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
         success: true,
+        colo: ' sjc ',
         inferred_stack: 'ipv4_only',
         probe_results: {
           ipv4: {
@@ -80,6 +81,7 @@ describe('ExternalApiProbeAdapter', () => {
     const result = await adapter.probe(target);
     expect(result).toMatchObject({
       status: 'alive',
+      colo: 'SJC',
       exitFamily: 'ipv4',
       exitIp: '198.51.100.8',
       exits: [
