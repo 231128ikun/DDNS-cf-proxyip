@@ -113,28 +113,12 @@ export class ApiClient {
       }
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-      results = [{
-        address: target.target.authority,
-        result: {
-          status: 'unknown',
-          exitFamily: 'unknown',
-          exits: [],
-          code: error instanceof ApiError ? `HTTP_${error.status}` : 'REQUEST_FAILED',
-          message: error instanceof Error ? error.message : '检测请求异常',
-        },
-      }];
+      results = [unknownCheckItem(target.target.authority,
+        error instanceof ApiError ? `HTTP_${error.status}` : 'REQUEST_FAILED',
+        error instanceof Error ? error.message : '检测请求异常')];
     }
     if (results.length === 0) {
-      results = [{
-        address: target.target.authority,
-        result: {
-          status: 'unknown',
-          exitFamily: 'unknown',
-          exits: [],
-          code: 'EMPTY_RESPONSE',
-          message: '检测响应缺少目标结果',
-        },
-      }];
+      results = [unknownCheckItem(target.target.authority, 'EMPTY_RESPONSE', '检测响应缺少目标结果')];
     }
 
     return results.map(({ address, result }) => {
@@ -230,7 +214,7 @@ export class ApiClient {
     return await this.request<RemoteLoadResponse>('/api/remote-load', 'POST', { url }, signal);
   }
 
-  /** 域名池绑定与手动维护：白名单与执行编排都在服务端，前端只提交整体映射。 */
+  /** 域名池绑定与手动维护：白名单与执行编排都在服务端，可只提交改动的映射。 */
   async domainBindings(signal?: AbortSignal): Promise<DomainBindingsResponse> {
     return await this.request<DomainBindingsResponse>('/api/domain-bindings', 'GET', undefined, signal);
   }
@@ -311,6 +295,10 @@ export class ApiClient {
     }
     return payload as T;
   }
+}
+
+function unknownCheckItem(address: string, code: string, message: string): CheckTargetResponse['items'][number] {
+  return { address, result: { status: 'unknown', exitFamily: 'unknown', exits: [], code, message } };
 }
 
 /** 池 key 由服务端白名单校验，这里只做 URL 编码，避免出现第二套规则。 */

@@ -160,7 +160,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
     }
     const file = resolve(webRoot, url.pathname === '/' ? 'index.html' : `.${url.pathname}`);
     if (!file.startsWith(webRoot + sep) || !existsSync(file)) { response.writeHead(404); return response.end(); }
-    response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css' })[extname(file)] || 'application/octet-stream' });
+    response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
