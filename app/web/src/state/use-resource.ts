@@ -4,41 +4,62 @@ import type { RequestState } from './request-state';
 
 /**
  * 面板上的只读资源都是同一种形状：拉一次、成功给数据、失败给文案、还能重试。
- * 这里只实现一次，页面只保留刷新入口和“就地改一份”的乐观更新入口。
+ * 可保留上次确认的数据，并接受写入响应；接受新数据后旧读取不能覆盖它。
  * refresh 的身份保持稳定，因此首屏的并行预取不会因为重渲染而重复触发。
  */
-export function useResource<T>(
+export function useResource<T extends object>(
   load: (signal?: AbortSignal) => Promise<T>,
+  retainData = false,
 ): readonly [
   RequestState<T>,
-  (signal?: AbortSignal) => Promise<void>,
-  (mutate: (current: T) => T) => void,
+  (signal?: AbortSignal) => Promise<boolean>,
+  (value: T | ((current: T) => T)) => void,
 ] {
   const latest = useRef(load);
   latest.current = load;
   const [state, setState] = useState<RequestState<T>>({ status: 'loading' });
   const latestRequest = useRef(0);
+  const cached = useRef<T | null>(null);
 
-  const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const refresh = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     const request = ++latestRequest.current;
-    setState({ status: 'loading' });
+    setState(retainData && cached.current
+      ? { status: 'ready', data: cached.current, refreshing: true }
+      : { status: 'loading' });
     try {
       const data = await latest.current(signal);
-      if (signal?.aborted || request !== latestRequest.current) return;
+      if (signal?.aborted || request !== latestRequest.current) return false;
+      cached.current = data;
       setState({ status: 'ready', data });
+      return true;
     } catch (error) {
-      if (isAbort(error) || signal?.aborted || request !== latestRequest.current) return;
-      setState({
+      if (isAbort(error) || signal?.aborted || request !== latestRequest.current) return false;
+      setState(retainData && cached.current ? {
+        status: 'ready', data: cached.current, refreshError: errorMessage(error),
+      } : {
         status: 'error',
         message: errorMessage(error),
         unavailable: isUnavailable(error),
       });
+      return false;
+    } finally {
+      if (signal?.aborted && request === latestRequest.current && retainData && cached.current) {
+        setState({ status: 'ready', data: cached.current });
+      }
     }
+  }, [retainData]);
+
+  const update = useCallback((value: T | ((current: T) => T)): void => {
+    if (typeof value === 'function' && !cached.current) return;
+    const data = typeof value === 'function' ? (value as (current: T) => T)(cached.current!) : value;
+    latestRequest.current++;
+    cached.current = data;
+    // 局部写入只确认修改的条目，不能把整份列表此前的回读失败当作已恢复。
+    setState(current => ({ status: 'ready', data,
+      ...(typeof value === 'function' && current.status === 'ready' && current.refreshError
+        ? { refreshError: current.refreshError } : {}),
+    }));
   }, []);
 
-  const mutate = useCallback((change: (current: T) => T): void => {
-    setState((current) => (current.status === 'ready' ? { status: 'ready', data: change(current.data) } : current));
-  }, []);
-
-  return [state, refresh, mutate];
+  return [state, refresh, update];
 }

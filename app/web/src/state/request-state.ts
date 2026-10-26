@@ -1,7 +1,12 @@
 export type RequestState<T> =
   | { readonly status: 'idle' }
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly data: T }
+  | {
+    readonly status: 'ready';
+    readonly data: T;
+    readonly refreshing?: boolean;
+    readonly refreshError?: string;
+  }
   | {
     readonly status: 'error';
     readonly message: string;

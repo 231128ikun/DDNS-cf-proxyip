@@ -1,5 +1,9 @@
 import { useRef, useState } from 'preact/hooks';
 import { errorMessage } from '../api/errors';
+import type { ApiClient } from '../api/client';
+import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, getPoolFixedName, type PoolsResponse } from '../../../src/contracts/pool';
+import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
+import { sortByKeyOrder } from '../../../src/util/key-order';
 import { Modal } from './modal';
 
 interface OrderItem {
@@ -11,6 +15,36 @@ interface OrderItem {
 export interface OrderRequest {
   readonly kind: 'pools' | 'bindings';
   readonly items: readonly OrderItem[];
+}
+
+export function createOrderRequest(kind: OrderRequest['kind'], pools: PoolsResponse | null, bindings: DomainBindingsResponse | null): OrderRequest {
+  const items = kind === 'pools'
+    ? (pools?.pools ?? []).filter(pool => NUMBERED_POOL_KEY_RE.test(pool.key))
+      .map(pool => ({ key: pool.key, name: pool.name, detail: getPoolFixedName(pool.key) }))
+    : (bindings?.items ?? []).map(item => ({ key: item.key, name: item.domain, detail: item.mode === 'TXT' ? 'TXT' : 'A/AAAA' }));
+  if (items.length < 2) throw new Error(kind === 'pools' ? '至少需要两个自定义池才能排序' : '至少需要两个管理域名才能排序');
+  return { kind, items };
+}
+
+interface OrderSaveContext {
+  readonly client: ApiClient;
+  readonly patchPools: (change: (current: PoolsResponse) => PoolsResponse) => void;
+  readonly patchBindings: (change: (current: DomainBindingsResponse) => DomainBindingsResponse) => void;
+  readonly refreshPools: () => Promise<boolean>;
+  readonly refreshBindings: () => Promise<boolean>;
+  readonly notify: (message: string, type: 'success' | 'error') => void;
+}
+
+/** 页面提供统一客户端和共享资源；排序的保存流程随弹窗按需加载。 */
+export async function saveOrder(kind: OrderRequest['kind'], order: readonly string[], context: OrderSaveContext): Promise<void> {
+  const poolOrder = kind === 'pools';
+  const savedOrder = poolOrder ? [DEFAULT_POOL_KEY, ...order, TRASH_POOL_KEY] : order;
+  const { client, patchPools, patchBindings, refreshPools, refreshBindings, notify } = context;
+  await (poolOrder ? client.savePoolOrder(savedOrder) : client.saveDomainBindingOrder(savedOrder));
+  if (poolOrder) patchPools(current => ({ pools: sortByKeyOrder(current.pools, savedOrder) }));
+  else patchBindings(current => ({ items: sortByKeyOrder(current.items, savedOrder) }));
+  const refreshed = await (poolOrder ? refreshPools() : refreshBindings());
+  notify(`${poolOrder ? '池排序' : '域名池绑定顺序'}已保存${refreshed ? '' : '，刷新失败，请重试读取'}`, refreshed ? 'success' : 'error');
 }
 
 interface OrderDialogProps extends OrderRequest {

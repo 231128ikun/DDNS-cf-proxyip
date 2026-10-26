@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
-import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, getPoolFixedName, isUserPoolKey } from '../../src/contracts/pool';
+import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
+import type { ConfigResponse } from '../../src/contracts/config';
+import { bindingKey } from '../../src/domain/domain-binding';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
+import { sortByKeyOrder } from '../../src/util/key-order';
 import { ApiClient } from './api/client';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../src/contracts/runtime-settings';
 import { errorMessage, isAbort } from './api/errors';
@@ -26,7 +29,7 @@ import { useResource } from './state/use-resource';
 import { loadTargetStatus, type TargetStatusView } from './state/target-status';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
-type OrderDialogComponent = typeof import('./components/order-dialog').OrderDialog;
+type OrderDialogModule = typeof import('./components/order-dialog');
 
 interface Toast {
   readonly message: string;
@@ -44,7 +47,6 @@ interface BatchInterrupt {
 export function App() {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
-  const [OrderDialog, setOrderDialog] = useState<OrderDialogComponent | null>(null);
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [lookup, setLookup] = useState('');
@@ -61,6 +63,8 @@ export function App() {
   const [checkingBatch, setCheckingBatch] = useState(false);
   const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
+  const [bindingBusy, setBindingBusy] = useState(false);
+  const bindingWritePending = useRef(false);
   const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
   const [batchProgressState, setBatchProgressState] = useState<PoolCheckProgressState | null>(null);
   const [batchInterrupt, setBatchInterrupt] = useState<BatchInterrupt | null>(null);
@@ -74,6 +78,9 @@ export function App() {
   const currentPage = useRef(page);
   currentPage.current = page;
   const openingOrder = useRef(false);
+  const orderGeneration = useRef(0);
+  const orderModule = useRef<OrderDialogModule | null>(null);
+  const OrderDialog = orderModule.current?.OrderDialog;
   const aliveSoFar = useRef(0);
   const startupLogged = useRef(false);
 
@@ -99,6 +106,7 @@ export function App() {
     setIpText(value);
     setBatch({ status: 'idle' });
     setBatchProgressState(null);
+    setBatchInterrupt(null);
   }, []);
 
   const resetLookup = useCallback((): void => {
@@ -114,18 +122,25 @@ export function App() {
 
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
-  const [pools, refreshPools] = useResource((signal) => client.pools(signal));
-  const [config, refreshConfig] = useResource((signal) => client.config(signal));
-  const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal));
+  const [pools, refreshPools, patchPools] = useResource((signal) => client.pools(signal), true);
+  const [config, refreshConfig, acceptConfig] = useResource((signal) => client.config(signal), true);
+  const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal), true);
+  const confirmedBindings = bindings.status === 'ready' ? bindings.data : null;
+  const configuredTargets = config.status === 'ready' ? config.data.config.targets : null;
+  // 已保存配置决定目标集合；绑定回读只提供显示顺序，旧列表不能恢复已删除的目标。
+  const targetChoices = useMemo(() => configuredTargets ? sortByKeyOrder(configuredTargets.map(target => ({
+    key: bindingKey(target), domain: target.domain, mode: target.mode,
+  })), confirmedBindings?.items.map(item => item.key) ?? []) : confirmedBindings?.items ?? [], [configuredTargets, confirmedBindings]);
+  const targetKeys = useMemo(() => targetChoices.map(item => item.key), [targetChoices]);
   const webCheckConcurrency = config.status === 'ready'
     ? config.data.config.settings.CONCURRENT_CHECKS ?? DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS
     : DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS;
-  const targetPort = config.status === 'ready'
-    ? config.data.config.targets.find((target) => `${target.domain}|${target.mode}` === selectedTargetKey)?.port ?? 443
-    : 443;
+  const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
+  const targetPort = configuredTarget?.port ?? 443;
   const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal) => {
     if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
     if (config.status !== 'ready') return Promise.reject(new Error(config.status === 'error' ? config.message : '正在读取维护配置，请稍后刷新'));
+    if (!configuredTarget) return Promise.reject(new Error('当前目标已变更，请刷新域名绑定'));
     return loadTargetStatus(client, selectedTargetKey, targetPort, signal, webCheckConcurrency);
   });
 
@@ -137,13 +152,12 @@ export function App() {
 
   /** 绑定就绪后默认选中第一个维护目标，并在目标被删后回退到首个仍存在的 key。 */
   useEffect(() => {
-    if (bindings.status !== 'ready') return;
+    if (!confirmedBindings) return;
     setSelectedTargetKey((current) => {
-      const keys = bindings.data.items.map((item) => item.key);
-      if (current && keys.includes(current)) return current;
-      return keys[0] ?? null;
+      if (current && targetKeys.includes(current)) return current;
+      return targetKeys[0] ?? null;
     });
-  }, [bindings]);
+  }, [confirmedBindings, targetKeys]);
 
   /** 配置就绪后读取当前记录；目标或端口变化时中止旧请求并重新检测。 */
   useEffect(() => {
@@ -329,6 +343,10 @@ export function App() {
   };
 
   const handleCheckBatch = (): void => {
+    if (config.status !== 'ready') {
+      notify(config.status === 'error' ? config.message : '正在读取配置，请稍后检测', 'error');
+      return;
+    }
     const text = ipText.trim();
     if (!text) {
       notify('请先输入或从库加载 IP', 'error');
@@ -384,6 +402,8 @@ export function App() {
   const handleStopBatch = (): void => {
     const controller = activeBatch.current;
     if (!controller) return;
+    orderGeneration.current++;
+    setOrderRequest(null);
     controller.abort();
     activeBatch.current = null;
     setCheckingBatch(false);
@@ -484,6 +504,11 @@ export function App() {
     if (!name) return;
     void runPoolAction('pool-edit', async () => {
       const created = await client.createPool(name);
+      patchPools(current => ({ pools: [
+        ...current.pools.filter(pool => pool.key !== TRASH_POOL_KEY && pool.key !== created.key),
+        { key: created.key, name: created.displayName, count: 0 },
+        ...current.pools.filter(pool => pool.key === TRASH_POOL_KEY),
+      ] }));
       setPoolKey(created.key);
       return `已新建 ${created.displayName}`;
     });
@@ -504,33 +529,20 @@ export function App() {
   };
 
   const openOrderDialog = async (kind: OrderRequest['kind']): Promise<void> => {
-    if (openingOrder.current) return;
-    const items = kind === 'pools'
-      ? pools.status === 'ready' ? pools.data.pools.filter(pool => NUMBERED_POOL_KEY_RE.test(pool.key))
-        .map(pool => ({ key: pool.key, name: pool.name, detail: getPoolFixedName(pool.key) })) : []
-      : bindings.status === 'ready' ? bindings.data.items
-        .map(item => ({ key: item.key, name: item.domain, detail: item.mode === 'TXT' ? 'TXT' : 'A/AAAA' })) : [];
-    if (items.length < 2) {
-      notify(kind === 'pools' ? '至少需要两个自定义池才能排序' : '至少需要两个管理域名才能排序', 'error');
-      return;
-    }
+    if (openingOrder.current || orderRequest || batchInterrupt) return;
     openingOrder.current = true;
+    const generation = orderGeneration.current;
     try {
-      const component = OrderDialog ?? (await import('./components/order-dialog')).OrderDialog;
-      if (currentPage.current !== 'dashboard') return;
-      setOrderDialog(() => component);
-      setOrderRequest({ kind, items });
+      const module = orderModule.current ?? await import('./components/order-dialog');
+      if (currentPage.current !== 'dashboard' || generation !== orderGeneration.current) return;
+      orderModule.current = module;
+      setOrderRequest(module.createOrderRequest(kind, pools.status === 'ready' ? pools.data : null,
+        bindings.status === 'ready' ? bindings.data : null));
     } catch (error) {
       notify(errorMessage(error), 'error');
     } finally {
       openingOrder.current = false;
     }
-  };
-
-  const handleSavePoolOrder = async (order: readonly string[]): Promise<void> => {
-    await client.savePoolOrder([DEFAULT_POOL_KEY, ...order, TRASH_POOL_KEY]);
-    await refreshPools();
-    notify('池排序已保存');
   };
 
   const handleDeletePool = (): void => {
@@ -582,26 +594,34 @@ export function App() {
     });
   };
 
-  /** 绑定切换先乐观更新下拉，失败时回读服务端真值回滚，避免界面停留在错误状态。 */
+  /** 单行绑定写入串行执行，只有 PUT 确认后更新缓存；失败回读保留最后确认值。 */
   const handleBindPool = async (key: string, nextPoolKey: string): Promise<void> => {
-    if (bindings.status !== 'ready') return;
-    const items = bindings.data.items.map((item) => (item.key === key ? { ...item, poolKey: nextPoolKey } : item));
-    patchBindings(() => ({ items }));
-    const mapping: Record<string, string> = {};
-    for (const item of items) mapping[item.key] = item.poolKey;
+    if (config.status !== 'ready' || bindings.status !== 'ready' || !targetKeys.includes(key) || bindingWritePending.current) return;
+    bindingWritePending.current = true;
+    setBindingBusy(true);
     try {
-      await client.saveDomainBindings(mapping);
+      await client.saveDomainBindings({ [key]: nextPoolKey });
+      const poolName = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === nextPoolKey)?.name : undefined;
+      patchBindings(current => ({ items: current.items.map(item => item.key === key
+        ? { ...item, poolKey: nextPoolKey, poolName: poolName ?? nextPoolKey } : item) }));
       notify('已更新域名池绑定');
     } catch (error) {
       notify(errorMessage(error), 'error');
       await refreshBindings();
+    } finally {
+      bindingWritePending.current = false;
+      setBindingBusy(false);
     }
   };
 
-  const handleSaveBindingOrder = async (order: readonly string[]): Promise<void> => {
-    await client.saveDomainBindingOrder(order);
-    await refreshBindings();
-    notify('域名池绑定顺序已保存');
+  const handleConfigSaved = (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>): void => {
+    const nextKeys = response.config.targets.map(bindingKey);
+    setSelectedTargetKey(current => {
+      const next = current ? targetKeys[current] ?? current : null;
+      return next && nextKeys.includes(next) ? next : nextKeys[0] ?? null;
+    });
+    acceptConfig(response);
+    void refreshBindings();
   };
   const handleRunMaintenance = (): void => {
     if (maintenanceBusy) return;
@@ -653,6 +673,7 @@ export function App() {
     clearTrash: handleClearTrash,
     bindPool: handleBindPool,
     openBindingOrder: () => void openOrderDialog('bindings'),
+    refreshPools: () => void refreshPools(),
     refreshBindings: () => void refreshBindings(),
     addRecord: handleAddRecord,
     deleteRecord: handleDeleteRecord,
@@ -679,6 +700,7 @@ export function App() {
         bindings={bindings}
         selectedTargetKey={selectedTargetKey}
         targetPort={targetPort}
+        targetChoices={targetChoices}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
         onSelectTarget={handleSelectTarget}
@@ -695,6 +717,7 @@ export function App() {
             lookup={lookup}
             ipText={ipText}
             probeConfigured={config.status !== 'ready' || Boolean(config.data.config.checkApi || config.data.config.checkApiBackup)}
+            configReady={config.status === 'ready'}
             filterText={filterText}
             remoteUrl={remoteUrl}
             poolKey={poolKey}
@@ -705,6 +728,8 @@ export function App() {
             consoleLogs={consoleLogs}
             batchProgressState={batchProgressState}
             bindings={bindings}
+            bindingBusy={bindingBusy}
+            targetKeys={config.status === 'ready' ? targetKeys : []}
             targetStatus={targetStatus}
             selectedTargetKey={selectedTargetKey}
             targetPort={targetPort}
@@ -722,7 +747,7 @@ export function App() {
         </div>
         <div hidden={page !== 'config'}>
           {ConfigPage ? (
-            <ConfigPage client={client} notify={notify} initialConfig={config} onReload={refreshConfig} />
+            <ConfigPage client={client} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved} />
           ) : (
             <p class="text-secondary text-center py-4">正在加载配置中心…</p>
           )}
@@ -732,8 +757,9 @@ export function App() {
       <footer class="container text-center text-secondary small py-3">
         DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
       </footer>
-      {orderRequest && OrderDialog && <OrderDialog {...orderRequest}
-        onSave={orderRequest.kind === 'pools' ? handleSavePoolOrder : handleSaveBindingOrder}
+      {orderRequest && OrderDialog && !batchInterrupt && <OrderDialog {...orderRequest}
+        onSave={order => orderModule.current!.saveOrder(orderRequest.kind, order,
+          { client, patchPools, patchBindings, refreshPools, refreshBindings, notify })}
         onClose={() => setOrderRequest(null)} />}
       {batchInterrupt && (
         <Modal id="batch-interrupt-title" title="检测已中断">

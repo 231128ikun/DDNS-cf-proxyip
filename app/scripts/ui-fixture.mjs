@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
+import { pathToFileURL } from 'node:url';
 
 // main 的最后一套页面作为固定验收基准。只读取 Git 历史，不保存第二套源码。
 export const UI_REFERENCE_REF = '81a41bd014c9d7ee2ec0cd50e9d43fff58c2b8f5';
@@ -29,7 +30,25 @@ export function createUiFixture() {
       { id: 'fixture-aaaa', type: 'AAAA', name: target.domain, content: '2001:db8::10' }]
     : [{ id: 'fixture-txt', type: 'TXT', name: target.domain, content: '"203.0.113.10:443,[2001:db8::10]:8443"' }]]));
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
-    failOrderSave: null, orderSaveDelay: 0, probeDelay: 0, configDelay: 0 };
+    failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
+    poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
+    poolContents: {}, probeDelay: 0, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0 };
+}
+
+/** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
+export async function waitForUiRequest(requests, start, path, method, status) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const request = requests.slice(start).find(item => item.path === path && item.method === method);
+    if (request?.completed) {
+      if (status !== undefined && request.status !== status) {
+        throw new Error(`${method} ${path} 返回 ${request.status}，应为 ${status}`);
+      }
+      return request;
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`${method} ${path} 尚未完成`);
 }
 
 export function renderReference(config, ref = UI_REFERENCE_REF) {
@@ -45,12 +64,52 @@ export function renderReference(config, ref = UI_REFERENCE_REF) {
   return context.renderHTML(config, { kvReady: true });
 }
 
-/** 本地测试服务器：真实构建页面与 main 渲染器共用虚构配置，所有 API 都被本地替身接住。 */
+/** 本地验收：配置与绑定读写使用同次构建的 Worker 和内存 KV，外部操作使用替身。 */
 export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF, empty = false } = {}) {
   if (!existsSync(join(webRoot, 'index.html'))) throw new Error('请先运行 npm run build');
   const fixture = createUiFixture();
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
   const referenceHtml = reference ? renderReference(fixture.config, ref) : null;
+  const { default: worker } = await import(pathToFileURL(join(appRoot, 'dist', 'release', 'worker.js')).href);
+  const kv = {
+    async get(key, options) {
+      if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
+        const pool = fixture.pools.find(item => item.key === key);
+        return fixture.poolContents[key] ?? (pool ? Array.from({ length: pool.count },
+          (_, index) => `203.0.113.${index + 10}:443`).join('\n') : null);
+      }
+      const values = {
+        app_config: fixture.config,
+        domain_pool_mapping: Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
+        domain_pool_order: fixture.bindings.items.map(item => item.key),
+        ip_pool_names: Object.fromEntries(fixture.pools.map(item => [item.key, item.name])),
+        ip_pool_order: fixture.pools.map(item => item.key),
+      };
+      if (!(key in values)) return null;
+      const value = JSON.stringify(values[key]);
+      return options === 'json' || options?.type === 'json' ? JSON.parse(value) : value;
+    },
+    async put(key, value) {
+      if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
+        fixture.poolContents[key] = value;
+        if (!fixture.pools.some(item => item.key === key)) {
+          fixture.pools.splice(fixture.pools.length - 1, 0, { key, name: key, count: 0 });
+        }
+        return;
+      }
+      const data = JSON.parse(value);
+      if (key === 'app_config') fixture.config = data;
+      else if (key === 'domain_pool_mapping') fixture.bindings.items = fixture.bindings.items.map(item => ({
+        ...item, poolKey: data[item.key] ?? item.poolKey,
+      }));
+      else if (key === 'ip_pool_names') fixture.pools = fixture.pools.map(item => ({ ...item, name: data[item.key] ?? item.name }));
+      else if (key === 'ip_pool_order') fixture.pools = data.map(key => fixture.pools.find(item => item.key === key)).filter(Boolean);
+      else throw new Error(`Unexpected UI fixture KV write: ${key}`);
+    },
+    async list({ prefix = '' } = {}) {
+      return { keys: fixture.pools.filter(item => item.key.startsWith(prefix)).map(item => ({ name: item.key })), list_complete: true };
+    },
+  };
   const requests = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
@@ -59,19 +118,45 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
       let body = '';
       for await (const chunk of request) body += chunk;
       const input = body ? JSON.parse(body) : {};
-      requests.push({ path: url.pathname, method: request.method, input,
-        surface: request.headers.referer?.includes('/reference') ? 'main' : 'current' });
-      const { config, pools, bindings } = fixture;
-      const publicConfig = { ...config, zones: config.zones.map(({ apiKey, ...zone }) => ({ ...zone, hasApiKey: Boolean(apiKey) })),
-        secrets: { apiKey: Boolean(config.apiKey), tgToken: Boolean(config.tgToken) } };
-      delete publicConfig.apiKey;
-      delete publicConfig.tgToken;
-      if (url.pathname === '/api/health') return json({ ok: true, version: 'fixture', configSource: 'kv' });
-      if (url.pathname === '/api/config' && request.method === 'GET') {
-        if (fixture.configDelay) await new Promise((resolve) => setTimeout(resolve, fixture.configDelay));
-        return json({ source: 'kv', config: publicConfig });
+      const entry = { path: url.pathname, method: request.method, input, completed: false, status: null,
+        startedAt: Date.now(), completedAt: null,
+        query: Object.fromEntries(url.searchParams),
+        surface: request.headers.referer?.includes('/reference') ? 'main' : 'current' };
+      requests.push(entry);
+      response.once('finish', () => { entry.status = response.statusCode; entry.completed = true; entry.completedAt = Date.now(); });
+      response.once('close', () => {
+        if (!entry.completed) { entry.completed = true; entry.aborted = true; entry.completedAt = Date.now(); }
+      });
+      if (['/api/config', '/api/domain-bindings', '/api/pools'].includes(url.pathname)) {
+        if (request.method === 'GET') {
+          const [failureKey, delayKey] = url.pathname === '/api/config' ? ['configFailures', 'configDelay']
+            : url.pathname === '/api/pools' ? ['poolListFailures', 'poolListDelay'] : ['bindingListFailures', 'bindingListDelay'];
+          const failed = fixture[failureKey] > 0;
+          if (failed) fixture[failureKey]--;
+          if (fixture[delayKey]) await new Promise(resolve => setTimeout(resolve, fixture[delayKey]));
+          if (failed) return json({ error: '模拟读取失败' }, 500);
+        } else {
+          const delay = url.pathname === '/api/config' ? fixture.configSaveDelay : fixture.bindingSaveDelay;
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          if (url.pathname === '/api/config' && fixture.failConfigSave) {
+            fixture.failConfigSave = false;
+            return json({ error: '模拟配置保存失败' }, 500);
+          }
+          if (url.pathname === '/api/domain-bindings' && fixture.bindingSaveFailures > 0) {
+            fixture.bindingSaveFailures--;
+            return json({ error: '模拟绑定保存失败' }, 500);
+          }
+        }
+        const result = await worker.fetch(new Request(url, { method: request.method,
+          headers: { 'content-type': 'application/json' }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+        const data = await result.json();
+        if (result.ok && url.pathname === '/api/domain-bindings' && request.method === 'GET') fixture.bindings = data;
+        if (result.ok && url.pathname === '/api/pools' && request.method === 'GET') fixture.pools = data.pools;
+        return json(data, result.status);
       }
-      if (['/api/config', '/api/save-config'].includes(url.pathname) && ['POST', 'PUT'].includes(request.method)) {
+      const { config, pools, bindings } = fixture;
+      if (url.pathname === '/api/health') return json({ ok: true, version: 'fixture', configSource: 'kv' });
+      if (url.pathname === '/api/save-config' && request.method === 'POST') {
         if (fixture.failConfigSave) {
           fixture.failConfigSave = false;
           return json({ success: false, error: '模拟配置保存失败' }, url.pathname === '/api/save-config' ? 200 : 500);
@@ -79,12 +164,8 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
         const update = input.config ?? input;
         Object.assign(config, update, { zones: update.zones.map((zone) => ({ ...zone,
           apiKey: zone.apiKey || config.zones.find((previous) => previous.baseDomain === zone.baseDomain)?.apiKey || '' })) });
-        if (url.pathname === '/api/save-config') return json({ success: true, config });
-        return json({ source: 'kv', config: { ...config, apiKey: undefined, tgToken: undefined,
-          zones: config.zones.map(({ apiKey, ...zone }) => ({ ...zone, hasApiKey: Boolean(apiKey) })), secrets: publicConfig.secrets } });
+        return json({ success: true, config });
       }
-      if (url.pathname === '/api/pools') return json({ pools });
-      if (url.pathname === '/api/domain-bindings') return json(bindings);
       const poolOrder = ['/api/pools/order', '/api/save-pool-order'].includes(url.pathname);
       const bindingOrder = ['/api/domain-bindings/order', '/api/save-domain-pool-order'].includes(url.pathname);
       if ((poolOrder || bindingOrder) && ['PUT', 'POST'].includes(request.method)) {
@@ -109,12 +190,17 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
           domainPoolOrder: fixture.bindings.items.map(item => item.key) });
       }
       if (['/api/check', '/api/check-ip'].includes(url.pathname)) {
+        const metrics = fixture.probeMetrics;
+        metrics.active++;
+        metrics.peak = Math.max(metrics.peak, metrics.active);
+        try {
         if (fixture.probeDelay) await new Promise((resolve) => setTimeout(resolve, fixture.probeDelay));
         const address = input.proxyip ?? url.searchParams.get('ip');
         const result = { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
           : json({ ...mainProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });
+        } finally { metrics.active--; }
       }
       if (['/api/add-record', '/api/add-a-record'].includes(url.pathname)) {
         if (fixture.failRecordSave) { fixture.failRecordSave = false; return json({ success: false, error: '模拟 DNS 添加失败' }, url.pathname === '/api/add-a-record' ? 200 : 500); }
@@ -160,6 +246,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
     }
     const file = resolve(webRoot, url.pathname === '/' ? 'index.html' : `.${url.pathname}`);
     if (!file.startsWith(webRoot + sep) || !existsSync(file)) { response.writeHead(404); return response.end(); }
+    if (url.pathname.includes('/order-dialog-') && fixture.orderChunkDelay) await new Promise(resolve => setTimeout(resolve, fixture.orderChunkDelay));
     response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });

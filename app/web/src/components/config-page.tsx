@@ -12,17 +12,19 @@ import {
   type ZoneConfig,
 } from '../../../src/contracts/config';
 import type { ExitFilter, TargetMode } from '../../../src/domain/managed-target';
+import { bindingKey } from '../../../src/domain/domain-binding';
 import { ApiClient } from '../api/client';
-import { errorMessage, isAbort } from '../api/errors';
+import { errorMessage } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
+import { ResourceFeedback } from './resource-feedback';
 
 interface ConfigPageProps {
   readonly client: ApiClient;
   readonly notify: (message: string, type?: 'success' | 'error') => void;
-  /** 首屏预取的配置：就绪时直接渲染，避免切页再等一轮请求。 */
-  readonly initialConfig: RequestState<ConfigResponse>;
-  readonly onReload: (signal?: AbortSignal) => Promise<void>;
+  readonly config: RequestState<ConfigResponse>;
+  readonly onReload: (signal?: AbortSignal) => Promise<boolean>;
+  readonly onSaved: (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>) => void;
 }
 
 interface ZoneDraft extends ZoneConfig {
@@ -36,13 +38,18 @@ interface ZoneEditor {
 
 interface TargetEditor {
   readonly index: number;
-  readonly draft: TargetConfig;
+  readonly draft: TargetDraft;
   readonly aPort: number;
+}
+
+/** 草稿行保留原 key，删除前项或改名不会把选择移到另一行；保存请求剔除此字段。 */
+interface TargetDraft extends TargetConfig {
+  readonly sourceKey: string | null;
 }
 
 interface ConfigForm {
   readonly zones: readonly ZoneDraft[];
-  readonly targets: readonly TargetConfig[];
+  readonly targets: readonly TargetDraft[];
   readonly checkApi: string;
   readonly checkApiBackup: string;
   readonly dohApi: string;
@@ -74,8 +81,8 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
   ['MAX_TRASH_SIZE', '垃圾桶上限', '垃圾桶最多保留的条目数。', 'cfg-max-trash-size'],
 ];
 
-export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPageProps) {
-  const [load, setLoad] = useState<RequestState<ConfigResponse>>(initialConfig);
+export function ConfigPage({ client, notify, config: load, onReload, onSaved }: ConfigPageProps) {
+  const applied = useRef<ConfigResponse | null>(null);
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
   const [baseline, setBaseline] = useState('');
   const [form, setForm] = useState<ConfigForm | null>(null);
@@ -88,7 +95,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
 
   const applyResponse = useCallback((response: ConfigResponse): void => {
     const nextForm = formFromConfig(response.config);
-    setLoad({ status: 'ready', data: response });
+    applied.current = response;
     setForm(nextForm);
     // 基线跟着刚落库的响应走：保存或重载之后"未保存改动"必须重新归零。
     setBaseline(snapshot(nextForm, EMPTY_DRAFTS, NO_CLEARING));
@@ -99,34 +106,18 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     setEditingTarget(null);
   }, []);
 
-  const reload = useCallback(
-    (signal?: AbortSignal): void => {
-      setLoad({ status: 'loading' });
-      client.config(signal)
-        .then(applyResponse)
-        .catch((error: unknown) => {
-          if (isAbort(error)) return;
-          setLoad({ status: 'error', message: errorMessage(error) });
-        });
-    },
-    [applyResponse, client],
-  );
-
-  /**
-   * 首屏已经在预取配置，所以本页默认不发请求：
-   * 预取就绪时直接渲染，预取失败时才由本页兜底并允许重试。
-   */
+  /** 配置只由 App 读取；重试也更新共享状态，同一保存响应只应用一次。 */
   const retried = useRef(false);
   useEffect(() => {
-    if (initialConfig.status === 'ready') {
-      applyResponse(initialConfig.data);
+    if (load.status === 'ready') {
+      if (applied.current !== load.data) applyResponse(load.data);
       return undefined;
     }
-    if (initialConfig.status !== 'error' || retried.current) return undefined;
+    if (load.status !== 'error' || retried.current) return undefined;
     retried.current = true;
-    reload();
+    void onReload();
     return undefined;
-  }, [applyResponse, initialConfig, reload]);
+  }, [applyResponse, load, onReload]);
 
   const patch = (partial: Partial<ConfigForm>): void => {
     setForm((current) => (current ? { ...current, ...partial } : current));
@@ -213,7 +204,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
 
   const commitTarget = (): void => {
     if (!form || !editingTarget) return;
-    const target = normalizeTargetDraft(editingTarget.draft, form.zones);
+    const target = { ...normalizeTargetDraft(editingTarget.draft, form.zones), sourceKey: editingTarget.draft.sourceKey };
     if (!target.domain) { notify('请先填写权限配置和域名前缀', 'error'); return; }
     try {
       if (target.mode === 'A') readInteger(String(target.port), '端口', 1, 65535);
@@ -259,8 +250,9 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     client.saveConfig(update)
       .then((response) => {
         applyResponse(response);
-        // 回写首屏共享缓存，返回仪表盘再进来时不会看到旧数据。
-        void onReload();
+        const targetKeys = Object.fromEntries(form.targets.flatMap((target, index) => target.sourceKey && update.targets?.[index]
+          ? [[target.sourceKey, bindingKey(update.targets[index]!)]] : []));
+        onSaved(response, targetKeys);
         notify('配置已保存到 KV');
       })
       .catch((error: unknown) => notify(errorMessage(error), 'error'))
@@ -272,7 +264,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     return (
       <div class="card p-4">
         <p class="text-danger mb-2">{load.message}</p>
-        <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => reload()}>重试</button>
+        <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => void onReload()}>重试</button>
       </div>
     );
   }
@@ -285,7 +277,8 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
     : form.zones[activeTarget.zoneIndex] ?? null;
 
   return (
-    <div id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config">
+    <fieldset id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config" disabled={saving} aria-busy={saving}>
+      <ResourceFeedback state={load} id="retry-config" onRetry={() => void onReload()} />
       <details class="card p-4 mb-3 config-details">
         <summary class="config-details-summary">
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
@@ -480,7 +473,7 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
           )}
         </div>
       </section>
-    </div>
+    </fieldset>
   );
 }
 
@@ -649,7 +642,7 @@ function SecretField({
 function formFromConfig(config: PublicAppConfig): ConfigForm {
   return {
     zones: config.zones.map((zone) => ({ ...zone, apiKey: '', hasApiKey: zone.hasApiKey })),
-    targets: config.targets.map((target) => ({ ...target })),
+    targets: config.targets.map((target) => ({ ...target, sourceKey: bindingKey(target) })),
     checkApi: config.checkApi,
     checkApiBackup: config.checkApiBackup,
     dohApi: config.dohApi,
@@ -685,7 +678,7 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
       apiKey: zone.apiKey.trim(),
       label: zone.label.trim() || zone.name.trim(),
     })),
-    targets: form.targets.map((target) => normalizeTargetDraft(target, form.zones)),
+    targets: form.targets.map(({ sourceKey: _sourceKey, ...target }) => normalizeTargetDraft(target, form.zones)),
     checkApi: form.checkApi.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
     dohApi: form.dohApi.trim(),
@@ -703,7 +696,7 @@ function normalizeTargetDraft(target: TargetConfig, zones: readonly ZoneDraft[])
   const asns = splitList(target.asn);
   const zone = target.zoneIndex === null ? undefined : zones[target.zoneIndex];
   const baseDomain = zone?.baseDomain.trim() || target.baseDomain.trim();
-  const prefix = target.prefix.trim();
+  const prefix = targetPrefix(target, target.baseDomain.trim() || baseDomain);
   return {
     ...target,
     domain: (zone?.baseDomain ? composeDomain(prefix, baseDomain) : target.domain.trim()).toLowerCase(),
@@ -717,9 +710,10 @@ function normalizeTargetDraft(target: TargetConfig, zones: readonly ZoneDraft[])
   };
 }
 
-function createEmptyTarget(defaultMinActive: string): TargetConfig {
+function createEmptyTarget(defaultMinActive: string): TargetDraft {
   const minActive = Number.parseInt(defaultMinActive, 10);
   return {
+    sourceKey: null,
     mode: 'A',
     domain: '',
     baseDomain: '',
@@ -736,7 +730,7 @@ function createEmptyTarget(defaultMinActive: string): TargetConfig {
   };
 }
 
-function mergeTarget(target: TargetConfig, partial: Partial<TargetConfig>): TargetConfig {
+function mergeTarget<T extends TargetConfig>(target: T, partial: Partial<TargetConfig>): T {
   const merged = { ...target, ...partial };
   const countries = partial.country === undefined ? merged.countries : splitList(merged.country);
   const asns = partial.asn === undefined ? merged.asns : splitList(merged.asn);
@@ -750,7 +744,7 @@ function mergeTarget(target: TargetConfig, partial: Partial<TargetConfig>): Targ
   };
 }
 
-function withoutZone(target: TargetConfig, index: number, remaining: number): TargetConfig {
+function withoutZone<T extends TargetConfig>(target: T, index: number, remaining: number): T {
   return { ...target, zoneIndex: target.zoneIndex === index ? (remaining > 0 ? 0 : null)
     : target.zoneIndex !== null && target.zoneIndex > index ? target.zoneIndex - 1 : target.zoneIndex };
 }

@@ -1143,6 +1143,7 @@ body {
         }
         .page-panel { display: none; }
         .page-panel.active { display: block; }
+        #page-config { min-width: 0; margin: 0; padding: 0; border: 0; }
         .toast {
             position: fixed;
             right: 18px;

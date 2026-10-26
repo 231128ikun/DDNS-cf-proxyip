@@ -6,6 +6,9 @@ import { createUiFixture, serveUiFixture, UI_REFERENCE_REF } from './ui-fixture.
 import { auditConfigFlow } from './ui-config-flow.mjs';
 import { auditDashboardFlow, auditTargetStartup } from './ui-dashboard-flow.mjs';
 import { auditOrderFlow, auditOrderEdges } from './ui-order-flow.mjs';
+import { auditConfigTiming } from './ui-config-timing.mjs';
+import { auditOrderRecovery } from './ui-order-recovery.mjs';
+import { auditPoolTiming } from './ui-pool-timing.mjs';
 
 const args = process.argv.slice(2);
 const flag = (key, fallback) => args.includes(`--${key}`) ? args[args.indexOf(`--${key}`) + 1] : fallback;
@@ -121,8 +124,12 @@ function writeReport(results, fatal) {
     coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
       ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
         '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '重构版排序的 Escape、焦点约束与归还、固定系统池',
-        '重构版 24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '重构版配置延迟返回时首次检测非 443 端口'] : [])],
-    limits: ['布局断言和人工截图对照不等于整站像素等价', '虚构数据与本地 API 替身，未验证真实部署和 Cloudflare 写入',
+        '重构版 24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '重构版配置延迟返回时首次检测非 443 端口',
+        '重构版共享配置失败恢复、保存期间完整锁定、保存后新草稿与目标缓存更新', '重构版删除前项并改名后保持目标行选择与记录查询',
+        '重构版首次配置就绪前检测禁用与配置并发执行', '重构版绑定串行保存、部分映射更新与连续失败时保留确认缓存',
+        '重构版真实 Worker 新建池后保持选择、回读失败保留新池与只读重试',
+        '重构版延迟排序分块与中断弹窗互斥', '重构版排序写入成功、连续回读失败仍保留列表与只读重试；等待 HTTP 请求实际完成及成功'] : [])],
+    limits: ['布局断言和人工截图对照不等于整站像素等价', '配置、绑定与池创建读取使用真实 Worker 和内存 KV，探测、DNS 与排序保存使用本地替身；未验证真实部署和 Cloudflare 写入',
       '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权不在等价覆盖范围', '排序弹窗补充 Escape 和焦点约束，未复制 main 缺少键盘约束的行为'],
     ...(fatal ? { fatal } : {}), results };
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
@@ -230,6 +237,21 @@ async function run() {
             failures.push(`${session.name} 配置流程：${error.message}; ${state}`);
           }
           if (session.name === 'current') {
+            try {
+              const timingFailures = await auditConfigTiming(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...timingFailures.map(message => `current 配置时序：${message}`));
+            } catch (error) { failures.push(`current 配置时序：${error.message}`); }
+            try {
+              const poolFailures = await auditPoolTiming(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...poolFailures.map(message => `current 池与绑定时序：${message}`));
+            } catch (error) { failures.push(`current 池与绑定时序：${error.message}`); }
+            try {
+              const recoveryFailures = await auditOrderRecovery(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...recoveryFailures.map(message => `current 排序恢复：${message}`));
+            } catch (error) { failures.push(`current 排序恢复：${error.message}`); }
             try {
               const startupFailures = await auditTargetStartup(cdp, session.sessionId, server.base, server.requests, server.fixture);
               failures.push(...startupFailures.map((message) => `current 首屏流程：${message}`));

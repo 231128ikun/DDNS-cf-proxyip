@@ -10,6 +10,7 @@ import type { TargetStatusView } from '../state/target-status';
 import { Icon, type IconName } from './icon';
 import { RecordBadge } from './record-badge';
 import { StatusOverview } from './status-overview';
+import { ResourceFeedback } from './resource-feedback';
 
 /** IP 池写操作的忙碌标记：比起给每个按钮单独维护 loading 状态更省代码。 */
 export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
@@ -51,6 +52,7 @@ export interface DashboardActions {
   readonly bindPool: (key: string, poolKey: string) => void;
   readonly openBindingOrder: () => void;
   readonly refreshBindings: () => void;
+  readonly refreshPools: () => void;
   readonly addRecord: (value: string) => Promise<boolean>;
   readonly deleteRecord: (recordId: string, address?: string) => void;
   readonly runMaintenance: () => void;
@@ -63,6 +65,7 @@ interface DashboardPageProps {
   readonly lookup: string;
   readonly ipText: string;
   readonly probeConfigured: boolean;
+  readonly configReady: boolean;
   readonly filterText: string;
   readonly remoteUrl: string;
   readonly poolKey: string;
@@ -73,6 +76,8 @@ interface DashboardPageProps {
   readonly consoleLogs: readonly ConsoleLogEntry[];
   readonly batchProgressState: PoolCheckProgressState | null;
   readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly bindingBusy: boolean;
+  readonly targetKeys: readonly string[];
   readonly targetStatus: RequestState<TargetStatusView>;
   readonly selectedTargetKey: string | null;
   readonly targetPort: number | 'any';
@@ -101,6 +106,7 @@ export function DashboardPage({
   lookup,
   ipText,
   probeConfigured,
+  configReady,
   filterText,
   remoteUrl,
   poolKey,
@@ -111,6 +117,8 @@ export function DashboardPage({
   consoleLogs,
   batchProgressState,
   bindings,
+  bindingBusy,
+  targetKeys,
   targetStatus,
   selectedTargetKey,
   targetPort,
@@ -164,6 +172,7 @@ export function DashboardPage({
               </div>
             </div>
 
+            <ResourceFeedback state={pools} id="retry-pools" onRetry={actions.refreshPools} />
             <div class="ip-content-area">
               <div class="toolbar-row mb-2">
                 <input
@@ -264,6 +273,7 @@ export function DashboardPage({
                   class={checkingBatch ? 'btn btn-danger' : 'btn btn-primary'}
                   type="button"
                   aria-label={checkingBatch ? '停止批量检测' : '批量检测清洗输入框中的 IP'}
+                  disabled={!checkingBatch && !configReady}
                   onClick={checkingBatch ? actions.stopBatch : actions.checkBatch}
                 >
                   <Icon name={checkingBatch ? 'stop' : 'activity'} /> {checkingBatch ? '停止检测' : '检测'}
@@ -302,7 +312,7 @@ export function DashboardPage({
               )}
             </div>
           </div>
-          <DomainBindingsCard bindings={bindings} pools={pools} actions={actions} />
+          <DomainBindingsCard bindings={bindings} pools={pools} busy={bindingBusy} targetKeys={targetKeys} actions={actions} />
         </div>
 
         <div class="col-lg-5">
@@ -450,13 +460,19 @@ function consoleToneIcon(tone: ConsoleTone): string {
 function DomainBindingsCard({
   bindings,
   pools,
+  busy,
+  targetKeys,
   actions,
 }: {
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly pools: RequestState<PoolsResponse>;
+  readonly busy: boolean;
+  readonly targetKeys: readonly string[];
   readonly actions: DashboardActions;
 }) {
   return (
+    <>
+    <ResourceFeedback state={bindings} id="retry-bindings" onRetry={actions.refreshBindings} />
     <details class="card p-4 mb-3 domain-binding-card">
       <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
         <div class="domain-binding-title">
@@ -484,7 +500,7 @@ function DomainBindingsCard({
             type="button"
             aria-label="刷新域名池绑定"
             title="刷新域名池绑定"
-            disabled={bindings.status === 'loading'}
+            disabled={bindings.status === 'loading' || (bindings.status === 'ready' && bindings.refreshing)}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -496,7 +512,6 @@ function DomainBindingsCard({
         </div>
       </summary>
       {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
-      {bindings.status === 'error' && <p class="text-danger small mb-0">{bindings.message}</p>}
       {bindings.status === 'ready' && (
         bindings.data.items.length === 0 ? (
           <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
@@ -522,7 +537,8 @@ function DomainBindingsCard({
                       <select
                         class="form-select form-select-sm domain-binding-select"
                         value={item.poolKey}
-                        disabled={!item.enabled}
+                        disabled={busy || !item.enabled || !targetKeys.includes(item.key)}
+                        aria-busy={busy}
                         aria-label={`${item.domain} 绑定的 IP 池`}
                         onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
                       >
@@ -539,6 +555,7 @@ function DomainBindingsCard({
         )
       )}
     </details>
+    </>
   );
 }
 

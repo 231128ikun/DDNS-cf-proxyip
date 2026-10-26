@@ -1,4 +1,4 @@
-import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
+import type { DomainBindingItem, DomainBindingsResponse } from '../../../src/contracts/maintenance';
 import type { HealthResponse } from '../../../src/contracts/probe';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
@@ -9,6 +9,7 @@ interface HeroProps {
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly selectedTargetKey: string | null;
   readonly targetPort: number | 'any';
+  readonly targetChoices: readonly Pick<DomainBindingItem, 'key' | 'domain' | 'mode'>[];
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
   readonly onSelectTarget: (key: string | null) => void;
@@ -20,6 +21,7 @@ export function Hero({
   bindings,
   selectedTargetKey,
   targetPort,
+  targetChoices,
   usageOpen,
   onToggleUsage,
   onSelectTarget,
@@ -62,7 +64,7 @@ export function Hero({
       <div class="domain-selector">
         <label class="target-summary">
           <span id="current-target-summary-content">
-            <TargetSummary state={bindings} selectedKey={selectedTargetKey} port={targetPort} />
+            <TargetSummary state={bindings} selectedKey={selectedTargetKey} port={targetPort} targetChoices={targetChoices} />
           </span>
           <select
             class="target-select-overlay"
@@ -70,8 +72,8 @@ export function Hero({
             value={selectedTargetKey ?? ''}
             onChange={(event) => onSelectTarget(event.currentTarget.value || null)}
           >
-            {bindings.status === 'ready' && bindings.data.items.length > 0 ? (
-              bindings.data.items.map((item) => (
+            {targetChoices.length > 0 ? (
+              targetChoices.map((item) => (
                 <option key={item.key} value={item.key}>
                   {item.domain} - {item.mode === 'TXT' ? 'TXT' : 'A/AAAA'}
                 </option>
@@ -81,7 +83,7 @@ export function Hero({
             )}
           </select>
         </label>
-        {bindings.status === 'ready' && bindings.data.items.length === 0 && (
+        {bindings.status === 'ready' && targetChoices.length === 0 && (
           <button class="btn btn-sm btn-outline-primary mt-2" type="button" onClick={onOpenConfig}>
             前往配置中心添加
           </button>
@@ -101,10 +103,12 @@ function TargetSummary({
   state,
   selectedKey,
   port,
+  targetChoices,
 }: {
   readonly state: RequestState<DomainBindingsResponse>;
   readonly selectedKey: string | null;
   readonly port: number | 'any';
+  readonly targetChoices: HeroProps['targetChoices'];
 }) {
   if (state.status === 'loading' || state.status === 'idle') {
     return (
@@ -132,7 +136,7 @@ function TargetSummary({
     );
   }
 
-  const item = state.data.items.find((candidate) => candidate.key === selectedKey) ?? state.data.items[0];
+  const item = targetChoices.find((candidate) => candidate.key === selectedKey) ?? targetChoices[0];
   if (!item) {
     return (
       <>
