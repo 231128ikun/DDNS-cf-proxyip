@@ -16,7 +16,9 @@ import type {
 } from '../../../src/contracts/pool';
 import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
-import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSettings } from '../../../src/contracts/runtime-settings';
+import { DEFAULT_RUNTIME_SETTINGS, SETTINGS_LIMITS } from '../../../src/contracts/runtime-settings';
+import { readClampedInteger } from '../../../src/contracts/parse';
+import { mapWithConcurrency } from '../../../src/util/concurrency';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
@@ -69,20 +71,20 @@ export class ApiClient {
     concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS,
   ): Promise<PoolCheckResponse> {
     const { targets, invalid } = parsePoolCheckTargets(text);
-    const itemGroups: Array<readonly PoolCheckItemResponse[]> = new Array(targets.length);
     let completed = 0;
     let total = targets.length;
 
-    const limit = parseRuntimeSettings({ CONCURRENT_CHECKS: concurrency }).CONCURRENT_CHECKS;
-    await mapWithLimit(targets, limit, async (target, index) => {
+    const { min, max } = SETTINGS_LIMITS.CONCURRENT_CHECKS;
+    const limit = readClampedInteger(concurrency, DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS, min, max);
+    const itemGroups = await mapWithConcurrency(targets, limit, async (target) => {
       if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
       const checked = await this.checkPoolTarget(target, signal);
-      itemGroups[index] = checked;
       total += checked.length - 1;
       for (const item of checked) {
         completed += 1;
         onProgress?.({ type: 'progress', completed, total, item });
       }
+      return checked;
     });
     const items = itemGroups.flat();
 
@@ -362,21 +364,4 @@ function parsePoolCheckTargets(text: string): {
     targets.push({ entry: line.entry, target, sourceLine: line.raw });
   }
   return { targets, invalid };
-}
-
-async function mapWithLimit<T>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      const item = items[index];
-      cursor += 1;
-      if (item !== undefined) await task(item, index);
-    }
-  });
-  await Promise.all(workers);
 }
