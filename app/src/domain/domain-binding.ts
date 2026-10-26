@@ -5,7 +5,7 @@ import type { ManagedTarget } from './managed-target';
  * 域名池绑定 key 的唯一格式来源：`域名|模式`。
  * 旧 KV 里可能只有小写域名单键，读取时一并兼容，写入时统一成标准格式。
  */
-export function bindingKey(target: ManagedTarget): string {
+export function bindingKey(target: Pick<ManagedTarget, 'domain' | 'mode'>): string {
   return `${normalizeBindingDomain(target.domain)}|${target.mode}`;
 }
 
@@ -23,16 +23,6 @@ export function resolvePoolKey(mapping: Readonly<Record<string, string>>, target
   const key = bindingKey(target);
   const mapped = mapping[key] ?? mapping[key.toLowerCase()] ?? mapping[key.slice(0, key.indexOf('|'))];
   return mapped && isUserPoolKey(mapped) ? mapped : DEFAULT_POOL_KEY;
-}
-
-/** 显示顺序用的是同一套 key，缺失或未知项忽略，未列出的目标追加在末尾。 */
-export function sortByBindingOrder<T extends { readonly key: string }>(
-  items: readonly T[],
-  order: readonly string[],
-): readonly T[] {
-  if (order.length === 0) return items;
-  const rank = new Map(order.map((key, index) => [key, index]));
-  return [...items].sort((left, right) => (rank.get(left.key) ?? order.length) - (rank.get(right.key) ?? order.length));
 }
 
 function normalizeBindingDomain(domain: string): string {

@@ -1,6 +1,7 @@
 import { getPoolFixedName, isUserPoolKey } from '../contracts/pool';
 import type { DomainBindingItem, DomainBindingsResponse } from '../contracts/maintenance';
-import { bindingKey, normalizeBindingKey, resolvePoolKey, sortByBindingOrder } from '../domain/domain-binding';
+import { bindingKey, normalizeBindingKey, resolvePoolKey } from '../domain/domain-binding';
+import { sortByKeyOrder } from '../util/key-order';
 import type { DomainBindingRepository } from '../ports/domain-binding-repository';
 import type { MaintenanceSource } from '../ports/maintenance-source';
 
@@ -33,7 +34,7 @@ export class DomainBindings {
       };
     });
     // 显示顺序只影响面板排序，不影响维护执行顺序。
-    return { items: sortByBindingOrder(items, await this.repository.readOrder()) };
+    return { items: sortByKeyOrder(items, await this.repository.readOrder()) };
   }
 
   async save(value: unknown): Promise<void> {
