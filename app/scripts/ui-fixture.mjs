@@ -28,7 +28,8 @@ export function createUiFixture() {
     ? [{ id: 'fixture-a', type: 'A', name: target.domain, content: '203.0.113.10' },
       { id: 'fixture-aaaa', type: 'AAAA', name: target.domain, content: '2001:db8::10' }]
     : [{ id: 'fixture-txt', type: 'TXT', name: target.domain, content: '"203.0.113.10:443,[2001:db8::10]:8443"' }]]));
-  return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false, probeDelay: 0, configDelay: 0 };
+  return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
+    failOrderSave: null, orderSaveDelay: 0, probeDelay: 0, configDelay: 0 };
 }
 
 export function renderReference(config, ref = UI_REFERENCE_REF) {
@@ -84,6 +85,29 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
       }
       if (url.pathname === '/api/pools') return json({ pools });
       if (url.pathname === '/api/domain-bindings') return json(bindings);
+      const poolOrder = ['/api/pools/order', '/api/save-pool-order'].includes(url.pathname);
+      const bindingOrder = ['/api/domain-bindings/order', '/api/save-domain-pool-order'].includes(url.pathname);
+      if ((poolOrder || bindingOrder) && ['PUT', 'POST'].includes(request.method)) {
+        if (fixture.orderSaveDelay) await new Promise(resolve => setTimeout(resolve, fixture.orderSaveDelay));
+        const kind = poolOrder ? 'pools' : 'bindings';
+        if (fixture.failOrderSave === kind) {
+          fixture.failOrderSave = null;
+          return json({ success: false, error: '模拟排序保存失败' }, url.pathname.includes('/save-') ? 200 : 500);
+        }
+        const items = poolOrder ? fixture.pools : fixture.bindings.items;
+        const order = input.order;
+        if (!Array.isArray(order) || order.length !== items.length || new Set(order).size !== items.length
+          || order.some(key => !items.some(item => item.key === key))) {
+          return json({ success: false, error: '排序必须完整保留原有条目' }, url.pathname.includes('/save-') ? 200 : 400);
+        }
+        const sorted = order.map(key => items.find(item => item.key === key));
+        if (poolOrder) fixture.pools = sorted;
+        else fixture.bindings.items = sorted;
+        return json({ ok: true, success: true, pools: fixture.pools.map(item => item.key),
+          poolNames: Object.fromEntries(fixture.pools.map(item => [item.key, item.name])),
+          mapping: Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
+          domainPoolOrder: fixture.bindings.items.map(item => item.key) });
+      }
       if (['/api/check', '/api/check-ip'].includes(url.pathname)) {
         if (fixture.probeDelay) await new Promise((resolve) => setTimeout(resolve, fixture.probeDelay));
         const address = input.proxyip ?? url.searchParams.get('ip');

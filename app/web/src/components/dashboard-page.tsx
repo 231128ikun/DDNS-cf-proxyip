@@ -43,14 +43,13 @@ export interface DashboardActions {
   readonly removeLines: () => void;
   readonly createPool: () => void;
   readonly renamePool: () => void;
-  readonly movePool: (delta: number) => void;
+  readonly openPoolOrder: () => void;
   readonly deletePool: () => void;
   readonly cleanPool: () => void;
   readonly restoreTrash: () => void;
   readonly clearTrash: () => void;
   readonly bindPool: (key: string, poolKey: string) => void;
-  /** 上/下移一条绑定；顺序由服务端整体校验后保存。 */
-  readonly moveBinding: (index: number, delta: number) => void;
+  readonly openBindingOrder: () => void;
   readonly refreshBindings: () => void;
   readonly addRecord: (value: string) => Promise<boolean>;
   readonly deleteRecord: (recordId: string, address?: string) => void;
@@ -338,8 +337,7 @@ export function DashboardPage({
 }
 
 /**
- * IP 池的六个动作收进一个菜单：原来一排纯图标按钮既挤又难认，
- * 改成"文字 + 小图标"后既可读也留出了键盘可达的名称。
+ * 池操作共用一张菜单，次级动作保留文字名称。
  */
 function PoolActionMenu({
   busy,
@@ -379,8 +377,7 @@ function PoolActionMenu({
   const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
     ['plus', '新建池', false, false, actions.createPool],
     ['settings', '重命名当前池', true, false, actions.renamePool],
-    ['up', '上移当前池', true, false, () => actions.movePool(-1)],
-    ['down', '下移当前池', true, false, () => actions.movePool(1)],
+    ['up', '自定义池排序', false, false, actions.openPoolOrder],
     ['refresh', '一键洗库', true, false, actions.cleanPool],
     ['trash', '删除当前池', true, true, actions.deletePool],
   ];
@@ -388,6 +385,7 @@ function PoolActionMenu({
   return (
     <div class="action-menu" ref={container}>
       <button
+        id="pool-action-trigger"
         class="btn btn-sm btn-outline-secondary action-menu-trigger"
         type="button"
         aria-haspopup="menu"
@@ -458,8 +456,6 @@ function DomainBindingsCard({
   readonly pools: RequestState<PoolsResponse>;
   readonly actions: DashboardActions;
 }) {
-  const [sortingBindings, setSortingBindings] = useState(false);
-
   return (
     <details class="card p-4 mb-3 domain-binding-card">
       <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
@@ -468,18 +464,19 @@ function DomainBindingsCard({
           {bindings.status === 'ready' && <span class="text-secondary small">{bindings.data.items.length} 个目标</span>}
         </div>
         <div class="domain-binding-actions">
-          {bindings.status === 'ready' && bindings.data.items.length > 1 && (
+          {bindings.status === 'ready' && (
             <button
-              class={`btn btn-sm btn-outline-primary${sortingBindings ? ' active' : ''}`}
+              id="domain-order-trigger"
+              class="btn btn-sm btn-outline-primary"
               type="button"
-              aria-pressed={sortingBindings}
+              aria-haspopup="dialog"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                setSortingBindings((current) => !current);
+                actions.openBindingOrder();
               }}
             >
-              {sortingBindings ? '完成排序' : '调整顺序'}
+              调整顺序
             </button>
           )}
           <button
@@ -505,16 +502,15 @@ function DomainBindingsCard({
           <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
         ) : (
           <div class="domain-binding-table-wrap">
-            <table class={`table table-sm mb-0${sortingBindings ? ' binding-sorting' : ''}`}>
+            <table class="table table-sm mb-0">
               <thead>
                 <tr>
                   <th>域名</th>
                   <th>IP 池</th>
-                  {sortingBindings && <th class="domain-binding-order-col">顺序</th>}
                 </tr>
               </thead>
               <tbody>
-                {bindings.data.items.map((item, index) => (
+                {bindings.data.items.map(item => (
                   <tr key={item.key}>
                     <td>
                       <div class="domain-binding-domain">
@@ -535,32 +531,6 @@ function DomainBindingsCard({
                         ))}
                       </select>
                     </td>
-                    {sortingBindings && (
-                      <td class="domain-binding-order-col">
-                        <div class="domain-binding-order-actions">
-                          <button
-                            type="button"
-                            class="binding-order-btn"
-                            title={`上移 ${item.domain}`}
-                            aria-label={`上移 ${item.domain}`}
-                            disabled={index === 0}
-                            onClick={() => actions.moveBinding(index, -1)}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            class="binding-order-btn"
-                            title={`下移 ${item.domain}`}
-                            aria-label={`下移 ${item.domain}`}
-                            disabled={index === bindings.data.items.length - 1}
-                            onClick={() => actions.moveBinding(index, 1)}
-                          >
-                            ↓
-                          </button>
-                        </div>
-                      </td>
-                    )}
                   </tr>
                 ))}
               </tbody>

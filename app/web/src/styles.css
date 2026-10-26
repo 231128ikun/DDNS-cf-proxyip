@@ -4,6 +4,7 @@
   --color-primary-border: #d8dce3;
   --color-primary-alpha: rgba(0, 122, 255, 0.24);
   --color-hover-overlay: rgba(0, 0, 0, 0.05);
+  --color-modal-overlay: rgba(0, 0, 0, 0.5);
   --color-primary-alpha-soft: rgba(0, 122, 255, 0.1);
 
   --color-success: #167d3f;
@@ -67,6 +68,7 @@
   --font-size-xs: 12px;
   --font-size-sm: 14px;
   --font-size-md: 16px;
+  --font-size-lg: 18px;
   --font-size-xxl: 24px;
   --font-size-console: 13px;
   --font-size-data: 11px;
@@ -76,6 +78,10 @@
   --control-height: 44px;
   --control-height-sm: 41px;
   --control-height-compact: 32px;
+  --modal-width: 400px;
+  --order-modal-width: 520px;
+  --order-list-max-height: 360px;
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.3);
   --pool-selector-width: 160px;
   --exit-details-width: 500px;
   --exit-details-width-compact: 480px;
@@ -905,51 +911,6 @@ body {
             width: 100%;
             min-width: 0;
         }
-        /* 排序模式多出一列：域名/池列等宽，顺序列固定宽度，避免与默认两列规则冲突。 */
-        .domain-binding-table-wrap .table.binding-sorting th:first-child,
-        .domain-binding-table-wrap .table.binding-sorting td:first-child {
-            width: 48%;
-        }
-        .domain-binding-table-wrap .table.binding-sorting th:last-child,
-        .domain-binding-table-wrap .table.binding-sorting td:last-child {
-            width: 96px;
-        }
-        .domain-binding-order-col {
-            text-align: center;
-        }
-        .domain-binding-order-actions {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: var(--space-1);
-        }
-        .binding-order-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 32px;
-            height: 32px;
-            padding: 0;
-            border: 1px solid var(--color-border-strong);
-            border-radius: 9px;
-            background: var(--color-surface);
-            color: var(--color-text);
-            cursor: pointer;
-        }
-        .binding-order-btn:hover:not(:disabled) {
-            border-color: var(--color-primary);
-            color: var(--color-primary-strong);
-        }
-        .binding-order-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .binding-order-btn .ui-icon {
-            width: 15px;
-            height: 15px;
-            flex-basis: 15px;
-        }
-
         .maintenance-summary {
             max-height: 180px;
             overflow: auto;
@@ -1174,7 +1135,9 @@ body {
 }
         .nav-tab:focus-visible,
         .guide-toggle:focus-visible,
-        .btn:focus-visible {
+        .btn:focus-visible,
+        .order-move-btn:focus-visible,
+        .custom-modal-buttons button:focus-visible {
             outline: 2px solid var(--color-primary);
             outline-offset: 2px;
         }
@@ -1201,11 +1164,11 @@ body {
         }
         .toast.success { background: var(--color-success-strong); }
         .toast.error { background: var(--color-danger-strong); }
-        /* 批量检测中断确认弹窗：与 main 的“检测已中断”交互一致，配色走语义变量。 */
+        /* 排序与批量中断弹窗共用视觉语义。 */
         .custom-modal-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.5);
+            background: var(--color-modal-overlay);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1216,9 +1179,11 @@ body {
             background: var(--color-surface);
             border-radius: var(--radius-xl);
             padding: var(--space-9);
-            max-width: 400px;
+            max-width: var(--modal-width);
+            max-height: calc(100dvh - var(--space-7) * 2);
+            overflow-y: auto;
             width: 90%;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            box-shadow: var(--shadow-modal);
             animation: modal-in 0.2s ease-out;
         }
         @keyframes modal-in {
@@ -1226,9 +1191,9 @@ body {
             to { opacity: 1; transform: scale(1); }
         }
         .custom-modal-title {
-            font-size: 18px;
+            font-size: var(--font-size-lg);
             font-weight: 600;
-            margin-bottom: var(--space-7);
+            margin: 0 0 var(--space-7);
             color: var(--color-text);
         }
         .custom-modal-stats {
@@ -1250,19 +1215,32 @@ body {
         }
         .custom-modal-buttons button {
             flex: 1;
-            min-height: 40px;
+            min-height: var(--control-height-sm);
             padding: var(--space-5) var(--space-8);
             border-radius: var(--radius-md);
             border: none;
             font-weight: 600;
-            font-size: 14px;
+            font-size: var(--font-size-sm);
             cursor: pointer;
             transition: background 0.2s;
         }
-        .custom-modal-buttons .btn-continue { background: var(--color-primary); color: var(--color-inverse); }
-        .custom-modal-buttons .btn-continue:hover { background: var(--color-primary-strong); }
+        .custom-modal-buttons .btn-continue { background: var(--color-primary-strong); color: var(--color-inverse); }
         .custom-modal-buttons .btn-abandon { background: var(--color-surface-subtle); color: var(--color-text); }
         .custom-modal-buttons .btn-abandon:hover { background: var(--color-border); }
+        .pool-order-modal { max-width: var(--order-modal-width); display: flex; flex-direction: column; }
+        .pool-order-hint { color: var(--color-text-muted); font-size: var(--font-size-sm); margin: 0 0 var(--space-7); flex-shrink: 0; }
+        .pool-order-list { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; max-height: var(--order-list-max-height); overflow-y: auto; margin-bottom: var(--space-7); }
+        .pool-order-item { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface-subtle); }
+        .pool-order-index { display: grid; place-items: center; flex: 0 0 var(--space-10); height: var(--space-10); border-radius: var(--radius-pill); background: var(--color-surface-muted); font-size: var(--font-size-xs); font-weight: 600; }
+        .pool-order-name { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; min-width: 0; }
+        .pool-order-name strong { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pool-order-name small { font-size: var(--font-size-xs); color: var(--color-text-muted); }
+        .pool-order-actions { display: flex; gap: var(--space-1); flex-shrink: 0; }
+        .order-move-btn { display: inline-flex; align-items: center; justify-content: center; width: var(--control-height-compact); height: var(--control-height-compact); padding: 0; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+        .order-move-btn:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary-strong); }
+        .order-move-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .pool-order-error { font-size: var(--font-size-sm); margin: 0 0 var(--space-5); overflow-wrap: anywhere; }
+        .pool-order-modal .custom-modal-title, .pool-order-modal .custom-modal-buttons { flex-shrink: 0; }
         .github-corner {
             position: fixed;
             top: 0;

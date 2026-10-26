@@ -4,7 +4,6 @@ export type IconName =
   | 'compass'
   | 'dashboard'
   | 'database'
-  | 'down'
   | 'download'
   | 'folder'
   | 'globe'
@@ -26,7 +25,6 @@ const ICONS: Record<IconName, string> = {
   compass: '🧭',
   dashboard: '📊',
   database: '📦',
-  down: '↓',
   download: '🌐',
   folder: '📂',
   globe: '🌐',

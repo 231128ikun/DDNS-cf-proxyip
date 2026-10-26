@@ -5,6 +5,7 @@ import { launchBrowser } from './ui-browser.mjs';
 import { createUiFixture, serveUiFixture, UI_REFERENCE_REF } from './ui-fixture.mjs';
 import { auditConfigFlow } from './ui-config-flow.mjs';
 import { auditDashboardFlow, auditTargetStartup } from './ui-dashboard-flow.mjs';
+import { auditOrderFlow, auditOrderEdges } from './ui-order-flow.mjs';
 
 const args = process.argv.slice(2);
 const flag = (key, fallback) => args.includes(`--${key}`) ? args[args.indexOf(`--${key}`) + 1] : fallback;
@@ -117,18 +118,23 @@ async function captureBindings(cdp, session, width, failures) {
 function writeReport(results, fatal) {
   const report = { reference: referenceRef, generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
     referenceDefects: [...new Set(results.flatMap((result) => result.sessions.flatMap((session) => session.referenceDefects ?? [])))],
-    coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器', '已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原', '重构版配置延迟返回时首次检测非 443 端口'],
+    coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
+      ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
+        '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '重构版排序的 Escape、焦点约束与归还、固定系统池',
+        '重构版 24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '重构版配置延迟返回时首次检测非 443 端口'] : [])],
     limits: ['布局断言和人工截图对照不等于整站像素等价', '虚构数据与本地 API 替身，未验证真实部署和 Cloudflare 写入',
-      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权不在等价覆盖范围', '域名池排序目前仍采用表内操作，main 的排序弹窗流程尚未对齐'],
+      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权不在等价覆盖范围', '排序弹窗补充 Escape 和焦点约束，未复制 main 缺少键盘约束的行为'],
     ...(fatal ? { fatal } : {}), results };
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
   const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-  const names = { dashboard: '运行面板', bindings: '域名池绑定展开', config: '配置中心', basics: '基础配置展开', 'zone-editor': '权限编辑器', 'target-editor': '管理域名编辑器' };
+  const names = { dashboard: '运行面板', bindings: '域名池绑定展开', 'bindings-order': '自定义绑定池排序', 'pools-order': '自定义池排序',
+    'bindings-order-long': '长域名排序边界', 'pools-order-long': '长池名称排序边界', config: '配置中心', basics: '基础配置展开', 'zone-editor': '权限编辑器', 'target-editor': '管理域名编辑器' };
   const content = results.map((result) => `<section><h2>${result.width}px · ${result.failures.length ? '存在差异' : '已覆盖检查通过'}</h2>
     ${result.failures.length ? `<ul>${result.failures.map((failure) => `<li>${escape(failure)}</li>`).join('')}</ul>` : ''}
     ${Object.entries(names).map(([state, title]) => `<details ${state === 'dashboard' ? 'open' : ''}><summary>${title}</summary><div class="pair">
       ${result.sessions.map((session) => `<figure><figcaption>${session.name === 'main' ? 'main 基准' : '重构实现'}</figcaption>
-        ${session.images?.[state] ? `<a href="${escape(session.images[state])}"><img src="${escape(session.images[state])}" alt="${escape(title)} ${session.name} ${result.width}px" loading="lazy"></a>` : '<p>未生成；见失败原因</p>'}</figure>`).join('')}</div></details>`).join('')}</section>`).join('');
+        ${session.images?.[state] ? `<a href="${escape(session.images[state])}"><img src="${escape(session.images[state])}" alt="${escape(title)} ${session.name} ${result.width}px" loading="lazy"></a>`
+          : state.endsWith('-long') && session.name === 'main' ? '<p>此边界只验证重构实现。</p>' : '<p>未生成；见执行范围或失败原因。</p>'}</figure>`).join('')}</div></details>`).join('')}</section>`).join('');
   writeFileSync(join(out, 'index.html'), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <title>DDNS Pro main 对照验收</title><style>body{margin:24px;font:15px/1.6 system-ui;color:#1d1d1f;background:#f5f5f7}h1{font-size:24px}section{margin:24px 0}details{background:white;margin:12px 0;padding:16px;border-radius:12px}summary{cursor:pointer;font-weight:600}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:12px 0;min-width:0}figcaption{font-weight:600}img{display:block;width:100%;height:auto;border:1px solid #ddd;box-sizing:border-box}code{overflow-wrap:anywhere}@media(max-width:640px){body{margin:12px}.pair{grid-template-columns:1fr}}</style>
     <h1>DDNS Pro main 对照验收</h1><p>基准提交：<code>${escape(referenceRef)}</code>。同一浏览器、同一视口、同一组虚构数据。点击图片可查看原尺寸。</p>
@@ -191,6 +197,14 @@ async function run() {
             failures.push(`${session.name} 解析流程：${error.message}`);
             await capture(cdp, session, width, 'dashboard-failure', failures);
           }
+          try {
+            const orderFailures = await auditOrderFlow(cdp, session.sessionId, session.name, server.requests, server.fixture,
+              state => capture(cdp, session, width, state, failures));
+            failures.push(...orderFailures.map(message => `${session.name} 排序流程：${message}`));
+          } catch (error) {
+            failures.push(`${session.name} 排序流程：${error.message}`);
+            await capture(cdp, session, width, 'order-failure', failures);
+          }
         }
         await cdp.until(session.sessionId, '!document.querySelector(".toast.show")');
         await cdp.click(session.sessionId, '.nav-tab[data-page="config"]');
@@ -220,6 +234,14 @@ async function run() {
               const startupFailures = await auditTargetStartup(cdp, session.sessionId, server.base, server.requests, server.fixture);
               failures.push(...startupFailures.map((message) => `current 首屏流程：${message}`));
             } catch (error) { failures.push(`current 首屏流程：${error.message}`); }
+            try {
+              const edgeFailures = await auditOrderEdges(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...edgeFailures.map(message => `current 排序边界：${message}`));
+            } catch (error) {
+              failures.push(`current 排序边界：${error.message}`);
+              await capture(cdp, session, width, 'order-edge-failure', failures);
+            }
           }
         }
         await cdp.send('Target.closeTarget', { targetId: session.targetId });

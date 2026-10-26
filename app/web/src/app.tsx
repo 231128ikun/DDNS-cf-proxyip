@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
-import { DEFAULT_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
+import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, getPoolFixedName, isUserPoolKey } from '../../src/contracts/pool';
 import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
@@ -19,11 +19,14 @@ import {
 } from './components/dashboard-page';
 import { Hero } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
+import { Modal } from './components/modal';
+import type { OrderRequest } from './components/order-dialog';
 import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatus, type TargetStatusView } from './state/target-status';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
+type OrderDialogComponent = typeof import('./components/order-dialog').OrderDialog;
 
 interface Toast {
   readonly message: string;
@@ -41,6 +44,8 @@ interface BatchInterrupt {
 export function App() {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
+  const [OrderDialog, setOrderDialog] = useState<OrderDialogComponent | null>(null);
+  const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [lookup, setLookup] = useState('');
   const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
@@ -66,6 +71,9 @@ export function App() {
   const activeLookup = useRef<AbortController | null>(null);
   const currentTargetKey = useRef(selectedTargetKey);
   currentTargetKey.current = selectedTargetKey;
+  const currentPage = useRef(page);
+  currentPage.current = page;
+  const openingOrder = useRef(false);
   const aliveSoFar = useRef(0);
   const startupLogged = useRef(false);
 
@@ -495,23 +503,34 @@ export function App() {
     });
   };
 
-  const handleMovePool = (delta: number): void => {
-    if (pools.status !== 'ready') {
-      notify('IP 池列表尚未就绪', 'error');
+  const openOrderDialog = async (kind: OrderRequest['kind']): Promise<void> => {
+    if (openingOrder.current) return;
+    const items = kind === 'pools'
+      ? pools.status === 'ready' ? pools.data.pools.filter(pool => NUMBERED_POOL_KEY_RE.test(pool.key))
+        .map(pool => ({ key: pool.key, name: pool.name, detail: getPoolFixedName(pool.key) })) : []
+      : bindings.status === 'ready' ? bindings.data.items
+        .map(item => ({ key: item.key, name: item.domain, detail: item.mode === 'TXT' ? 'TXT' : 'A/AAAA' })) : [];
+    if (items.length < 2) {
+      notify(kind === 'pools' ? '至少需要两个自定义池才能排序' : '至少需要两个管理域名才能排序', 'error');
       return;
     }
-    const order = pools.data.pools.map((pool) => pool.key);
-    const index = order.indexOf(poolKey);
-    const target = index + delta;
-    if (index < 0 || target < 0 || target >= order.length) {
-      notify(delta < 0 ? '已经在最前，无法上移' : '已经在最后，无法下移', 'error');
-      return;
+    openingOrder.current = true;
+    try {
+      const component = OrderDialog ?? (await import('./components/order-dialog')).OrderDialog;
+      if (currentPage.current !== 'dashboard') return;
+      setOrderDialog(() => component);
+      setOrderRequest({ kind, items });
+    } catch (error) {
+      notify(errorMessage(error), 'error');
+    } finally {
+      openingOrder.current = false;
     }
-    [order[index], order[target]] = [order[target]!, order[index]!];
-    void runPoolAction('pool-edit', async () => {
-      await client.savePoolOrder(order);
-      return '已调整池顺序';
-    });
+  };
+
+  const handleSavePoolOrder = async (order: readonly string[]): Promise<void> => {
+    await client.savePoolOrder([DEFAULT_POOL_KEY, ...order, TRASH_POOL_KEY]);
+    await refreshPools();
+    notify('池排序已保存');
   };
 
   const handleDeletePool = (): void => {
@@ -579,24 +598,10 @@ export function App() {
     }
   };
 
-  /** 排序只在面板显示层生效：先把本地列表换位，失败再回读服务端顺序。 */
-  const handleMoveBinding = async (index: number, delta: number): Promise<void> => {
-    if (bindings.status !== 'ready') return;
-    const next = index + delta;
-    if (next < 0 || next >= bindings.data.items.length) return;
-
-    const items = [...bindings.data.items];
-    const [moved] = items.splice(index, 1);
-    if (!moved) return;
-    items.splice(next, 0, moved);
-    patchBindings(() => ({ items }));
-
-    try {
-      await client.saveDomainBindingOrder(items.map((item) => item.key));
-    } catch (error) {
-      notify(errorMessage(error), 'error');
-      await refreshBindings();
-    }
+  const handleSaveBindingOrder = async (order: readonly string[]): Promise<void> => {
+    await client.saveDomainBindingOrder(order);
+    await refreshBindings();
+    notify('域名池绑定顺序已保存');
   };
   const handleRunMaintenance = (): void => {
     if (maintenanceBusy) return;
@@ -641,13 +646,13 @@ export function App() {
     removeLines: handleRemoveLines,
     createPool: handleCreatePool,
     renamePool: handleRenamePool,
-    movePool: handleMovePool,
+    openPoolOrder: () => void openOrderDialog('pools'),
     deletePool: handleDeletePool,
     cleanPool: handleCleanPool,
     restoreTrash: handleRestoreTrash,
     clearTrash: handleClearTrash,
     bindPool: handleBindPool,
-    moveBinding: (index, delta) => void handleMoveBinding(index, delta),
+    openBindingOrder: () => void openOrderDialog('bindings'),
     refreshBindings: () => void refreshBindings(),
     addRecord: handleAddRecord,
     deleteRecord: handleDeleteRecord,
@@ -724,32 +729,32 @@ export function App() {
           />
         </div>
         <div hidden={page !== 'config'}>
-        {ConfigPage ? (
-          <ConfigPage client={client} notify={notify} initialConfig={config} onReload={refreshConfig} />
-        ) : (
-          <p class="text-secondary text-center py-4">正在加载配置中心…</p>
-        )}
+          {ConfigPage ? (
+            <ConfigPage client={client} notify={notify} initialConfig={config} onReload={refreshConfig} />
+          ) : (
+            <p class="text-secondary text-center py-4">正在加载配置中心…</p>
+          )}
         </div>
       </div>
 
       <footer class="container text-center text-secondary small py-3">
         DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
       </footer>
+      {orderRequest && OrderDialog && <OrderDialog {...orderRequest}
+        onSave={orderRequest.kind === 'pools' ? handleSavePoolOrder : handleSaveBindingOrder}
+        onClose={() => setOrderRequest(null)} />}
       {batchInterrupt && (
-        <div class="custom-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="batch-interrupt-title">
-          <div class="custom-modal">
-            <div class="custom-modal-title" id="batch-interrupt-title">检测已中断</div>
-            <div class="custom-modal-stats">
-              <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
-              <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
-              <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
-            </div>
-            <div class="custom-modal-buttons">
-              <button class="btn-abandon" type="button" onClick={handleAbandonBatch}>放弃检测</button>
-              <button class="btn-continue" type="button" onClick={handleResumeBatch}>继续</button>
-            </div>
+        <Modal id="batch-interrupt-title" title="检测已中断">
+          <div class="custom-modal-stats">
+            <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
+            <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
+            <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
           </div>
-        </div>
+          <div class="custom-modal-buttons">
+            <button class="btn-abandon" type="button" onClick={handleAbandonBatch}>放弃检测</button>
+            <button class="btn-continue" type="button" onClick={handleResumeBatch}>继续</button>
+          </div>
+        </Modal>
       )}
       <div class={`toast${toast ? ` ${toast.type} show` : ''}`} role="status" aria-live="polite">
         {toast?.message}
