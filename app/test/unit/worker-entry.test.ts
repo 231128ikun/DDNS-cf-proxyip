@@ -20,6 +20,36 @@ async function request(path: string, init?: RequestInit, runtimeEnv: RuntimeEnv 
 }
 
 describe('发布 Worker 装配', () => {
+  it('keeps tokens with a shared Zone ID through a real client save and KV read', async () => {
+    const zones = [
+      { label: '根域', baseDomain: 'example.com', zoneId: 'shared-fixture-zone', apiKey: 'root-fixture-token' },
+      { label: '子域', baseDomain: 'child.example.com', zoneId: 'shared-fixture-zone', apiKey: 'child-fixture-token' },
+    ];
+    const store = new Map([['app_config', JSON.stringify({ zones })]]);
+    const kv = { get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => { store.set(key, value); } } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    const saved = await client.saveConfig({ zones: [...zones].reverse().map(zone => ({ ...zone, name: zone.label, apiKey: '' })) });
+    expect(saved.config.zones.map(zone => zone.hasApiKey)).toEqual([true, true]);
+    expect(JSON.parse(store.get('app_config')!).zones.map((zone: { apiKey: string }) => zone.apiKey))
+      .toEqual(['child-fixture-token', 'root-fixture-token']);
+    expect((await client.config()).config.zones.map(zone => zone.hasApiKey)).toEqual([true, true]);
+    expect([...store.keys()]).toEqual(['app_config']);
+  });
+
+  it('rejects an ambiguous masked zone update before writing KV', async () => {
+    const stored = JSON.stringify({ zones: [
+      { label: '根域', baseDomain: 'example.com', zoneId: 'shared-fixture-zone', apiKey: 'root-fixture-token' },
+      { label: '子域', baseDomain: 'child.example.com', zoneId: 'shared-fixture-zone', apiKey: 'child-fixture-token' },
+    ] });
+    const put = vi.fn();
+    const kv = { get: async (key: string) => key === 'app_config' ? stored : null, put } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    await expect(client.saveConfig({ zones: [{ name: '改名', label: '改名', baseDomain: 'renamed.example.com',
+      zoneId: 'shared-fixture-zone', apiKey: '' }] })).rejects.toMatchObject({ status: 400 });
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('keeps saved concurrency and DNS timeout when the client updates another runtime setting', async () => {
     const store = new Map([['app_config', JSON.stringify({ settings: { CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 } })]]);
     const kv = { get: async (key: string) => store.get(key) ?? null,

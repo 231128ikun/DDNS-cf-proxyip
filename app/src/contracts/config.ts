@@ -164,7 +164,9 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
   const base = previous ?? createDefaultConfig();
   // 旧 KV 与部分更新都只覆盖提供的字段，未提交的运行参数沿用已解析配置。
   const settings = parseRuntimeSettings({ ...base.settings, ...(asRecord(record.settings) ?? {}) });
-  const zones = Array.isArray(record.zones) ? parseZones(record.zones, base.zones) : base.zones;
+  const parsedZones = Array.isArray(record.zones) ? parseZones(record.zones, base.zones) : parseOk(base.zones);
+  if (!parsedZones.ok) return parsedZones;
+  const zones = parsedZones.value;
   const targets = Array.isArray(record.targets) ? parseTargets(record.targets, settings) : base.targets;
   const duplicate = findDuplicate(zones, targets);
   if (duplicate) return parseFail(duplicate);
@@ -188,32 +190,41 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
   });
 }
 
-function parseZones(values: readonly unknown[], previous: readonly ZoneConfig[]): readonly ZoneConfig[] {
-  return values
-    .slice(0, MAX_ZONES)
-    .map((value) => normalizeZone(value, previous))
-    .filter((zone): zone is ZoneConfig => zone !== null);
+function parseZones(values: readonly unknown[], previous: readonly ZoneConfig[]): ParseResult<readonly ZoneConfig[]> {
+  const zones: ZoneConfig[] = [];
+  for (const value of values.slice(0, MAX_ZONES)) {
+    const parsed = normalizeZone(value, previous);
+    if (!parsed.ok) return parsed;
+    if (parsed.value) zones.push(parsed.value);
+  }
+  return parseOk(zones);
 }
 
 function parseTargets(values: readonly unknown[], settings: RuntimeSettings): readonly TargetConfig[] {
   return values.slice(0, MAX_TARGETS).map((item) => normalizeTarget(item, settings)).filter((target): target is TargetConfig => target !== null);
 }
 
-function normalizeZone(value: unknown, previous: readonly ZoneConfig[]): ZoneConfig | null {
+function normalizeZone(value: unknown, previous: readonly ZoneConfig[]): ParseResult<ZoneConfig | null> {
   const record = asRecord(value);
-  if (!record) return null;
+  if (!record) return parseOk(null);
   const baseDomain = text(record.baseDomain, text(record.domain, '', 253), 253).replace(/^\.+|\.+$/g, '');
   const zoneId = text(record.zoneId, '', MAX_ZONE_ID_LENGTH);
   const label = text(record.label, text(record.name, baseDomain || zoneId || '未命名', 32), 32);
   // 面板不回传已保存的 Token；删除或排序后按区域身份保留，不能按数组位置串用凭据。
-  const matches = previous.filter((zone) => {
+  let matches = previous.filter((zone) => {
     if (zoneId && zone.zoneId) return zone.zoneId === zoneId;
     if (baseDomain && zone.baseDomain) return zone.baseDomain.toLowerCase() === baseDomain.toLowerCase();
     return !zoneId && !baseDomain && !zone.zoneId && !zone.baseDomain && zone.label === label;
   });
-  const apiKey = text(record.apiKey, '', MAX_SECRET_LENGTH) || (matches.length === 1 ? matches[0]!.apiKey : '');
-  if (!baseDomain && !zoneId && !apiKey) return null;
-  return { name: label, baseDomain, zoneId, apiKey, label };
+  const replacement = text(record.apiKey, '', MAX_SECRET_LENGTH);
+  if (matches.length > 1 && baseDomain) {
+    const domainMatches = matches.filter(zone => zone.baseDomain.toLowerCase() === baseDomain.toLowerCase());
+    if (domainMatches.length === 1) matches = domainMatches;
+  }
+  if (!replacement && matches.length > 1) return parseFail('已保存的权限 Token 无法唯一匹配，请填写 CF Key 后保存');
+  const apiKey = replacement || (matches.length === 1 ? matches[0]!.apiKey : '');
+  if (!baseDomain && !zoneId && !apiKey) return parseOk(null);
+  return parseOk({ name: label, baseDomain, zoneId, apiKey, label });
 }
 
 function normalizeTarget(value: unknown, settings: RuntimeSettings): TargetConfig | null {
