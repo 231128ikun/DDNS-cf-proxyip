@@ -16,6 +16,7 @@ import type {
 } from '../../../src/contracts/pool';
 import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
+import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSettings } from '../../../src/contracts/runtime-settings';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
@@ -28,9 +29,6 @@ export interface ApiClientOptions {
 export interface OkResponse {
   readonly ok: true;
 }
-
-/** 与 main 的 CONCURRENT_CHECKS 默认值一致；每个槽位同时只占用一个 Worker 请求。 */
-export const WEB_CHECK_CONCURRENCY = 32;
 
 export class ApiError extends Error {
   constructor(
@@ -68,13 +66,15 @@ export class ApiClient {
     text: string,
     signal?: AbortSignal,
     onProgress?: (event: PoolCheckProgressEvent) => void,
+    concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS,
   ): Promise<PoolCheckResponse> {
     const { targets, invalid } = parsePoolCheckTargets(text);
     const itemGroups: Array<readonly PoolCheckItemResponse[]> = new Array(targets.length);
     let completed = 0;
     let total = targets.length;
 
-    await mapWithLimit(targets, WEB_CHECK_CONCURRENCY, async (target, index) => {
+    const limit = parseRuntimeSettings({ CONCURRENT_CHECKS: concurrency }).CONCURRENT_CHECKS;
+    await mapWithLimit(targets, limit, async (target, index) => {
       if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
       const checked = await this.checkPoolTarget(target, signal);
       itemGroups[index] = checked;

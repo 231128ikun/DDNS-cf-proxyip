@@ -12,6 +12,8 @@ import { loadTargetStatus, MAX_CURRENT_STATUS_PROBES } from '../../web/src/state
 function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string) {
   const writes = vi.fn();
   const requests: { path: string; method: string; address?: string }[] = [];
+  let active = 0;
+  let peak = 0;
   const checkProxy = new CheckProxy({
     name: 'fixture',
     probe: async (target) => alive(target, { colo: 'SJC', latencyMs: 12, exitFamily: 'dual', exits: [
@@ -39,12 +41,28 @@ function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddre
     const address = typeof init?.body === 'string' ? (JSON.parse(init.body) as { proxyip: string }).proxyip : undefined;
     requests.push({ path, method: init?.method ?? 'GET', ...(address ? { address } : {}) });
     if (address === failAddress && failAddress) return Response.json({ error: 'fixture probe error' }, { status: 500 });
-    return app.request(path, init);
+    if (address) { active += 1; peak = Math.max(peak, active); }
+    const response = await app.request(path, init);
+    if (address) active -= 1;
+    return response;
   } });
-  return { client, requests, writes };
+  return { client, requests, writes, peak: () => peak };
 }
 
 describe('current DNS display through ApiClient and Worker routes', () => {
+  it('uses the configured browser concurrency for automatic current-record probing', async () => {
+    const records: DnsRecord[] = Array.from({ length: 6 }, (_, index) => ({
+      id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,
+    }));
+    const { client, peak } = setup(records);
+    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2);
+    expect(peak()).toBe(2);
+    expect(view.probes.map(item => item.address)).toEqual([
+      '203.0.113.1:2053', '203.0.113.2:2053', '203.0.113.3:2053',
+      '203.0.113.4:2053', '203.0.113.5:2053', '203.0.113.6:2053',
+    ]);
+  });
+
   it('probes A and AAAA records at the configured port and keeps both exits and Colo', async () => {
     const records: DnsRecord[] = [
       { id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' },

@@ -162,7 +162,7 @@ describe('web and Worker API contract', () => {
     }
   });
 
-  it('runs browser-scheduled targets through the real single-target Worker route', async () => {
+  it('runs configured browser concurrency through the real single-target Worker route', async () => {
     const checkProxy = new CheckProxy(new FakeProbeAdapter());
     const app = createHttpApp({
       checkTarget: new CheckTarget({
@@ -172,10 +172,17 @@ describe('web and Worker API contract', () => {
       version: 'contract-test',
     });
     let requestCount = 0;
+    let active = 0;
+    let peak = 0;
     const client = new ApiClient({
-      fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) => {
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
         requestCount += 1;
-        return app.request(String(input), init);
+        active += 1;
+        peak = Math.max(peak, active);
+        const response = await app.request(String(input), init);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        active -= 1;
+        return response;
       }) as typeof fetch,
     });
     const addresses = Array.from({ length: 5 }, (_, index) => `203.0.113.${index + 10}:443`);
@@ -183,9 +190,10 @@ describe('web and Worker API contract', () => {
 
     const report = await client.checkBatch(addresses.join('\n'), undefined, (event) => {
       progress.push(event.completed);
-    });
+    }, 2);
 
     expect(requestCount).toBe(5);
+    expect(peak).toBe(2);
     expect(progress).toEqual([1, 2, 3, 4, 5]);
     expect(report).toMatchObject({ total: 5, alive: 5, dead: 0, unknown: 0, invalid: [] });
     expect(report.items.map((item) => item.address)).toEqual(addresses);

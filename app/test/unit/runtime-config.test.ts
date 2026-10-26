@@ -1,12 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { createProbeAdapterFromConfig, loadEnvConfig } from '../../src/config/runtime';
-import { createDefaultConfig, toProbeConfig } from '../../src/contracts/config';
+import { createDefaultConfig, parseRuntimeSettings, toProbeConfig } from '../../src/contracts/config';
 import { parseProxyTarget } from '../../src/domain/proxy-target';
 
 const target = parseProxyTarget('203.0.113.10:443');
 if (!target) throw new Error('test target is invalid');
 
 describe('runtime configuration', () => {
+  it.each([
+    [{}, 32, 5_000],
+    [{ CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 }, 7, 9_000],
+    [{ CONCURRENT_CHECKS: 0, DOH_TIMEOUT: 10 }, 1, 1_000],
+    [{ CONCURRENT_CHECKS: 999, DOH_TIMEOUT: 90_000 }, 128, 30_000],
+    [{ CONCURRENT_CHECKS: 'bad', DOH_TIMEOUT: null }, 32, 5_000],
+  ])('retains and bounds the original browser and DNS settings: %j', (raw, concurrency, timeout) => {
+    expect(parseRuntimeSettings(raw)).toMatchObject({ CONCURRENT_CHECKS: concurrency, DOH_TIMEOUT: timeout });
+  });
+
+  it('uses environment browser and DNS settings only as configuration fallback', () => {
+    const config = loadEnvConfig({ CONCURRENT_CHECKS: '7', DOH_TIMEOUT: '9000' });
+    expect(config.settings).toMatchObject({ CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 });
+    expect(loadEnvConfig({ CONCURRENT_CHECKS: '999', DOH_TIMEOUT: '10' }).settings)
+      .toMatchObject({ CONCURRENT_CHECKS: 128, DOH_TIMEOUT: 1_000 });
+  });
+
   it('clamps the probe timeout and keeps the configured endpoint template', () => {
     const config = loadEnvConfig({
       CHECK_API: 'https://probe.example/check?proxyip={proxyip}',

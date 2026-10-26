@@ -64,12 +64,14 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   apiKey: 'Cloudflare API Token',
   tgToken: 'Telegram Bot Token',
 };
-const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string])[] = [
-  ['BACKEND_CONCURRENT_CHECKS', '后端检测并发', '维护和补货预检使用。'],
-  ['CHECK_TIMEOUT', '检测超时(ms)', '单次探针请求超时。'],
-  ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT 列表加载超时。'],
-  ['DEFAULT_MIN_ACTIVE', '默认最少可用数', '新建域名时使用的默认值。'],
-  ['MAX_TRASH_SIZE', '垃圾桶上限', '垃圾桶最多保留的条目数。'],
+const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
+  ['CONCURRENT_CHECKS', '检测并发', '浏览器批量检测和当前记录检测使用。', 'cfg-concurrent-checks'],
+  ['BACKEND_CONCURRENT_CHECKS', '后端检测并发', '维护和补货预检使用。', 'cfg-backend-concurrent'],
+  ['CHECK_TIMEOUT', '检测超时(ms)', '单次探针请求超时。', 'cfg-check-timeout'],
+  ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT 列表加载超时。', 'cfg-remote-timeout'],
+  ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询超时。', 'cfg-doh-timeout'],
+  ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新建域名时使用的默认值。', 'cfg-default-min-active'],
+  ['MAX_TRASH_SIZE', '垃圾桶上限', '垃圾桶最多保留的条目数。', 'cfg-max-trash-size'],
 ];
 
 export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPageProps) {
@@ -314,8 +316,8 @@ export function ConfigPage({ client, notify, initialConfig, onReload }: ConfigPa
             <TextField id="cfg-check-api-backup" label="备用检测 API" help="主接口异常时尝试备用接口，可留空。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="`txt@域名` 与域名解析探测使用的公共 DNS 接口。" value={form.dohApi} onValue={(value) => patch({ dohApi: value })} />
             <TextField id="cfg-project-url" label="项目地址" help="页脚和通知中展示，可留空。" value={form.projectUrl} onValue={(value) => patch({ projectUrl: value })} />
-            {SETTINGS_FIELDS.map(([key, label, help]) => (
-              <NumberField key={key} id={`cfg-${key}`} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
+            {SETTINGS_FIELDS.map(([key, label, help, id]) => (
+              <NumberField key={key} id={id} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
             ))}
             <SecretField id="cfg-api-token" label={SECRET_LABELS.apiKey} help="旧配置兼容项，优先用权限配置里的 Token。" configured={secrets.apiKey} value={drafts.apiKey} clearing={clearing.apiKey} onValue={(value) => setDrafts((current) => ({ ...current, apiKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, apiKey: !current.apiKey }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启通知时必填。" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />

@@ -7,11 +7,11 @@ import type {
 } from '../../ports/dns-lookup';
 import { createRequestTimeout } from '../../util/request-timeout';
 import { appFetch } from '../../util/fetch';
+import { parseRuntimeSettings } from '../../contracts/runtime-settings';
 
 /** IANA 记录类型编号，用于从 DoH JSON 响应里挑出需要的 Answer。 */
 const TYPE_CODES: Readonly<Record<DnsLookupType, number>> = { A: 1, AAAA: 28, TXT: 16 };
 
-const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_ANSWERS = 50;
 
 export interface DohLookupOptions {
@@ -32,7 +32,7 @@ export class DohLookup implements DnsLookup {
 
   constructor(options: DohLookupOptions) {
     this.endpoint = options.endpoint.trim();
-    this.timeoutMs = Math.max(1_000, Math.min(30_000, options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+    this.timeoutMs = parseRuntimeSettings({ DOH_TIMEOUT: options.timeoutMs }).DOH_TIMEOUT;
     this.fetchImpl = options.fetchImpl ?? appFetch;
   }
 

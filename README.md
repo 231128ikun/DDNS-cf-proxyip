@@ -168,6 +168,8 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | `CHECK_API` | 主 ProxyIP 检测接口 | 空 |
 | `CHECK_API_BACKUP` | 备用检测接口 | `https://checkapi.dvb.kdns.fr/?candidate=` |
 | `DOH_API` | 公共 DNS 查询接口，`txt@域名` 与域名解析探测使用 | `https://cloudflare-dns.com/dns-query` |
+| `CONCURRENT_CHECKS` | 浏览器批量与当前记录检测并发，范围 1–128 | `32` |
+| `DOH_TIMEOUT` | DoH 查询超时（毫秒），范围 1000–30000 | `5000` |
 | `TG_TOKEN` | Telegram Bot Token | 空 |
 | `TG_ID` | Telegram Chat ID | 空 |
 | `TG_ENABLED` | Telegram 通知开关 | `true` |
@@ -175,7 +177,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 > 公共备用检测 API 不保证长期可用，建议自行部署。批量清洗在首轮检测进行期间，失败项或接口异常项会立即在当前检测槽位内复检，不等待所有首轮项目结束；单项探测和维护仍在同一个检测任务内依次尝试主、备用接口。配置中心显式清空并保存主/备用接口后，该接口会被禁用；旧配置中缺少的字段仍使用环境默认值。
 
-> 批量检测沿用 main 的模型：浏览器按 32 个并发槽位逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。面板输入框仍保留用户粘贴的完整文本。
+> 批量检测沿用 main 的模型：浏览器按配置的 `CONCURRENT_CHECKS`（默认 32）逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。配置与保存仍使用原有 `app_config.settings`。
 
 ### 配置中心填写项
 

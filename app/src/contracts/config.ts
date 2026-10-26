@@ -1,6 +1,8 @@
 import type { ExitFilter, TargetMode } from '../domain/managed-target';
 import { normalizeAsn, normalizeCountry } from '../domain/pool-entry';
-import { asRecord, parseFail, parseOk, type ParseResult } from './parse';
+import { asRecord, parseFail, parseOk, readClampedInteger as integerValue, type ParseResult } from './parse';
+import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSettings, type RuntimeSettings } from './runtime-settings';
+export { DEFAULT_RUNTIME_SETTINGS, SETTINGS_LIMITS, parseRuntimeSettings, type RuntimeSettings } from './runtime-settings';
 
 export const MIN_PROBE_TIMEOUT_MS = 500;
 export const MAX_PROBE_TIMEOUT_MS = 30_000;
@@ -23,30 +25,6 @@ export interface ProbeConfig {
   readonly fallbackToNext: boolean;
   readonly timeoutMs: number;
 }
-
-export interface RuntimeSettings {
-  readonly BACKEND_CONCURRENT_CHECKS: number;
-  readonly CHECK_TIMEOUT: number;
-  readonly REMOTE_LOAD_TIMEOUT: number;
-  readonly DEFAULT_MIN_ACTIVE: number;
-  readonly MAX_TRASH_SIZE: number;
-}
-
-export const SETTINGS_LIMITS = {
-  BACKEND_CONCURRENT_CHECKS: { min: 1, max: 6 },
-  CHECK_TIMEOUT: { min: 500, max: 30_000 },
-  REMOTE_LOAD_TIMEOUT: { min: 1_000, max: 60_000 },
-  DEFAULT_MIN_ACTIVE: { min: 0, max: 100 },
-  MAX_TRASH_SIZE: { min: 0, max: 100_000 },
-} as const;
-
-export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
-  BACKEND_CONCURRENT_CHECKS: 4,
-  CHECK_TIMEOUT: 15_000,
-  REMOTE_LOAD_TIMEOUT: 8_000,
-  DEFAULT_MIN_ACTIVE: 3,
-  MAX_TRASH_SIZE: 1_000,
-};
 
 export interface ZoneConfig {
   readonly name: string;
@@ -184,7 +162,8 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
   const record = asRecord(value);
   if (!record) return parseFail('配置必须是 JSON 对象');
   const base = previous ?? createDefaultConfig();
-  const settings = parseRuntimeSettings(record.settings ?? base.settings);
+  // 旧 KV 与部分更新都只覆盖提供的字段，未提交的运行参数沿用已解析配置。
+  const settings = parseRuntimeSettings({ ...base.settings, ...(asRecord(record.settings) ?? {}) });
   const zones = Array.isArray(record.zones) ? parseZones(record.zones, base.zones) : base.zones;
   const targets = Array.isArray(record.targets) ? parseTargets(record.targets, settings) : base.targets;
   const duplicate = findDuplicate(zones, targets);
@@ -207,16 +186,6 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     settings,
     projectUrl: text(record.projectUrl, base.projectUrl, MAX_ENDPOINT_URL_LENGTH),
   });
-}
-
-export function parseRuntimeSettings(value: unknown): RuntimeSettings {
-  const raw = asRecord(value) ?? {};
-  const result = { ...DEFAULT_RUNTIME_SETTINGS } as Record<keyof RuntimeSettings, number>;
-  for (const key of Object.keys(SETTINGS_LIMITS) as (keyof RuntimeSettings)[]) {
-    const limits = SETTINGS_LIMITS[key];
-    result[key] = integerValue(raw[key], DEFAULT_RUNTIME_SETTINGS[key], limits.min, limits.max);
-  }
-  return result;
 }
 
 function parseZones(values: readonly unknown[], previous: readonly ZoneConfig[]): readonly ZoneConfig[] {
@@ -327,11 +296,6 @@ function text(value: unknown, fallback: string, max: number): string {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
   return trimmed.length <= max ? trimmed : fallback;
-}
-
-function integerValue(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
-  return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
 function booleanValue(value: unknown, fallback: boolean): boolean {

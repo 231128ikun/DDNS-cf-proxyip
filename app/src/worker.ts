@@ -31,8 +31,6 @@ export const APP_VERSION = '2026.10.22-0.8.2';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
-/** DoH 查询超时：域名解析比节点探测更快，超过这个时间就该让用户重试。 */
-const DOH_TIMEOUT_MS = 5_000;
 
 /**
  * Worker 入口装配：配置、探针、存储、维护 runner 只有这一份组装顺序，
@@ -54,7 +52,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
 
       const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.BACKEND_CONCURRENT_CHECKS);
       const checkTarget = new CheckTarget({
-        resolver: new ResolveTarget(new DohLookup({ endpoint: resolved.config.dohApi, timeoutMs: DOH_TIMEOUT_MS })),
+        resolver: new ResolveTarget(new DohLookup({ endpoint: resolved.config.dohApi, timeoutMs: resolved.config.settings.DOH_TIMEOUT })),
         checkProxy,
         concurrency: resolved.config.settings.BACKEND_CONCURRENT_CHECKS,
       });

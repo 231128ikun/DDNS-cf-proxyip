@@ -12,6 +12,7 @@ import {
 } from '../contracts/config';
 import type { ProbeAdapter } from '../ports/probe';
 import { appFetch } from '../util/fetch';
+import { readClampedInteger as parseInteger } from '../contracts/parse';
 
 export interface RuntimeEnv {
   readonly CF_KEY?: string;
@@ -25,8 +26,10 @@ export interface RuntimeEnv {
   readonly CHECK_API_BACKUP?: string;
   /** 公共 DNS 查询接口；`txt@域名` 与裸域名探测都依赖它。 */
   readonly DOH_API?: string;
+  readonly CONCURRENT_CHECKS?: string;
   readonly CHECK_TIMEOUT?: string;
   readonly REMOTE_LOAD_TIMEOUT?: string;
+  readonly DOH_TIMEOUT?: string;
   readonly IP_DATA?: KVNamespace;
 }
 
@@ -53,12 +56,20 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
     tgEnabled: readBooleanEnv(env.TG_ENABLED, defaults.tgEnabled),
     settings: {
       ...DEFAULT_RUNTIME_SETTINGS,
+      CONCURRENT_CHECKS: parseInteger(
+        env.CONCURRENT_CHECKS, defaults.settings.CONCURRENT_CHECKS,
+        SETTINGS_LIMITS.CONCURRENT_CHECKS.min, SETTINGS_LIMITS.CONCURRENT_CHECKS.max,
+      ),
       CHECK_TIMEOUT: parseInteger(env.CHECK_TIMEOUT, defaults.settings.CHECK_TIMEOUT, MIN_PROBE_TIMEOUT_MS, MAX_PROBE_TIMEOUT_MS),
       REMOTE_LOAD_TIMEOUT: parseInteger(
         env.REMOTE_LOAD_TIMEOUT,
         defaults.settings.REMOTE_LOAD_TIMEOUT,
         SETTINGS_LIMITS.REMOTE_LOAD_TIMEOUT.min,
         SETTINGS_LIMITS.REMOTE_LOAD_TIMEOUT.max,
+      ),
+      DOH_TIMEOUT: parseInteger(
+        env.DOH_TIMEOUT, defaults.settings.DOH_TIMEOUT,
+        SETTINGS_LIMITS.DOH_TIMEOUT.min, SETTINGS_LIMITS.DOH_TIMEOUT.max,
       ),
     },
   };
@@ -80,12 +91,6 @@ export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAda
     fallbackToNext: config.fallbackToNext,
     fetchImpl: deps.fetchImpl ?? appFetch,
   });
-}
-
-function parseInteger(value: string | undefined, fallback: number, min: number, max: number): number {
-  const parsed = Number.parseInt(value ?? '', 10);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(max, Math.max(min, parsed));
 }
 
 function readLengthBounded(value: string | undefined, fallback: string, max = MAX_ENDPOINT_URL_LENGTH): string {

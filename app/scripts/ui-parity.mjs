@@ -33,6 +33,7 @@ const measure = (selectors) => {
     statusCellDisplay: document.querySelector('#status-table td') ? getComputedStyle(document.querySelector('#status-table td')).display : null,
     statusHeadingWidth: document.querySelector('.status-table thead')?.getBoundingClientRect().width ?? 0,
     configCards: document.querySelectorAll('#page-config .config-mini-card').length,
+    settingsIds: [...document.querySelectorAll('.config-details-body input[type="number"]')].map((input) => input.id),
     editorLabels: [...document.querySelectorAll('.config-edit-panel.active .field > span:first-child')].map((element) => element.textContent.trim()),
     toolbarCenters: [...document.querySelectorAll('.toolbar-row > *')].map((element) => {
       const box = element.getBoundingClientRect();
@@ -116,9 +117,9 @@ async function captureBindings(cdp, session, width, failures) {
 function writeReport(results, fatal) {
   const report = { reference: referenceRef, generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
     referenceDefects: [...new Set(results.flatMap((result) => result.sessions.flatMap((session) => session.referenceDefects ?? [])))],
-    coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开', '权限编辑器', '管理域名编辑器', '已列出的解析与配置保存流程', '重构版配置延迟返回时首次检测非 443 端口'],
+    coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器', '已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原', '重构版配置延迟返回时首次检测非 443 端口'],
     limits: ['布局断言和人工截图对照不等于整站像素等价', '虚构数据与本地 API 替身，未验证真实部署和 Cloudflare 写入',
-      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权及部分运行参数不在本次等价覆盖范围', '域名池排序目前仍采用表内操作，main 的排序弹窗流程尚未对齐'],
+      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权不在等价覆盖范围', '域名池排序目前仍采用表内操作，main 的排序弹窗流程尚未对齐'],
     ...(fatal ? { fatal } : {}), results };
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
   const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -226,6 +227,7 @@ async function run() {
       if (JSON.stringify(sessions[0].bindings) !== JSON.stringify(sessions[1].bindings)) failures.push('域名池绑定列表、当前选择或可选池与 main 不同');
       if (sessions[0].config.basicsOpen !== sessions[1].config.basicsOpen) failures.push('基础配置默认展开状态与 main 不同');
       if (sessions[0].config.configCards !== sessions[1].config.configCards) failures.push('配置卡片数与 main 不同');
+      if (JSON.stringify(sessions[0].config.settingsIds) !== JSON.stringify(sessions[1].config.settingsIds)) failures.push('运行参数字段和顺序与 main 不同');
       for (const type of ['zone', 'target']) {
         if (JSON.stringify(sessions[0].editors[type].editorLabels) !== JSON.stringify(sessions[1].editors[type].editorLabels)) failures.push(`${type} 编辑器字段和顺序与 main 不同`);
       }

@@ -34,3 +34,9 @@ export function readTrimmedString(value: unknown, min: number, max: number): str
 export function readInteger(value: unknown, min: number, max: number): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : null;
 }
+
+/** 旧 KV 和环境回退允许数字文本；有效整数按配置范围截断。 */
+export function readClampedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}

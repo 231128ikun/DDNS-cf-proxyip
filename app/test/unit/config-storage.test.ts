@@ -1,8 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CONFIG_KEY, KvConfigRepository } from '../../src/adapters/storage/kv-config-repository';
+import { ConfigService } from '../../src/application/config-service';
+import { loadEnvConfig } from '../../src/config/runtime';
 import { createDefaultConfig, type AppConfig } from '../../src/contracts/config';
 
 describe('KV configuration storage', () => {
+  it('uses environment defaults for runtime fields missing from an old KV record', async () => {
+    const store = new Map([[CONFIG_KEY, JSON.stringify({ settings: { CHECK_TIMEOUT: 8_000 } })]]);
+    const service = new ConfigService({ repository: new KvConfigRepository(createKv(store)),
+      envConfig: loadEnvConfig({ CONCURRENT_CHECKS: '7', DOH_TIMEOUT: '9000' }) });
+    await expect(service.resolve()).resolves.toMatchObject({ source: 'kv', config: {
+      settings: { CHECK_TIMEOUT: 8_000, CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 },
+    } });
+  });
+
+  it('preserves old browser and DNS settings across read/save and takes KV over environment', async () => {
+    const store = new Map([[CONFIG_KEY, JSON.stringify({ settings: { CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 } })]]);
+    const repository = new KvConfigRepository(createKv(store));
+    const service = new ConfigService({ repository, envConfig: loadEnvConfig({ CONCURRENT_CHECKS: '2', DOH_TIMEOUT: '11000' }) });
+    const resolved = await service.resolve();
+    expect(resolved).toMatchObject({ source: 'kv', config: { settings: { CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 } } });
+    await service.save(resolved.config);
+    expect(JSON.parse(store.get(CONFIG_KEY)!)).toMatchObject({ settings: { CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 } });
+    expect([...store.keys()]).toEqual(['app_config']);
+    await expect(repository.load()).resolves.toMatchObject({
+      status: 'loaded', config: { settings: { CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 } },
+    });
+    store.delete(CONFIG_KEY);
+    await expect(service.resolve()).resolves.toMatchObject({
+      source: 'env', config: { settings: { CONCURRENT_CHECKS: 2, DOH_TIMEOUT: 11_000 } },
+    });
+  });
+
   it('loads the original app_config record directly', async () => {
     const store = new Map<string, string>([
       [CONFIG_KEY, JSON.stringify({

@@ -30,6 +30,49 @@ describe('web API client', () => {
 });
 
 describe('web API client pool endpoints', () => {
+  it.each([[2, 2], [7, 7], [0, 1], [999, 128], [Number.NaN, 32]])(
+    'uses configured concurrency %s, bounds it to %s and preserves progress and source order',
+    async (concurrency, expectedPeak) => {
+      let active = 0;
+      let peak = 0;
+      const requested: string[] = [];
+      const client = new ApiClient({ fetchImpl: async (_input, init) => {
+        const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+        requested.push(proxyip);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        active -= 1;
+        return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
+          items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }], skipped: [] });
+      } });
+      const addresses = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 1}:443`);
+      const progress: number[] = [];
+      const report = await client.checkBatch(addresses.join('\n'), undefined, event => progress.push(event.completed), concurrency);
+      expect(peak).toBe(expectedPeak);
+      expect(requested).toEqual(addresses);
+      expect(progress).toEqual(Array.from({ length: 136 }, (_, index) => index + 1));
+      expect(report.items.map(item => item.address)).toEqual(addresses);
+      expect(report).toMatchObject({ total: 136, alive: 136, dead: 0, unknown: 0 });
+    },
+  );
+
+  it('cancels a configured batch without starting the remaining targets', async () => {
+    const controller = new AbortController();
+    const requested: string[] = [];
+    const client = new ApiClient({ fetchImpl: async (_input, init) => {
+      requested.push(JSON.parse(String(init?.body)).proxyip);
+      return await new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+      });
+    } });
+    const pending = client.checkBatch('203.0.113.1:443\n203.0.113.2:443\n203.0.113.3:443', controller.signal, undefined, 2);
+    const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await assertion;
+    expect(requested).toEqual(['203.0.113.1:443', '203.0.113.2:443']);
+  });
+
   it('checks one target per API request and keeps batch concurrency bounded', async () => {
     let active = 0;
     let peak = 0;

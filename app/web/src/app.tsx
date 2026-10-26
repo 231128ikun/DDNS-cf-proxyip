@@ -6,7 +6,8 @@ import type { CheckTargetResponse } from '../../src/contracts/probe';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
-import { ApiClient, WEB_CHECK_CONCURRENCY } from './api/client';
+import { ApiClient } from './api/client';
+import { DEFAULT_RUNTIME_SETTINGS } from '../../src/contracts/runtime-settings';
 import { errorMessage, isAbort } from './api/errors';
 import {
   DashboardPage,
@@ -108,13 +109,16 @@ export function App() {
   const [pools, refreshPools] = useResource((signal) => client.pools(signal));
   const [config, refreshConfig] = useResource((signal) => client.config(signal));
   const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal));
+  const webCheckConcurrency = config.status === 'ready'
+    ? config.data.config.settings.CONCURRENT_CHECKS ?? DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS
+    : DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS;
   const targetPort = config.status === 'ready'
     ? config.data.config.targets.find((target) => `${target.domain}|${target.mode}` === selectedTargetKey)?.port ?? 443
     : 443;
   const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal) => {
     if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
     if (config.status !== 'ready') return Promise.reject(new Error(config.status === 'error' ? config.message : '正在读取维护配置，请稍后刷新'));
-    return loadTargetStatus(client, selectedTargetKey, targetPort, signal);
+    return loadTargetStatus(client, selectedTargetKey, targetPort, signal, webCheckConcurrency);
   });
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
@@ -140,7 +144,7 @@ export function App() {
     const controller = new AbortController();
     void refreshTargetStatus(controller.signal);
     return () => controller.abort();
-  }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort]);
+  }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort, webCheckConcurrency]);
 
   /**
    * 首屏把配置、维护域名、IP 池和健康度并行拉完，同时预取配置中心分块，
@@ -176,8 +180,8 @@ export function App() {
     if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready') return;
     startupLogged.current = true;
     appendConsoleLog('系统就绪', 'success');
-    appendConsoleLog(`配置：并发 ${WEB_CHECK_CONCURRENCY} | 超时 ${config.data.config.settings.CHECK_TIMEOUT}ms`);
-  }, [appendConsoleLog, config, health]);
+    appendConsoleLog(`配置：并发 ${webCheckConcurrency} | 超时 ${config.data.config.settings.CHECK_TIMEOUT}ms`);
+  }, [appendConsoleLog, config, health, webCheckConcurrency]);
 
   /** 池级写操作的统一收口：忙碌标记 + 提示 + 刷新列表只实现一次。 */
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
@@ -331,7 +335,7 @@ export function App() {
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: 0, total });
     appendConsoleLog(`[批量] 开始检测清洗 · ${total} 个地址`);
-    appendConsoleLog(`[批量] 浏览器并发 ${WEB_CHECK_CONCURRENCY}，每个地址独立请求`);
+    appendConsoleLog(`[批量] 浏览器并发 ${webCheckConcurrency}，每个地址独立请求`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });
@@ -340,7 +344,7 @@ export function App() {
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
       const detail = event.item.status === 'unknown' && event.item.message ? ` · ${event.item.message}` : '';
       appendConsoleLog(`[批量 ${event.completed}/${event.total}] ${event.item.address} · ${statusLabel}${detail}`, tone);
-    })
+    }, webCheckConcurrency)
       .then((report) => {
         if (activeBatch.current !== controller) return;
         activeBatch.current = null;

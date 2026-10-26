@@ -83,6 +83,13 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     referenceDefects.push('main 的管理域名编辑器保留了旧的维护开关值：编辑时关闭卡片维护开关，再保存到页面，会重新开启维护。重构版必须保留用户刚切换的值。');
   } else check(!enabledAfterCommit, '提交编辑草稿覆盖了刚切换的维护开关');
 
+  await click('.config-details-summary > :first-child');
+  await cdp.until(sessionId, 'Boolean(document.querySelector("#cfg-concurrent-checks")?.offsetWidth)');
+  await setValue('#cfg-concurrent-checks', '7');
+  await setValue('#cfg-doh-timeout', '9000');
+  await click('.config-details-summary > :first-child');
+  check(writes().length === initialWrites, '运行参数编辑提前写入了 KV');
+
   const save = await read('Boolean(document.querySelector("#btn-save-config")?.offsetWidth)');
   if (save) {
     fixture.failConfigSave = true;
@@ -93,6 +100,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
       throw new Error(`${surface} 保存失败状态：${await read('JSON.stringify({ text: document.body.innerText.slice(-900), toast: document.querySelector(".toast")?.outerHTML, button: document.querySelector("#btn-save-config")?.outerHTML })')}; writes=${writes().length - initialWrites}; pending=${fixture.failConfigSave}; ${error.message}`);
     }
     check(await read(`document.querySelector(${JSON.stringify(card('zone'))}).textContent.includes('已保存到页面')`), '保存到 KV 失败后丢失了页面草稿');
+    check(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#cfg-doh-timeout").value === "9000"'), '保存失败后丢失了运行参数草稿');
     await click('#btn-save-config');
     await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
     const saved = writes().at(-1)?.input;
@@ -100,17 +108,23 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     check(writes().length === initialWrites + 2, '失败重试应只有两次明确的配置写请求');
     check(update?.zones?.[0]?.label === '已保存到页面' && Number(update?.targets?.[0]?.port) === 2053, '保存到 KV 没有合并权限配置和管理域名的页面草稿');
     check(update?.targets?.[0]?.enabled === (surface === 'main' ? enabledAfterCommit : false), '保存到 KV 丢失了维护开关改动');
+    check(Number(update?.settings?.CONCURRENT_CHECKS) === 7 && Number(update?.settings?.DOH_TIMEOUT) === 9000, '统一保存没有保留浏览器并发与 DoH 超时');
     if (surface === 'current') check(update?.zones?.[0]?.apiKey === '', '编辑备注不应回传已保存的 Token');
   } else failures.push('无法完成统一保存到 KV 的流程');
 
   await openZone();
   await setValue(zoneInput, '等待还原的改动');
   await click('#zone-edit-panel .config-edit-actions button:last-child');
+  await click('.config-details-summary > :first-child');
+  await setValue('#cfg-concurrent-checks', '9');
+  await setValue('#cfg-doh-timeout', '12000');
+  await click('.config-details-summary > :first-child');
   await cdp.until(sessionId, 'Boolean(document.querySelector("#btn-cancel-config")?.offsetWidth)');
   await click('#btn-cancel-config');
   await cdp.until(sessionId, '!document.querySelector("#btn-cancel-config")?.offsetWidth');
   await flush();
   check(await read(`document.querySelector(${JSON.stringify(card('zone'))}).textContent.includes('已保存到页面')`), '还原改动没有回到最近一次 KV 保存的基线');
+  check(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#cfg-doh-timeout").value === "9000"'), '还原改动没有恢复最近保存的运行参数');
   check(writes().length === initialWrites + 2, '还原改动不应写入 KV');
 
   await click(`${section('zone')} > :first-child button`);
