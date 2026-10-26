@@ -110,6 +110,42 @@ describe('发布 Worker 装配', () => {
     }
   });
 
+  it.each(['rename', 'delete'])('rejects stale client bindings after a target %s without writing the mapping', async (change) => {
+    const storedMapping = JSON.stringify({ 'a.example.com|A': 'ip_pool_default', 'b.example.com|TXT': 'ip_pool_001' });
+    const store = new Map([
+      ['app_config', JSON.stringify({ targets: [
+        { domain: 'a.example.com', mode: 'A', enabled: true },
+        { domain: 'b.example.com', mode: 'TXT', enabled: true },
+      ] })],
+      ['domain_pool_mapping', storedMapping],
+    ]);
+    const put = vi.fn(async (key: string, value: string) => { store.set(key, value); });
+    const kv = { get: async (key: string, options?: { type?: string }) => {
+      const value = store.get(key) ?? null;
+      return options?.type === 'json' && value !== null ? JSON.parse(value) : value;
+    }, put } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    const before = await client.domainBindings();
+    expect(before.items.map(item => item.key)).toEqual(['a.example.com|A', 'b.example.com|TXT']);
+    const config = (await client.config()).config;
+    const saved = await client.saveConfig({ targets: change === 'delete' ? config.targets.slice(0, 1)
+      : config.targets.map((target, index) => index === 1 ? { ...target, domain: 'renamed.example.com' } : target) });
+    expect(saved.config.targets.map(target => target.domain)).toEqual(change === 'delete'
+      ? ['a.example.com'] : ['a.example.com', 'renamed.example.com']);
+    put.mockClear();
+
+    await expect(client.saveDomainBindings({ 'a.example.com|A': 'ip_pool_002', [before.items[1]!.key]: 'ip_pool_002' }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(put).not.toHaveBeenCalled();
+    expect(store.get('domain_pool_mapping')).toBe(storedMapping);
+
+    await client.saveDomainBindings({ 'a.example.com|A': 'ip_pool_002' });
+    expect((await client.domainBindings()).items[0]?.poolKey).toBe('ip_pool_002');
+    expect(JSON.parse(store.get('domain_pool_mapping')!)).toEqual({
+      'a.example.com|A': 'ip_pool_002', 'b.example.com|TXT': 'ip_pool_001',
+    });
+  });
+
   it('返回版本信息', async () => {
     const response = await request('/api/health');
     expect(response.status).toBe(200);

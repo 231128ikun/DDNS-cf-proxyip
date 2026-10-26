@@ -85,19 +85,40 @@ describe('DomainBindings', () => {
     expect(items.map((item) => item.poolKey)).toEqual([DEFAULT_POOL_KEY, DEFAULT_POOL_KEY]);
   });
 
-  it('saves whitelisted bindings and never drops unrelated keys', async () => {
+  it('saves current bindings and never drops unrelated stored keys', async () => {
     const repo = repository({ 'reserved.example.net|A': 'ip_pool_003', 'a.example.com|A': DEFAULT_POOL_KEY });
     const bindings = new DomainBindings(source(), repo);
 
     await bindings.save({
       'a.example.com|A': 'ip_pool_002',
-      'missing.example.com|A': 'ip_pool_004',
     });
 
     expect(repo.stored).toEqual({
       'reserved.example.net|A': 'ip_pool_003',
       'a.example.com|A': 'ip_pool_002',
     });
+  });
+
+  it('rejects a deleted target without changing its historical binding', async () => {
+    const initial = { 'a.example.com|A': DEFAULT_POOL_KEY, 'b.example.com|A': 'ip_pool_001' };
+    const repo = repository(initial);
+    const bindings = new DomainBindings(source({ targets: [
+      { target: target('a.example.com'), zoneIndex: null, enabled: true },
+    ] }), repo);
+
+    await expect(bindings.save({ 'b.example.com|A': 'ip_pool_002' }))
+      .rejects.toThrow(DomainBindingsInputError);
+    expect(repo.stored).toEqual(initial);
+  });
+
+  it('rejects a mixed stale mapping before writing any active target', async () => {
+    const initial = { 'a.example.com|A': DEFAULT_POOL_KEY, 'reserved.example.net|A': 'ip_pool_003' };
+    const repo = repository(initial);
+    const bindings = new DomainBindings(source(), repo);
+
+    await expect(bindings.save({ 'a.example.com|A': 'ip_pool_002', 'missing.example.com|A': 'ip_pool_004' }))
+      .rejects.toThrow(DomainBindingsInputError);
+    expect(repo.stored).toEqual(initial);
   });
 
   it('rejects an invalid pool key for a managed target without writing', async () => {

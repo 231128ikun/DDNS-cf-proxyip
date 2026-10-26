@@ -47,7 +47,7 @@ export class DomainBindings {
     const mapping: Record<string, string> = { ...(await this.repository.read()) };
     for (const [rawKey, rawPoolKey] of Object.entries(value)) {
       const key = normalizeBindingKey(rawKey);
-      if (!key || !allowed.has(key)) continue;
+      if (!key || !allowed.has(key)) throw new DomainBindingsInputError('管理域名列表已变化，请刷新后重试');
       const poolKey = typeof rawPoolKey === 'string' ? rawPoolKey.trim() : '';
       if (!isUserPoolKey(poolKey)) throw new DomainBindingsInputError(`IP 池 key 无效：${key}`);
       mapping[key] = poolKey;
