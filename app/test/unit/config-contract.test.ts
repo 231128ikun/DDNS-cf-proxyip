@@ -38,6 +38,22 @@ describe('masked zone credentials', () => {
     expect(parseAppConfig({ zones: [masked(left)] }, { ...previous, zones: [left, right] }).ok).toBe(false);
   });
 
+  it.each(['新的备注', ''])('rejects an unidentifiable masked credential-only row with label %j', (label) => {
+    const legacy = { ...first, baseDomain: '', zoneId: '' };
+    const result = parseAppConfig({ zones: [{ ...masked(legacy), name: label, label }, masked(second)] },
+      { ...previous, zones: [legacy, second] });
+    expect(result.ok).toBe(false);
+  });
+
+  it('allows renaming a credential-only row with an explicit token', () => {
+    const legacy = { ...first, baseDomain: '', zoneId: '' };
+    const result = parseAppConfig({ zones: [{ ...legacy, name: '新的备注', label: '新的备注', apiKey: 'replacement-fixture-token' }, masked(second)] },
+      { ...previous, zones: [legacy, second] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.zones.map(zone => zone.apiKey)).toEqual(['replacement-fixture-token', second.apiKey]);
+  });
+
   it('retains the remaining zone token after deleting the first zone', () => {
     const result = parseAppConfig({ zones: [masked(second)] }, previous);
     expect(result.ok).toBe(true);

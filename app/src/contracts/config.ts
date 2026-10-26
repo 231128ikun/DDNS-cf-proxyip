@@ -221,7 +221,11 @@ function normalizeZone(value: unknown, previous: readonly ZoneConfig[]): ParseRe
     const domainMatches = matches.filter(zone => zone.baseDomain.toLowerCase() === baseDomain.toLowerCase());
     if (domainMatches.length === 1) matches = domainMatches;
   }
-  if (!replacement && matches.length > 1) return parseFail('已保存的权限 Token 无法唯一匹配，请填写 CF Key 后保存');
+  const unmatchedCredentialOnly = !zoneId && !baseDomain && matches.length === 0
+    && previous.some(zone => !zone.zoneId && !zone.baseDomain && zone.apiKey);
+  if (!replacement && (matches.length > 1 || unmatchedCredentialOnly)) {
+    return parseFail('已保存的权限 Token 无法唯一匹配，请填写 CF Key 后保存');
+  }
   const apiKey = replacement || (matches.length === 1 ? matches[0]!.apiKey : '');
   if (!baseDomain && !zoneId && !apiKey) return parseOk(null);
   return parseOk({ name: label, baseDomain, zoneId, apiKey, label });

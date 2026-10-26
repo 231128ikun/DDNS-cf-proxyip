@@ -61,6 +61,25 @@ describe('发布 Worker 装配', () => {
     expect([...store.keys()]).toEqual(['app_config']);
   });
 
+  it.each(['新的备注', ''])('keeps credential-only rows and target references when an unidentified masked update is rejected (%j)', async (label) => {
+    const zones = [
+      { name: '旧权限', label: '旧权限', baseDomain: '', zoneId: '', apiKey: 'legacy-fixture-token' },
+      { name: '第二权限', label: '第二权限', baseDomain: 'example.net', zoneId: 'second-fixture-zone', apiKey: 'second-fixture-token' },
+    ];
+    const stored = JSON.stringify({ zones, targets: [{ domain: 'edge.example.com', mode: 'A', zoneIndex: 0 }] });
+    const store = new Map([['app_config', stored]]);
+    const kv = { get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => { store.set(key, value); } } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    await expect(client.saveConfig({ zones: zones.map((zone, index) => ({ ...zone, apiKey: '',
+      ...(index === 0 ? { label, name: label } : {}) })) })).rejects.toMatchObject({ status: 400 });
+    expect(store.get('app_config')).toBe(stored);
+    const read = await client.config();
+    expect(read.config.zones.map(zone => zone.hasApiKey)).toEqual([true, true]);
+    expect(read.config.targets[0]?.zoneIndex).toBe(0);
+    expect([...store.keys()]).toEqual(['app_config']);
+  });
+
   it('uses the saved DoH timeout for a real check request and cancels both lookups', async () => {
     vi.useFakeTimers();
     const signals: AbortSignal[] = [];
