@@ -57,9 +57,15 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
             && [...dialog.querySelectorAll('.pool-order-item')].every(row => row.querySelector('.pool-order-name').getBoundingClientRect().right <= row.querySelector('.pool-order-actions').getBoundingClientRect().left);
         })()`), `${title}在当前视口溢出、文字重叠或点击目标过小`);
         check(await read('document.querySelector(".pool-order-modal").contains(document.activeElement)'), '排序弹窗没有获得键盘焦点');
+        await read('document.querySelector("#pool-selector").focus()');
+        check(await read('document.querySelector(".pool-order-modal").contains(document.activeElement)'), '背景控件抢走排序弹窗焦点');
         await read(`document.querySelector('#${prefix}-save').focus()`);
         await keypress('Tab', { code: 'Tab', windowsVirtualKeyCode: 9 });
-        check(await read('document.querySelector(".pool-order-modal").contains(document.activeElement)'), 'Tab 焦点逃出排序弹窗');
+        // 原生模态允许 Tab 进入浏览器工具栏，此时 activeElement 为 body；页面背景控件仍不能获焦。
+        check(await read(`(() => {
+          const modal = document.querySelector('[role="dialog"]');
+          return Boolean(modal && (modal.contains(document.activeElement) || document.activeElement === document.body));
+        })()`), 'Tab 焦点进入页面背景控件');
       }
       await click(`${list} [data-action="down"][data-index="0"]`);
       const movedNames = [names[1], names[0], ...names.slice(2)];
