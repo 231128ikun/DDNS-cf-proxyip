@@ -222,7 +222,7 @@ export function parseRuntimeSettings(value: unknown): RuntimeSettings {
 function parseZones(values: readonly unknown[], previous: readonly ZoneConfig[]): readonly ZoneConfig[] {
   return values
     .slice(0, MAX_ZONES)
-    .map((value, index) => normalizeZone(value, previous[index]))
+    .map((value) => normalizeZone(value, previous))
     .filter((zone): zone is ZoneConfig => zone !== null);
 }
 
@@ -230,13 +230,19 @@ function parseTargets(values: readonly unknown[], settings: RuntimeSettings): re
   return values.slice(0, MAX_TARGETS).map((item) => normalizeTarget(item, settings)).filter((target): target is TargetConfig => target !== null);
 }
 
-function normalizeZone(value: unknown, previous?: ZoneConfig): ZoneConfig | null {
+function normalizeZone(value: unknown, previous: readonly ZoneConfig[]): ZoneConfig | null {
   const record = asRecord(value);
   if (!record) return null;
   const baseDomain = text(record.baseDomain, text(record.domain, '', 253), 253).replace(/^\.+|\.+$/g, '');
   const zoneId = text(record.zoneId, '', MAX_ZONE_ID_LENGTH);
-  const apiKey = text(record.apiKey, '', MAX_SECRET_LENGTH) || previous?.apiKey || '';
   const label = text(record.label, text(record.name, baseDomain || zoneId || '未命名', 32), 32);
+  // 面板不回传已保存的 Token；删除或排序后按区域身份保留，不能按数组位置串用凭据。
+  const matches = previous.filter((zone) => {
+    if (zoneId && zone.zoneId) return zone.zoneId === zoneId;
+    if (baseDomain && zone.baseDomain) return zone.baseDomain.toLowerCase() === baseDomain.toLowerCase();
+    return !zoneId && !baseDomain && !zone.zoneId && !zone.baseDomain && zone.label === label;
+  });
+  const apiKey = text(record.apiKey, '', MAX_SECRET_LENGTH) || (matches.length === 1 ? matches[0]!.apiKey : '');
   if (!baseDomain && !zoneId && !apiKey) return null;
   return { name: label, baseDomain, zoneId, apiKey, label };
 }
