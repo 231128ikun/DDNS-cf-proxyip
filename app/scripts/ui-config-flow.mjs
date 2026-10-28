@@ -85,6 +85,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
 
   await click('.config-details-summary > :first-child');
   await cdp.until(sessionId, 'Boolean(document.querySelector("#cfg-concurrent-checks")?.offsetWidth)');
+  check(await read('Boolean(document.querySelector("#cfg-auth-key")?.offsetWidth)'), '配置中心没有恢复 main 的面板密钥字段');
   await setValue('#cfg-concurrent-checks', '7');
   await setValue('#cfg-doh-timeout', '9000');
   await click('.config-details-summary > :first-child');

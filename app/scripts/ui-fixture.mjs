@@ -127,6 +127,21 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
       response.once('close', () => {
         if (!entry.completed) { entry.completed = true; entry.aborted = true; entry.completedAt = Date.now(); }
       });
+      if (url.pathname === '/api/auth/status') {
+        const key = String(fixture.config.authKey ?? '').trim();
+        const cookie = (request.headers.cookie ?? '').split(';').map(part => part.trim())
+          .find(part => part.startsWith('ddns_auth='))?.slice('ddns_auth='.length) ?? '';
+        const authenticated = !key || decodeURIComponent(cookie) === key;
+        return json({ ok: true, enabled: Boolean(key), authenticated });
+      }
+      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+        const required = String(fixture.config.authKey ?? '').trim();
+        if (required && String(input.key ?? '').trim() !== required) return json({ error: '未授权' }, 401);
+        const headers = { 'content-type': 'application/json' };
+        if (required) headers['set-cookie'] = `ddns_auth=${encodeURIComponent(required)}; Path=/; HttpOnly; SameSite=Lax`;
+        response.writeHead(200, headers);
+        return response.end(JSON.stringify({ ok: true, enabled: Boolean(required), authenticated: true }));
+      }
       if (['/api/config', '/api/domain-bindings', '/api/pools'].includes(url.pathname)) {
         if (request.method === 'GET') {
           const [failureKey, delayKey] = url.pathname === '/api/config' ? ['configFailures', 'configDelay']
@@ -148,7 +163,8 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
           }
         }
         const result = await worker.fetch(new Request(url, { method: request.method,
-          headers: { 'content-type': 'application/json' }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) },
+          ...(body ? { body } : {}) }), { IP_DATA: kv });
         const data = await result.json();
         if (result.ok && url.pathname === '/api/domain-bindings' && request.method === 'GET') fixture.bindings = data;
         if (result.ok && url.pathname === '/api/pools' && request.method === 'GET') fixture.pools = data.pools;

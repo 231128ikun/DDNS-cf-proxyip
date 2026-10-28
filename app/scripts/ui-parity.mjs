@@ -9,6 +9,8 @@ import { auditOrderFlow, auditOrderEdges } from './ui-order-flow.mjs';
 import { auditConfigTiming } from './ui-config-timing.mjs';
 import { auditOrderRecovery } from './ui-order-recovery.mjs';
 import { auditPoolTiming } from './ui-pool-timing.mjs';
+import { auditBatchResume } from './ui-batch-resume.mjs';
+import { auditAuthGate } from './ui-auth.mjs';
 
 const args = process.argv.slice(2);
 const flag = (key, fallback) => args.includes(`--${key}`) ? args[args.indexOf(`--${key}`) + 1] : fallback;
@@ -62,6 +64,11 @@ function differences(reference, current, width) {
   }
   const r = reference.boxes;
   const c = current.boxes;
+  for (const key of ['hero', 'target', 'nav']) {
+    for (const dimension of ['x', 'y', 'width', 'height']) {
+      if (Math.abs(c[key][dimension] - r[key][dimension]) > 2) failures.push(`${key} ${dimension} 偏差超过 2px`);
+    }
+  }
   if (c.target.radius !== r.target.radius) failures.push('维护目标卡片圆角与 main 不同');
   if (width > 768 && Math.abs(c.target.width - r.target.width) > 4) failures.push(`维护目标摘要宽度偏差 ${Math.round(c.target.width - r.target.width)}px`);
   if (c.nav.radius !== r.nav.radius || c.nav.background !== r.nav.background) failures.push('导航容器没有保留 main 的独立按钮布局');
@@ -125,17 +132,21 @@ function writeReport(results, fatal) {
       ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
         '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '重构版排序的 Escape、焦点约束与归还、固定系统池',
         '重构版 24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '重构版配置延迟返回时首次检测非 443 端口',
+        '重构版登录卡片、错误密钥、Cookie 登录与地址栏密钥清理',
         '重构版共享配置失败恢复、保存期间完整锁定、保存后新草稿与目标缓存更新', '重构版删除前项并改名后保持目标行选择与记录查询',
         '重构版首次配置就绪前检测禁用与配置并发执行', '重构版绑定串行保存、部分映射更新与连续失败时保留确认缓存',
         '重构版真实 Worker 新建池后保持选择、回读失败保留新池与只读重试',
+        '重构版面板密钥字段，以及批量检测中断后的输入锁定、已完成结果合并和仅未完成项续检',
         '重构版延迟排序分块与中断弹窗互斥', '重构版排序写入成功、连续回读失败仍保留列表与只读重试；等待 HTTP 请求实际完成及成功'] : [])],
     limits: ['布局断言和人工截图对照不等于整站像素等价', '配置、绑定与池创建读取使用真实 Worker 和内存 KV，探测、DNS 与排序保存使用本地替身；未验证真实部署和 Cloudflare 写入',
-      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', '测试阶段未启用鉴权，旧鉴权不在等价覆盖范围', '排序弹窗补充 Escape 和焦点约束，未复制 main 缺少键盘约束的行为'],
+      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', 'UI 鉴权使用本地静态资源与 API 夹具；真实 Cloudflare 静态资源和 Cookie 仍待部署冒烟', '排序弹窗补充 Escape 和焦点约束，未复制 main 缺少键盘约束的行为'],
     ...(fatal ? { fatal } : {}), results };
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
   const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
   const names = { dashboard: '运行面板', bindings: '域名池绑定展开', 'bindings-order': '自定义绑定池排序', 'pools-order': '自定义池排序',
-    'bindings-order-long': '长域名排序边界', 'pools-order-long': '长池名称排序边界', config: '配置中心', basics: '基础配置展开', 'zone-editor': '权限编辑器', 'target-editor': '管理域名编辑器' };
+    'bindings-order-long': '长域名排序边界', 'pools-order-long': '长池名称排序边界', config: '配置中心', basics: '基础配置展开',
+    'zone-editor': '权限编辑器', 'target-editor': '管理域名编辑器', 'auth-login': '登录后运行面板',
+    'auth-query-login': '地址栏密钥登录', 'batch-resume': '批量续检完成' };
   const content = results.map((result) => `<section><h2>${result.width}px · ${result.failures.length ? '存在差异' : '已覆盖检查通过'}</h2>
     ${result.failures.length ? `<ul>${result.failures.map((failure) => `<li>${escape(failure)}</li>`).join('')}</ul>` : ''}
     ${Object.entries(names).map(([state, title]) => `<details ${state === 'dashboard' ? 'open' : ''}><summary>${title}</summary><div class="pair">
@@ -237,6 +248,16 @@ async function run() {
             failures.push(`${session.name} 配置流程：${error.message}; ${state}`);
           }
           if (session.name === 'current') {
+            try {
+              const authFailures = await auditAuthGate(cdp, session.sessionId, server.base, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...authFailures.map(message => `current 鉴权：${message}`));
+            } catch (error) { failures.push(`current 鉴权：${error.message}`); }
+            try {
+              const batchFailures = await auditBatchResume(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...batchFailures.map(message => `current 批量续检：${message}`));
+            } catch (error) { failures.push(`current 批量续检：${error.message}`); }
             try {
               const timingFailures = await auditConfigTiming(cdp, session.sessionId, server.base, server.requests, server.fixture,
                 state => capture(cdp, session, width, state, failures));

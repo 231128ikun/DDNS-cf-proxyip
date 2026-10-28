@@ -333,15 +333,17 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         await new Promise((resolve) => setTimeout(resolve, 80));
         const stopButton = document.querySelector('button[aria-label="停止批量检测"]');
         if (!stopButton) failures.push("检测运行中缺少停止按钮");
-        const editedWhileChecking = "203.0.113.99:443";
-        input.value = editedWhileChecking;
-        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: editedWhileChecking }));
+        if (!input.readOnly) failures.push("检测期间源输入没有锁定");
+        stopButton?.click();
+        const abandon = await waitFor(() => document.querySelector('.custom-modal-overlay .btn-abandon'));
+        if (!abandon) failures.push("停止后缺少放弃操作");
+        abandon?.click();
         await new Promise((resolve) => setTimeout(resolve, 400));
         window.__batchDelayMs = 0;
         if (!(await waitFor(() => document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]')))) {
           failures.push("中止检测后没有回到清洗按钮");
         }
-        if (input.value !== editedWhileChecking) failures.push("取消检测后输入框被旧请求覆盖");
+        if (input.value !== original) failures.push("放弃后未完成输入被旧请求覆盖");
 
         const dedupeButton = await waitFor(() =>
           [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "去重")
