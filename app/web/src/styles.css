@@ -22,6 +22,7 @@
   --color-warning-soft: #fff8e1;
   --color-warning-border: #ffe08a;
   --color-info-soft: #eef6ff;
+  --color-info: #0dcaf0;
   --color-latency: #1d4ed8;
   --color-latency-soft: #dbeafe;
 
@@ -30,7 +31,7 @@
   --color-surface-subtle: #fbfbfd;
   --color-surface-muted: #f8fafc;
   --color-surface-hover: #eef4fb;
-  --color-surface-alpha: rgba(255, 255, 255, 0.96);
+  --color-surface-alpha: rgba(255, 255, 255, 0.9);
   --color-border: #e5e5e7;
   --color-border-strong: #d8dce3;
   --color-text: #1d1d1f;
@@ -39,7 +40,7 @@
   --color-inverse: #ffffff;
 
   --color-console-bg: #1c1c1e;
-  --color-console-border: #30363d;
+  --color-console-border: #2c2c2e;
   --color-console-text: #f5f5f7;
   --color-console-muted: #9ca3af;
   --color-console-info: #64d2ff;
@@ -111,13 +112,12 @@ body {
         ::placeholder { color: var(--color-text-muted); opacity: 1; }
         .ui-icon { display: inline-block; flex: 0 0 auto; line-height: 1; vertical-align: middle; pointer-events: none; }
         .btn .ui-icon, .nav-tab .ui-icon { margin: 0; }
-        .hero h1 > .ui-icon, .card-title > .ui-icon { margin-right: var(--space-2); }
+        .hero h1 > .ui-icon, .card-title > .ui-icon { margin-right: 0; }
         .hero h1 > .ui-icon { width: 1em; height: 1em; flex-basis: 1em; }
         .config-info .ui-icon { width: 14px; height: 14px; flex-basis: 14px; }
         table { border-collapse: collapse; }
         /* ── Bootstrap replacement: Grid ── */
         .container { width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 0 var(--space-5); }
-        @media (min-width: 1680px) {
         .auth-gate { min-height: calc(100vh - var(--space-10) - var(--space-8)); display: grid; place-items: center; }
         .auth-card { width: min(380px, 100%); padding: var(--space-10); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-xl); box-shadow: var(--shadow-md); }
         .auth-card h1 { margin: 0 0 var(--space-3); font-size: 22px; line-height: 1.2; font-weight: 750; }
@@ -129,6 +129,7 @@ body {
         .auth-card button:hover { background: var(--color-primary-strong); }
         .auth-error { margin: var(--space-3) 0 0; color: var(--color-danger); font-size: var(--font-size-xs); }
         .auth-hint { margin-top: var(--space-6); color: var(--color-heading-muted); text-align: center; font-size: var(--font-size-xs); }
+        @media (min-width: 1680px) {
             .container { max-width: var(--content-max-wide); }
         }
         .row { display: flex; flex-wrap: wrap; margin: 0 -6px; }
@@ -154,9 +155,10 @@ body {
         /* ── Bootstrap replacement: Buttons ── */
         .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-height); padding: var(--space-4) var(--space-8); text-align: center; vertical-align: middle; cursor: pointer; user-select: none; line-height: 1.5; font-size: var(--font-size-md); font-weight: 600; background: transparent; border: 0; border-radius: var(--radius-lg); color: inherit; text-decoration: none; }
         .btn-sm { min-height: var(--control-height-sm); font-size: var(--font-size-sm); }
-        .btn-primary { background: var(--color-primary-strong); color: var(--color-inverse); border: 1px solid var(--color-primary-strong); }
-        .btn-success { background: var(--color-success); color: var(--color-inverse); border: 1px solid var(--color-success); }
-        .btn-dark { background: var(--color-text); color: var(--color-inverse); border: 1px solid var(--color-text); }
+        .btn-primary { background: var(--color-primary-strong); color: var(--color-inverse); }
+        .btn-info { background: var(--color-info); color: var(--color-text); }
+        .btn-success { background: var(--color-success); color: var(--color-inverse); }
+        .btn-dark { background: var(--color-text); color: var(--color-inverse); }
         .btn-outline-primary { background: transparent; color: var(--color-primary-strong); }
         .btn-outline-primary:hover { background: var(--color-primary-strong); color: var(--color-inverse); }
         .btn-outline-secondary { background: transparent; color: var(--color-text-muted); }
@@ -205,7 +207,7 @@ body {
   color: var(--color-text);
   font-size: var(--font-size-md);
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.5;
   letter-spacing: -0.01em;
 }
         .hero {
@@ -214,8 +216,6 @@ body {
         }
         .hero-copy { min-width: 0; }
         .hero h1 {
-            display: flex;
-            align-items: center;
             margin: .67em 0 var(--space-4);
             color: var(--color-heading-muted);
             font-size: var(--font-size-xxl);
@@ -225,7 +225,7 @@ body {
         .hero-actions {
             display: flex;
             align-items: center;
-            gap: var(--space-4);
+            gap: var(--space-1);
             margin-top: var(--space-3);
             flex-wrap: wrap;
         }
@@ -235,6 +235,7 @@ body {
             justify-content: center;
             width: var(--control-height-compact);
             height: var(--control-height-compact);
+            margin: calc(0px - var(--space-05) - 1px) 0;
             padding: 0;
             border-radius: var(--radius-pill);
             border: 1px solid var(--color-border-strong);
@@ -405,7 +406,7 @@ body {
         .console-event-warning { color: var(--color-console-warning); }
         .console-event-error { color: var(--color-console-error); }
         .console-empty { color: var(--color-console-muted); }
-        .console-progress { background: var(--color-console-border); }
+        .console-progress { height: var(--space-5); background: var(--color-console-border); }
         .console-progress-bar { background: var(--color-console-success); }
         @media (max-width: 768px) {
             .console {

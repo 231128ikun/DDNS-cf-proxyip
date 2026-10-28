@@ -36,11 +36,11 @@ export function StatusOverview({ check, current, selectedKey, targetPort, lookup
           <input id="lookup-domain" type="text" class="form-control form-control-sm"
             placeholder="探测: 域名 / IP:端口 / txt@域名" aria-label="要探测的域名或 IP"
             value={lookup} onInput={(event) => onLookupChange(event.currentTarget.value)} autocomplete="off" spellcheck={false} />
-          <button class="btn btn-primary btn-sm" type="submit" disabled={check.status === 'loading'}>
-            <Icon name="search" /> {check.status === 'loading' ? '探测中…' : '探测'}
+          <button class="btn btn-info btn-sm" type="submit" disabled={check.status === 'loading'} aria-label={check.status === 'loading' ? '探测中…' : '探测'} title="探测">
+            <Icon name="search" />
           </button>
-          <button class="btn btn-outline-secondary btn-sm" type="button" onClick={onRefresh} aria-label="刷新当前 DNS 记录">
-            <Icon name="refresh" /> 刷新
+          <button class="btn btn-primary btn-sm" type="button" onClick={onRefresh} aria-label="刷新当前 DNS 记录" title="刷新当前 DNS 记录">
+            <Icon name="refresh" />
           </button>
         </form>
       </div>
@@ -56,7 +56,7 @@ export function StatusOverview({ check, current, selectedKey, targetPort, lookup
         <input id="manual-add-ip" type="text" class="form-control" aria-label="手动添加 IP"
           placeholder="手动添加IP到当前域名 (如: 1.2.3.4:443)" value={addValue}
           onInput={(event) => setAddValue(event.currentTarget.value)} />
-        <button class="btn btn-success" type="submit" disabled={adding || !selectedKey}><Icon name="plus" /> {adding ? '添加中…' : '添加'}</button>
+        <button class="btn btn-success" type="submit" disabled={adding || !selectedKey} aria-label={adding ? '添加中…' : '添加'} title="添加"><Icon name="plus" /></button>
       </form>
       <div id="status-display" class="scroll-box status-display">
         <div class="table-responsive">
@@ -108,7 +108,7 @@ function CurrentRows({ state, selectedKey, port, onCopyAddress, onDelete }: {
     const probe = probes.get(address);
     return <StatusRow key={`${record.id}:${address}`} address={address} onCopyAddress={onCopyAddress}
       result={probe ? { ...probe, exits: probe.exits ?? [] } : undefined}
-      action={<button class="btn btn-sm btn-outline-danger status-action" type="button" onClick={() => onDelete(record.id, record.type === 'TXT' ? address : undefined)} aria-label={`删除 ${address}`}>删除</button>} />;
+      action={<button class="btn btn-sm btn-outline-secondary status-action" type="button" onClick={() => onDelete(record.id, record.type === 'TXT' ? address : undefined)} aria-label={`删除 ${address}`} title={`删除 ${address}`}><Icon name="trash" /></button>} />;
   })}</>;
 }
 
