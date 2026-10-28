@@ -15,6 +15,30 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   const lookupButton = surface === 'main' ? '[onclick="lookupDomain()"]' : '.ddns-lookup-form button:first-of-type';
   const refreshButton = surface === 'main' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
   const select = '.target-select-overlay';
+  if (surface === 'current') {
+    const remove = '#main-actions button:last-child';
+    const canRemove = await read(`!document.querySelector('${remove}').disabled`);
+    check(canRemove, '空输入应像 main 一样允许点击移除，并在本地提示');
+    if (canRemove) {
+      await click(remove);
+      await flush();
+      check(await read('document.querySelector("#log-window").textContent.includes("❌ 内容为空")'), '空输入没有给出原版提示');
+      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '空输入不应发起池写请求');
+      await setValue('#ip-input', '203.0.113.10:443');
+      await Promise.all([
+        (async () => {
+          await cdp.wait(sessionId, 'Page.javascriptDialogOpening');
+          await cdp.send('Page.handleJavaScriptDialog', { accept: false }, sessionId);
+        })(), click(remove),
+      ]);
+      check(await read('document.querySelector("#ip-input").value === "203.0.113.10:443"'), '取消移除不应改变输入');
+      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '取消移除不应发起池写请求');
+      await setValue('#ip-input', '');
+    }
+    await click('.action-menu-trigger');
+    check(await read('document.querySelector(".action-menu-item:last-child").disabled'), '默认池的删除菜单应禁用');
+    await click('.action-menu-trigger');
+  }
   check(await read('document.querySelector("#status-table").textContent.includes("AS64500")'), '当前 DNS 地址没有像 main 一样显示探测出口信息');
   check(await read('document.querySelector("#status-table").textContent.includes("SJC")'), '可信探针返回的 Colo 没有显示');
   await setValue(select, surface === 'main' ? '1' : 'proxy.example.com|TXT');

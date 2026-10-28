@@ -5,6 +5,7 @@ import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, getPoolFixedNam
 import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
 import { sortByKeyOrder } from '../../../src/util/key-order';
 import { Modal } from './modal';
+import { iconText } from './icon';
 
 interface OrderItem {
   readonly key: string;
@@ -86,7 +87,7 @@ export function OrderDialog({ kind, items, onSave, onClose }: OrderDialogProps) 
     }
   };
   return (
-    <Modal id={`${prefix}-title`} title={kind === 'pools' ? '自定义池排序' : '自定义绑定池排序'}
+    <Modal id={`${prefix}-title`} title={`${iconText('sort')} ${kind === 'pools' ? '自定义池排序' : '自定义绑定池排序'}`}
       className="pool-order-modal" onClose={close} returnFocusId={kind === 'pools' ? 'pool-action-trigger' : 'domain-order-trigger'}>
       <p class="pool-order-hint">{kind === 'pools'
         ? '默认池固定在最前，垃圾桶固定在最后。使用箭头调整自定义池顺序。'

@@ -61,25 +61,24 @@ interface ConfigForm {
   readonly tgEnabled: boolean;
 }
 
-type SecretKey = 'apiKey' | 'authKey' | 'tgToken';
+type SecretKey = 'authKey' | 'tgToken';
 type SecretDrafts = Readonly<Record<SecretKey, string>>;
 type SecretClearing = Readonly<Record<SecretKey, boolean>>;
 
-const EMPTY_DRAFTS: SecretDrafts = { apiKey: '', authKey: '', tgToken: '' };
-const NO_CLEARING: SecretClearing = { apiKey: false, authKey: false, tgToken: false };
+const EMPTY_DRAFTS: SecretDrafts = { authKey: '', tgToken: '' };
+const NO_CLEARING: SecretClearing = { authKey: false, tgToken: false };
 const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
-  apiKey: 'Cloudflare API Token',
   authKey: '面板密钥',
-  tgToken: 'Telegram Bot Token',
+  tgToken: 'TG Bot Token',
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
-  ['CONCURRENT_CHECKS', '检测并发', '浏览器批量检测和当前记录检测使用。', 'cfg-concurrent-checks'],
-  ['BACKEND_CONCURRENT_CHECKS', '后端检测并发', '维护和补货预检使用。', 'cfg-backend-concurrent'],
-  ['CHECK_TIMEOUT', '检测超时(ms)', '单次探针请求超时。', 'cfg-check-timeout'],
-  ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT 列表加载超时。', 'cfg-remote-timeout'],
-  ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询超时。', 'cfg-doh-timeout'],
-  ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新建域名时使用的默认值。', 'cfg-default-min-active'],
-  ['MAX_TRASH_SIZE', '垃圾桶上限', '垃圾桶最多保留的条目数。', 'cfg-max-trash-size'],
+  ['CONCURRENT_CHECKS', '检测并发', '前端批量检测并发数。', 'cfg-concurrent-checks'],
+  ['BACKEND_CONCURRENT_CHECKS', '后端检测并发', '维护、补货预检及域名状态检测；1–6，独立于前端并发。', 'cfg-backend-concurrent'],
+  ['CHECK_TIMEOUT', '检测超时(ms)', '单个检测接口请求超时；超时结果为未知。', 'cfg-check-timeout'],
+  ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
+  ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
+  ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增管理域名默认值。', 'cfg-default-min-active'],
+  ['MAX_TRASH_SIZE', '垃圾桶上限', '超过后保留最新条目。', 'cfg-max-trash-size'],
 ];
 
 export function ConfigPage({ client, notify, config: load, onReload, onSaved }: ConfigPageProps) {
@@ -296,27 +295,25 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
           <div class="switch-row mb-3">
             <label class="switch">
-              <input type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} />
-              <span class="switch-slider" /><span>TG通知</span>
+              <input type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} />
+              <span class="switch-slider" /><span>自动维护</span>
             </label>
             <label class="switch">
-              <input type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} />
-              <span class="switch-slider" /><span>自动维护（cron 开关）</span>
+              <input type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} />
+              <span class="switch-slider" /><span>TG通知</span>
             </label>
           </div>
 
           <div class="config-grid mb-3">
             <TextField id="cfg-check-api" label="检测 API" help="主检测接口，支持 {proxyip} 占位符。" span={2} value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
             <TextField id="cfg-check-api-backup" label="备用检测 API" help="主接口异常时尝试备用接口，可留空。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
-            <TextField id="cfg-doh" label="DoH API" help="`txt@域名` 与域名解析探测使用的公共 DNS 接口。" value={form.dohApi} onValue={(value) => patch({ dohApi: value })} />
-            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空则关闭面板鉴权；保存新密钥后需重新登录。" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
-            <TextField id="cfg-project-url" label="项目地址" help="手动维护通知中的面板链接；留空时自动使用当前 Worker 地址。" value={form.projectUrl} onValue={(value) => patch({ projectUrl: value })} />
-            {SETTINGS_FIELDS.map(([key, label, help, id]) => (
-              <NumberField key={key} id={id} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
-            ))}
-            <SecretField id="cfg-api-token" label={SECRET_LABELS.apiKey} help="旧配置兼容项，优先用权限配置里的 Token。" configured={secrets.apiKey} value={drafts.apiKey} clearing={clearing.apiKey} onValue={(value) => setDrafts((current) => ({ ...current, apiKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, apiKey: !current.apiKey }))} />
-            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启通知时必填。" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
+            <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
+            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空则关闭前端鉴权。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
+            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 TG 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
+            {SETTINGS_FIELDS.map(([key, label, help, id]) => (
+              <NumberField key={key} id={id} label={label} help={help} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
+            ))}
           </div>
         </div>
       </details>
@@ -332,7 +329,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
           {form.zones.length === 0 && <div class="config-empty-state">暂无权限配置，点击“添加权限配置”创建。</div>}
           {form.zones.map((zone, index) => (
             <article
-              class={`config-mini-card${editingZone?.index === index ? ' selected' : ''}`}
+              class="config-mini-card"
               key={index}
             >
               <button class="config-card-open" type="button" aria-expanded={editingZone?.index === index} aria-controls="zone-edit-panel" onClick={() => editZone(index)}>
@@ -356,11 +353,11 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
               <div class="config-edit-heading">
                 <h3>{editingZone.index >= form.zones.length ? '添加' : '编辑'}权限配置</h3>
               </div>
-              <div class="config-grid config-editor-grid">
-                <TextField id={`zone-name-${editingZone.index}`} label="备注" help="可选；不填时使用维护域名。" value={activeZone.label} onValue={(value) => patchZone({ label: value, name: value })} />
-                <TextField id={`zone-domain-${editingZone.index}`} label="目标维护域名" help="目前只支持托管在 Cloudflare 的域名。" value={activeZone.baseDomain} placeholder="example.com" onValue={(value) => patchZone({ baseDomain: value })} />
-                <TextField id={`zone-id-${editingZone.index}`} label="Zone ID" help="Cloudflare 区域 ID。" value={activeZone.zoneId} onValue={(value) => patchZone({ zoneId: value })} />
-                <TextField id={`zone-token-${editingZone.index}`} label="CF Key" help="留空保持原值；需要 DNS 编辑权限。" type="password" span={2} autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : 'CF API Token'} onValue={(value) => patchZone({ apiKey: value })} />
+              <div class="config-grid">
+                <TextField id={`zone-name-${editingZone.index}`} label="备注" help="可选；不填时使用维护域名。" value={activeZone.label} placeholder="可选" onValue={(value) => patchZone({ label: value, name: value })} />
+                <TextField id={`zone-domain-${editingZone.index}`} label="目标维护域名" help="目前只支持托管在cf的域名" value={activeZone.baseDomain} placeholder="example.com" onValue={(value) => patchZone({ baseDomain: value })} />
+                <TextField id={`zone-id-${editingZone.index}`} label="Zone ID" help="Cloudflare 区域 ID。" value={activeZone.zoneId} placeholder="Zone ID" onValue={(value) => patchZone({ zoneId: value })} />
+                <TextField id={`zone-token-${editingZone.index}`} label="CF Key" help="留空保持原值；需要 DNS 编辑权限。" type="password" autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : 'CF API Token'} onValue={(value) => patchZone({ apiKey: value })} />
               </div>
               <ConfigEditorActions disabled={saving} onCancel={() => setEditingZone(null)} onSave={commitZone} />
             </>
@@ -379,7 +376,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
           {form.targets.length === 0 && <div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>}
           {form.targets.map((target, index) => (
             <article
-              class={`config-mini-card${editingTarget?.index === index ? ' selected' : ''}`}
+              class="config-mini-card"
               key={index}
             >
               <button class="config-card-open" type="button" aria-expanded={editingTarget?.index === index} aria-controls="target-edit-panel" onClick={() => editTarget(index)}>
@@ -413,10 +410,10 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
               <div class="config-edit-heading">
                 <h3>{editingTarget.index >= form.targets.length ? '添加' : '编辑'}管理域名</h3>
               </div>
-              <div class="config-grid config-editor-grid">
+              <div class="config-grid">
                 <label class="field">
                   <span>权限配置</span>
-                  <small>选择对应的维护域名权限。</small>
+                  <small>选择配置1/2/3。</small>
                   <select class="form-select form-select-sm" value={activeTarget.zoneIndex === null ? '' : String(activeTarget.zoneIndex)} onChange={(event) => {
                     const zoneIndex = event.currentTarget.value === '' ? null : Number(event.currentTarget.value);
                     const baseDomain = zoneIndex === null ? '' : form.zones[zoneIndex]?.baseDomain.trim() ?? '';
@@ -601,6 +598,7 @@ function SecretField({
   id,
   label,
   help,
+  placeholder,
   configured,
   value,
   clearing,
@@ -610,6 +608,7 @@ function SecretField({
   readonly id: string;
   readonly label: string;
   readonly help: string;
+  readonly placeholder: string;
   readonly configured: boolean;
   readonly value: string;
   readonly clearing: boolean;
@@ -628,7 +627,7 @@ function SecretField({
           value={value}
           disabled={clearing}
           autocomplete="new-password"
-          placeholder={configured ? '留空保持不变' : '未配置'}
+          placeholder={configured ? '留空保持不变' : placeholder}
           onInput={(event) => onValue(event.currentTarget.value)}
         />
         {configured && (
@@ -667,12 +666,10 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
     ]),
   ) as unknown as RuntimeSettings;
 
-  const apiKey = secretValue(drafts, clearing, 'apiKey');
   const authKey = secretValue(drafts, clearing, 'authKey');
   const tgToken = secretValue(drafts, clearing, 'tgToken');
 
   return {
-    ...(apiKey === undefined ? {} : { apiKey }),
     zoneId: form.zoneId.trim(),
     zones: form.zones.map((zone) => ({
       name: zone.label.trim() || zone.name.trim(),

@@ -208,11 +208,15 @@ export function App({ client }: { readonly client: ApiClient }) {
   }, [toast]);
 
   useEffect(() => {
-    if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready') return;
+    if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready' || pools.status !== 'ready' || !confirmedBindings) return;
+    if (targetChoices.length && !selectedTargetKey) return;
     startupLogged.current = true;
-    appendConsoleLog('系统就绪', 'success');
-    appendConsoleLog(`配置：并发 ${webCheckConcurrency} | 超时 ${config.data.config.settings.CHECK_TIMEOUT}ms`);
-  }, [appendConsoleLog, config, health, webCheckConcurrency]);
+    appendConsoleLog('🚀 系统就绪', 'success');
+    appendConsoleLog(`⚙️ 配置: 并发${webCheckConcurrency} | 超时${config.data.config.settings.CHECK_TIMEOUT}ms`);
+    const target = targetChoices.find(item => item.key === selectedTargetKey);
+    if (target) appendConsoleLog(`切换到: ${target.domain} (${target.mode})`);
+    appendConsoleLog('✅ 已加载池配置', 'success');
+  }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices, webCheckConcurrency]);
 
   /** 池级写操作的统一收口：忙碌标记 + 提示 + 刷新列表只实现一次。 */
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
@@ -271,6 +275,14 @@ export function App({ client }: { readonly client: ApiClient }) {
   const handleSelectTarget = (key: string | null): void => {
     resetLookup();
     setSelectedTargetKey(key);
+    const target = targetChoices.find(item => item.key === key);
+    if (target) appendConsoleLog(`切换到: ${target.domain} (${target.mode})`);
+  };
+
+  const handleSelectPool = (key: string): void => {
+    setPoolKey(key);
+    const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === key)?.name ?? key : key;
+    appendConsoleLog(`📦 切换到: ${name}`);
   };
 
   /** 只读地把当前记录复制到池工作台，不在 DNS 层做任何写入。 */
@@ -506,6 +518,12 @@ export function App({ client }: { readonly client: ApiClient }) {
   };
 
   const handleRemoveLines = (): void => {
+    if (!ipText.trim()) {
+      appendConsoleLog('❌ 内容为空', 'error');
+      return;
+    }
+    const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.name ?? poolKey : poolKey;
+    if (!window.confirm(`确认从 ${name} 中删除这些IP？`)) return;
     void runPoolAction('remove-lines', async () => {
       const result = await client.savePool(poolKey, ipText, 'remove');
       return result.removed ? `已从 ${poolKey} 移除 ${result.removed} 条` : '这些地址不在当前池中';
@@ -789,7 +807,7 @@ export function App({ client }: { readonly client: ApiClient }) {
             onIpTextChange={replaceIpText}
             onFilterChange={setFilterText}
             onRemoteUrlChange={setRemoteUrl}
-            onPoolChange={setPoolKey}
+            onPoolChange={handleSelectPool}
           />
         </div>
         <div hidden={page !== 'config'}>
@@ -801,7 +819,7 @@ export function App({ client }: { readonly client: ApiClient }) {
         </div>
       </div>
 
-      <footer class="container text-center text-secondary small py-3">
+      <footer class="container text-center text-secondary small">
         DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
       </footer>
       {orderRequest && OrderDialog && !batchInterrupt && <OrderDialog {...orderRequest}

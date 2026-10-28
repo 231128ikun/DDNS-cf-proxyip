@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
+import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../../src/contracts/probe';
@@ -169,7 +169,7 @@ export function DashboardPage({
                     </option>
                   ))}
                 </select>
-                <PoolActionMenu busy={busy} inTrash={inTrash} actions={actions} />
+                <PoolActionMenu busy={busy} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} />
               </div>
             </div>
 
@@ -268,7 +268,7 @@ export function DashboardPage({
                 </div>
                 <div id="filter-preview" class="filter-preview">{filterPreviewText(ipText, filterText)}</div>
                 <span class="text-secondary small pool-stat" title="当前池中IP数量" aria-label={`当前池中共 ${currentPoolCount(pools, poolKey)} 条地址`}>
-                  <Icon name="dashboard" /> <span id="pool-count">{currentPoolCount(pools, poolKey)}</span>
+                  <Icon name="dashboard" /><span id="pool-count">{currentPoolCount(pools, poolKey)}</span>
                 </span>
               </div>
             </div>
@@ -297,7 +297,7 @@ export function DashboardPage({
                 <button
                   class="btn btn-outline-secondary btn-sm"
                   type="button"
-                  disabled={busy || !ipText.trim()}
+                  disabled={busy}
                   onClick={actions.removeLines}
                 >
                   从库中移除
@@ -308,10 +308,10 @@ export function DashboardPage({
                 <div id="trash-actions" class="mt-2">
                   <div class="row g-2">
                     <div class="col-6">
-                      <button class="btn btn-outline-success btn-sm w-100" type="button" disabled={busy || !ipText.trim()} onClick={actions.restoreTrash}>恢复输入框中的地址</button>
+                      <button class="btn btn-outline-success btn-sm w-100" type="button" aria-label="恢复输入框中的地址" disabled={busy} onClick={actions.restoreTrash}><Icon name="recycle" /> 恢复选中</button>
                     </div>
                     <div class="col-6">
-                      <button class="btn btn-outline-danger btn-sm w-100" type="button" disabled={busy} onClick={actions.clearTrash}>清空垃圾桶</button>
+                      <button class="btn btn-outline-danger btn-sm w-100" type="button" disabled={busy} onClick={actions.clearTrash}><Icon name="trash" /> 清空垃圾桶</button>
                     </div>
                   </div>
                 </div>
@@ -337,7 +337,7 @@ export function DashboardPage({
                 <div class="progress-bar console-progress-bar" style={{ width: `${batchProgress(batch, batchProgressState)}%` }} />
               </div>
             <button
-              class="btn btn-dark w-100 mb-3"
+              class="btn btn-dark w-100"
               type="button"
               disabled={maintenanceBusy}
               onClick={actions.runMaintenance}
@@ -358,10 +358,12 @@ export function DashboardPage({
 function PoolActionMenu({
   busy,
   inTrash,
+  canDelete,
   actions,
 }: {
   readonly busy: boolean;
   readonly inTrash: boolean;
+  readonly canDelete: boolean;
   readonly actions: DashboardActions;
 }) {
   const [open, setOpen] = useState(false);
@@ -389,13 +391,13 @@ function PoolActionMenu({
     action();
   };
 
-  // 菜单项形状完全一致，用一张表描述：图标、文案、是否要求已选中池、是否危险、执行动作。
+  // 菜单项共用一张表：图标、文案、当前是否禁用、是否危险、执行动作。
   const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
     ['plus', '新建池', false, false, actions.createPool],
-    ['settings', '重命名当前池', true, false, actions.renamePool],
-    ['up', '自定义池排序', false, false, actions.openPoolOrder],
-    ['refresh', '一键洗库', true, false, actions.cleanPool],
-    ['trash', '删除当前池', true, true, actions.deletePool],
+    ['pencil', '重命名当前池', inTrash, false, actions.renamePool],
+    ['sort', '自定义池排序', false, false, actions.openPoolOrder],
+    ['broom', '一键洗库', inTrash, false, actions.cleanPool],
+    ['trash', '删除当前池', !canDelete, true, actions.deletePool],
   ];
 
   return (
@@ -408,17 +410,17 @@ function PoolActionMenu({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <Icon name="database" /> 池操作 <span class="action-menu-caret">▾</span>
+        <span><Icon name="database" /> 池操作</span> <span class="action-menu-caret">▾</span>
       </button>
       {open && (
         <div class="action-menu-panel" role="menu" aria-label="池操作">
-          {items.map(([icon, label, needsPool, danger, action]) => (
+          {items.map(([icon, label, disabled, danger, action]) => (
             <button
               key={label}
               class={`action-menu-item${danger ? ' danger' : ''}`}
               type="button"
               role="menuitem"
-              disabled={busy || (needsPool && inTrash)}
+              disabled={busy || disabled}
               onClick={() => run(action)}
             >
               <Icon name={icon} /> {label}
@@ -446,21 +448,12 @@ function Console({ logs }: {
         {logs.length === 0 && <div class="console-empty">正在连接系统…</div>}
         {logs.map((entry) => (
           <div key={entry.id} class={`console-event console-event-${entry.tone}`}>
-            <time class="console-time">[{entry.time}]</time>
-            <span class="console-level" aria-hidden="true">{consoleToneIcon(entry.tone)}</span>
-            <span class="console-message">{entry.message}</span>
+            [<time class="console-time">{entry.time}</time>{`] ${entry.message}`}
           </div>
         ))}
       </div>
     </div>
   );
-}
-
-function consoleToneIcon(tone: ConsoleTone): string {
-  if (tone === 'success') return '✅';
-  if (tone === 'warning') return '⚠️';
-  if (tone === 'error') return '❌';
-  return '⚙️';
 }
 
 function DomainBindingsCard({
@@ -482,27 +475,11 @@ function DomainBindingsCard({
     <details class="card p-4 mb-3 domain-binding-card">
       <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
         <div class="domain-binding-title">
-          <h2 class="card-title m-0 fw-bold"><Icon name="globe" /> 域名池绑定</h2>
-          {bindings.status === 'ready' && <span class="text-secondary small">{bindings.data.items.length} 个目标</span>}
+          <h2 class="card-title m-0 fw-bold"><Icon name="link" /> 域名池绑定</h2>
         </div>
         <div class="domain-binding-actions">
-          {bindings.status === 'ready' && (
-            <button
-              id="domain-order-trigger"
-              class="btn btn-sm btn-outline-primary"
-              type="button"
-              aria-haspopup="dialog"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                actions.openBindingOrder();
-              }}
-            >
-              调整顺序
-            </button>
-          )}
           <button
-            class="btn btn-sm btn-outline-secondary domain-binding-refresh"
+            class="btn btn-sm btn-outline-primary domain-binding-refresh"
             type="button"
             aria-label="刷新域名池绑定"
             title="刷新域名池绑定"
@@ -515,6 +492,23 @@ function DomainBindingsCard({
           >
             <Icon name="refresh" />
           </button>
+          {bindings.status === 'ready' && (
+            <button
+              id="domain-order-trigger"
+              class="btn btn-sm btn-outline-primary"
+              type="button"
+              aria-haspopup="dialog"
+              aria-label="调整域名池绑定顺序"
+              title="调整域名池绑定顺序"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                actions.openBindingOrder();
+              }}
+            >
+              <Icon name="sort" />
+            </button>
+          )}
         </div>
       </summary>
       {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
@@ -527,7 +521,7 @@ function DomainBindingsCard({
               <thead>
                 <tr>
                   <th>域名</th>
-                  <th>IP 池</th>
+                  <th>绑定池</th>
                 </tr>
               </thead>
               <tbody>

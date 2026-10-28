@@ -36,7 +36,7 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
             if (index < 0) throw new Error('池菜单缺少 main 的自定义池排序操作');
             await click(`.action-menu-item:nth-child(${index + 1})`);
           }
-        } else await click(surface === 'main' ? '[onclick*="openDomainPoolOrderDialog()"]' : '.domain-binding-actions button:first-child');
+        } else await click(surface === 'main' ? '[onclick*="openDomainPoolOrderDialog()"]' : '#domain-order-trigger');
         await cdp.until(sessionId, `Boolean(document.querySelector('${list}')?.offsetWidth)`);
         await read('Promise.all(document.querySelector(".pool-order-modal").getAnimations().map(animation => animation.finished)).then(() => true)');
         check(await read(`document.querySelector('.custom-modal-title').textContent.includes('${title}')`), `${title}标题不符`);

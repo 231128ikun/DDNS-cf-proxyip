@@ -108,7 +108,7 @@ function CurrentRows({ state, selectedKey, port, onCopyAddress, onDelete }: {
     const probe = probes.get(address);
     return <StatusRow key={`${record.id}:${address}`} address={address} onCopyAddress={onCopyAddress}
       result={probe ? { ...probe, exits: probe.exits ?? [] } : undefined}
-      action={<button class="btn btn-sm btn-outline-secondary status-action" type="button" onClick={() => onDelete(record.id, record.type === 'TXT' ? address : undefined)} aria-label={`删除 ${address}`} title={`删除 ${address}`}><Icon name="trash" /></button>} />;
+      action={<button class="status-delete" type="button" onClick={() => onDelete(record.id, record.type === 'TXT' ? address : undefined)} aria-label={`删除 ${address}`} title={`删除 ${address}`}><Icon name="trash" /></button>} />;
   })}</>;
 }
 
@@ -141,7 +141,7 @@ function ProbeExits({ result, onCopy }: { readonly result: ProbeResponse; readon
   return <>{result.exits.map((exit, index) => {
     const network = [exit.asn ? `AS${exit.asn.replace(/^AS/i, '')}` : '', exit.organization].filter(Boolean).join(' · ');
     return <div class="exit-detail" key={index}>
-      <span class="exit-tag">{exit.family === 'unknown' ? 'EXIT' : exit.family.toUpperCase()}</span>
+      <span class="exit-tag exit-stack">{exit.family === 'unknown' ? 'EXIT' : exit.family.toUpperCase()}</span>
       <button type="button" class="exit-ip" disabled={!exit.ip} title="点击复制出口 IP" aria-label={`复制出口 IP ${exit.ip ?? '未知'}`} onClick={() => exit.ip && onCopy(exit.ip)}>{exit.ip ?? '-'}</button>
       <span class="exit-tag" title={exit.country}>{exit.country ?? '-'}</span>
       <span class="exit-tag" title={network}>{network || '-'}</span>
