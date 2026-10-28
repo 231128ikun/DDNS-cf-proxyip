@@ -11,7 +11,8 @@
 
 ## 部署安全清单
 
-- 当前测试阶段不执行面板 key 校验。公开部署时，Worker API 和面板配置均可被访问与修改，请仅用于可信测试环境。
+- 公开部署前设置 `AUTH_KEY` 或在配置中心配置面板密钥；静态前端只在认证成功后渲染管理页面，数据与写入接口统一保护。为空会关闭鉴权。
+- 登录后优先使用 HttpOnly Cookie；`?key=` 只用于首次登录，避免后续链接反复暴露密钥。
 - Cloudflare API Token 只授予需要维护的 Zone 的 `DNS:Edit`，不要使用 Global API Key。
 - 密钥只放在 Cloudflare 环境变量/Secret 或面板配置（KV）里，不要写进仓库、Issue、日志或截图。
 - 怀疑泄露时先在 Cloudflare 侧轮换 Token/密钥，再排查访问记录。

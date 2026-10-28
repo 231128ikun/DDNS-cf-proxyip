@@ -48,7 +48,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 - `npm run deploy` 会先执行 `npm run check`；类型检查、接口契约、单测、构建、体积门禁或部署形态冒烟任一失败时，不会发布。
 - Cloudflare 会读取 `wrangler.toml` 并自动创建/绑定 `IP_DATA` KV 命名空间；如果这一步没有自动完成，按下面的手动步骤补一个同名绑定，功能不受影响。
 - 部署完成后打开 Worker 地址，在 **配置中心** 填写 Zone ID、CF Key、维护域名与检测 API。
-- 当前测试阶段 API 不启用面板 key 校验；只应部署到测试账户，并避免在公开实例中保存生产凭据。
+- 建议设置 `AUTH_KEY` 或在配置中心填写“面板密钥”。开启后，静态前端只会渲染登录卡片，`/api/*` 统一拒绝未认证请求；支持 `?key=`、Bearer、`X-Auth-Key` 和 HttpOnly Cookie。
 
 ### ⚙️ Wrangler 本地部署
 
@@ -165,6 +165,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | `CF_KEY` | Cloudflare API Token | 空 |
 | `CF_ZONEID` | Cloudflare Zone ID | 空 |
 | `CF_BASE_DOMAIN` | 托管域名，例如 `example.com` | 空 |
+| `AUTH_KEY` | 面板访问密钥；为空时关闭面板鉴权 | 空 |
 | `CHECK_API` | 主 ProxyIP 检测接口 | 空 |
 | `CHECK_API_BACKUP` | 备用检测接口 | `https://checkapi.dvb.kdns.fr/?candidate=` |
 | `DOH_API` | 公共 DNS 查询接口，`txt@域名` 与域名解析探测使用 | `https://cloudflare-dns.com/dns-query` |
@@ -177,7 +178,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 > 公共备用检测 API 不保证长期可用，建议自行部署。批量清洗在首轮检测进行期间，失败项或接口异常项会立即在当前检测槽位内复检，不等待所有首轮项目结束；单项探测和维护仍在同一个检测任务内依次尝试主、备用接口。配置中心显式清空并保存主/备用接口后，该接口会被禁用；旧配置中缺少的字段仍使用环境默认值。
 
-> 批量检测沿用 main 的模型：浏览器按配置的 `CONCURRENT_CHECKS`（默认 32）逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。配置与保存仍使用原有 `app_config.settings`。
+> 批量检测沿用 main 的模型：浏览器按配置的 `CONCURRENT_CHECKS`（默认 32）逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。中断后继续只处理未完成项，放弃则保留已完成的清洗结果。配置与保存仍使用原有 `app_config.settings`。
 
 ### 配置中心填写项
 
@@ -187,6 +188,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | 管理域名 | 前缀、记录类型、端口、最小活跃数。 |
 | 出口筛选 | IPv4、IPv6、双栈、国家、ASN。 |
 | 检测接口 | 主检测 API、备用检测 API、DoH 查询接口。 |
+| 访问控制 | 面板密钥 `AUTH_KEY`；为空时关闭鉴权。 |
 | 通知与任务 | Telegram 配置、Telegram 通知开关、定时维护开关。 |
 
 ---
