@@ -61,14 +61,15 @@ interface ConfigForm {
   readonly tgEnabled: boolean;
 }
 
-type SecretKey = 'apiKey' | 'tgToken';
+type SecretKey = 'apiKey' | 'authKey' | 'tgToken';
 type SecretDrafts = Readonly<Record<SecretKey, string>>;
 type SecretClearing = Readonly<Record<SecretKey, boolean>>;
 
-const EMPTY_DRAFTS: SecretDrafts = { apiKey: '', tgToken: '' };
-const NO_CLEARING: SecretClearing = { apiKey: false, tgToken: false };
+const EMPTY_DRAFTS: SecretDrafts = { apiKey: '', authKey: '', tgToken: '' };
+const NO_CLEARING: SecretClearing = { apiKey: false, authKey: false, tgToken: false };
 const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   apiKey: 'Cloudflare API Token',
+  authKey: '面板密钥',
   tgToken: 'Telegram Bot Token',
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
@@ -86,7 +87,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
   const [baseline, setBaseline] = useState('');
   const [form, setForm] = useState<ConfigForm | null>(null);
-  const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, tgToken: false });
+  const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, authKey: false, tgToken: false });
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
   const [clearing, setClearing] = useState<SecretClearing>(NO_CLEARING);
   const [saving, setSaving] = useState(false);
@@ -308,7 +309,8 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
             <TextField id="cfg-check-api" label="检测 API" help="主检测接口，支持 {proxyip} 占位符。" span={2} value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
             <TextField id="cfg-check-api-backup" label="备用检测 API" help="主接口异常时尝试备用接口，可留空。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="`txt@域名` 与域名解析探测使用的公共 DNS 接口。" value={form.dohApi} onValue={(value) => patch({ dohApi: value })} />
-            <TextField id="cfg-project-url" label="项目地址" help="页脚和通知中展示，可留空。" value={form.projectUrl} onValue={(value) => patch({ projectUrl: value })} />
+            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空则关闭面板鉴权；保存新密钥后需重新登录。" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
+            <TextField id="cfg-project-url" label="项目地址" help="手动维护通知中的面板链接；留空时自动使用当前 Worker 地址。" value={form.projectUrl} onValue={(value) => patch({ projectUrl: value })} />
             {SETTINGS_FIELDS.map(([key, label, help, id]) => (
               <NumberField key={key} id={id} label={label} help={`${help} ${SETTINGS_LIMITS[key].min}-${SETTINGS_LIMITS[key].max}。`} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
             ))}
@@ -666,6 +668,7 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
   ) as unknown as RuntimeSettings;
 
   const apiKey = secretValue(drafts, clearing, 'apiKey');
+  const authKey = secretValue(drafts, clearing, 'authKey');
   const tgToken = secretValue(drafts, clearing, 'tgToken');
 
   return {
@@ -679,6 +682,7 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
       label: zone.label.trim() || zone.name.trim(),
     })),
     targets: form.targets.map(({ sourceKey: _sourceKey, ...target }) => normalizeTargetDraft(target, form.zones)),
+    ...(authKey === undefined ? {} : { authKey }),
     checkApi: form.checkApi.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
     dohApi: form.dohApi.trim(),

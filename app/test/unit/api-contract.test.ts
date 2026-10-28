@@ -21,6 +21,8 @@ interface ClientOperation {
  * 新增 ApiClient 公共方法时必须在这里补对应请求，否则测试会失败。
  */
 const CLIENT_OPERATIONS: readonly ClientOperation[] = [
+  { name: 'authStatus', invoke: (client) => client.authStatus(), method: 'GET', path: '/api/auth/status' },
+  { name: 'login', invoke: (client) => client.login('test-key'), method: 'POST', path: '/api/auth/login' },
   { name: 'health', invoke: (client) => client.health(), method: 'GET', path: '/api/health' },
   { name: 'checkTarget', invoke: (client) => client.checkTarget('203.0.113.10:443'), method: 'POST', path: '/api/check' },
   { name: 'checkBatch', invoke: (client) => client.checkBatch('203.0.113.10:443'), method: 'POST', path: '/api/check' },

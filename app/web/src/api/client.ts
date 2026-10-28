@@ -16,6 +16,7 @@ import type {
 } from '../../../src/contracts/pool';
 import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
+import type { AuthStatusResponse } from '../../../src/contracts/auth';
 import { DEFAULT_RUNTIME_SETTINGS, SETTINGS_LIMITS } from '../../../src/contracts/runtime-settings';
 import { readClampedInteger } from '../../../src/contracts/parse';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
@@ -49,6 +50,14 @@ export class ApiClient {
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async authStatus(signal?: AbortSignal): Promise<AuthStatusResponse> {
+    return await this.request<AuthStatusResponse>('/api/auth/status', 'GET', undefined, signal);
+  }
+
+  async login(key: string, signal?: AbortSignal): Promise<AuthStatusResponse> {
+    return await this.request<AuthStatusResponse>('/api/auth/login', 'POST', { key }, signal);
   }
 
   async health(signal?: AbortSignal): Promise<HealthResponse> {
@@ -287,6 +296,13 @@ export class ApiClient {
       payload = await response.json();
     } catch {
       throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
+    }
+
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      const page = (globalThis as typeof globalThis & {
+        readonly window?: { readonly location?: { readonly assign?: (url: string) => void } };
+      }).window;
+      page?.location?.assign?.('/');
     }
 
     if (!response.ok) {

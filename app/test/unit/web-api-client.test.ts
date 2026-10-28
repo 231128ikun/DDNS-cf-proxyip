@@ -27,6 +27,35 @@ describe('web API client', () => {
 
     await expect(client.health()).rejects.toMatchObject({ status: 401, message: 'unauthorized' });
   });
+
+  it('returns an unauthorized browser session to the panel login page', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('window', { location: { assign } });
+    try {
+      const client = new ApiClient({ fetchImpl: async () => Response.json({ error: '未授权' }, { status: 401 }) });
+      await expect(client.health()).rejects.toMatchObject({ status: 401 });
+      expect(assign).toHaveBeenCalledWith('/');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reads auth state and posts a panel key through the shared API', async () => {
+    const requests: Array<{ readonly url: string; readonly method: string; readonly body?: string }> = [];
+    const client = new ApiClient({ fetchImpl: async (input, init) => {
+      requests.push({ url: String(input), method: init?.method ?? 'GET', ...(init?.body ? { body: String(init.body) } : {}) });
+      return Response.json(init?.method === 'POST'
+        ? { ok: true, enabled: true, authenticated: true }
+        : { ok: true, enabled: true, authenticated: false });
+    } });
+
+    await expect(client.authStatus()).resolves.toEqual({ ok: true, enabled: true, authenticated: false });
+    await expect(client.login('fixture-key')).resolves.toEqual({ ok: true, enabled: true, authenticated: true });
+    expect(requests).toEqual([
+      { url: '/api/auth/status', method: 'GET' },
+      { url: '/api/auth/login', method: 'POST', body: JSON.stringify({ key: 'fixture-key' }) },
+    ]);
+  });
 });
 
 describe('web API client pool endpoints', () => {

@@ -63,6 +63,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         checkTarget,
         checkPool,
         version: APP_VERSION,
+        authKey: resolved.config.authKey,
         configSource: resolved.source,
         config: configService,
         remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
@@ -143,8 +144,8 @@ function createPoolDependencies(
 export function createConfigService(env: RuntimeEnv, projectUrl?: string): ConfigService {
   return new ConfigService({
     envConfig: loadEnvConfig(env),
-    ...(env.IP_DATA
     ...(projectUrl ? { projectUrl } : {}),
+    ...(env.IP_DATA
       ? {
           repository: new KvConfigRepository(env.IP_DATA),
         }
@@ -182,7 +183,7 @@ export function createMaintenanceRunner(
       stats,
       fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
       isManual,
-    }),
       projectUrl: config.projectUrl,
+    }),
   };
 }

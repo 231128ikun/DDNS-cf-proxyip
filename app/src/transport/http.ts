@@ -37,12 +37,14 @@ import type { TargetRecords } from '../application/target-records';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { countPoolTextLines } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
+import { addAuthCookie, checkRequestAuth, handleAuthRoute, unauthorizedResponse } from './auth';
 import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 
 export interface HttpAppDependencies {
   /** 探测入口：内部负责域名解析与逐地址探测。 */
   readonly checkTarget: CheckTarget;
   readonly version: string;
+  readonly authKey?: string;
   readonly configSource?: EffectiveConfigSource;
   /** 未绑定 KV 时为空；此时 IP 池相关接口返回 503。 */
   readonly pools?: PoolService;
@@ -369,8 +371,15 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
   const fetch = async (request: Request): Promise<Response> => {
     try {
+      const url = new URL(request.url);
+      const authRoute = await handleAuthRoute(request, url, dependencies.authKey ?? '');
+      if (authRoute) return authRoute;
+      const auth = checkRequestAuth(request, url, dependencies.authKey ?? '');
+      if (auth.enabled && !auth.authorized && url.pathname.startsWith('/api/')) {
+        return unauthorizedResponse();
+      }
       const matched = await router.handle(request);
-      if (matched) return matched;
+      if (matched) return auth.shouldSetCookie ? addAuthCookie(matched, dependencies.authKey ?? '') : matched;
 
       return errorResponse('not found', 404);
     } catch (error) {

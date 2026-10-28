@@ -110,6 +110,76 @@ describe('发布 Worker 装配', () => {
     }
   });
 
+  it('reports the saved panel key requirement and rejects protected APIs', async () => {
+    const kv = { get: async (key: string) => key === 'app_config'
+      ? JSON.stringify({ authKey: 'fixture-panel-key' }) : null } as unknown as KVNamespace;
+    const protectedEnv = { ...env, IP_DATA: kv } as RuntimeEnv;
+
+    const status = await request('/api/auth/status', undefined, protectedEnv);
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toEqual({ ok: true, enabled: true, authenticated: false });
+
+    const api = await request('/api/health', undefined, protectedEnv);
+    expect(api.status).toBe(401);
+    await expect(api.json()).resolves.toEqual({ error: '未授权' });
+
+    const wrong = await request('/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'wrong' }),
+    }, protectedEnv);
+    expect(wrong.status).toBe(401);
+  });
+
+  it('accepts the original auth transports and stores a secure panel cookie', async () => {
+    const kv = { get: async (key: string) => key === 'app_config'
+      ? JSON.stringify({ authKey: 'fixture-panel-key' }) : null } as unknown as KVNamespace;
+    const protectedEnv = { ...env, IP_DATA: kv } as RuntimeEnv;
+
+    for (const headers of [
+      { Authorization: 'Bearer fixture-panel-key' },
+      { 'X-Auth-Key': 'fixture-panel-key' },
+      { Cookie: 'ddns_auth=fixture-panel-key' },
+    ]) {
+      const response = await request('/api/health', { headers }, protectedEnv);
+      expect(response.status).toBe(200);
+    }
+
+    const login = await request('/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'fixture-panel-key' }),
+    }, protectedEnv);
+    expect(login.status).toBe(200);
+    expect(login.headers.get('set-cookie')).toBe(
+      'ddns_auth=fixture-panel-key; Path=/; HttpOnly; Secure; SameSite=Lax',
+    );
+    await expect(login.json()).resolves.toEqual({ ok: true, enabled: true, authenticated: true });
+
+    const query = await request('/api/health?key=fixture-panel-key', undefined, protectedEnv);
+    expect(query.status).toBe(200);
+    expect(query.headers.get('set-cookie')).toContain('ddns_auth=fixture-panel-key');
+  });
+
+  it('masks the panel key and preserves it through a real client save', async () => {
+    const stored = JSON.stringify({ authKey: 'fixture-panel-key', checkApi: 'https://old.example/?proxyip=' });
+    const store = new Map([['app_config', stored]]);
+    const kv = {
+      get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => { store.set(key, value); },
+    } as unknown as KVNamespace;
+    const client = new ApiClient({
+      fetchImpl: async (input, init) => {
+        const headers = new Headers(init?.headers);
+        headers.set('X-Auth-Key', 'fixture-panel-key');
+        return request(String(input), { ...init, headers }, { ...env, IP_DATA: kv });
+      },
+    });
+
+    const read = await client.config();
+    expect(read.config.secrets.authKey).toBe(true);
+    expect(read.config).not.toHaveProperty('authKey');
+    await client.saveConfig({ checkApi: 'https://new.example/?proxyip=' });
+    expect(JSON.parse(store.get('app_config')!)).toMatchObject({ authKey: 'fixture-panel-key' });
+  });
+
   it.each(['rename', 'delete'])('rejects stale client bindings after a target %s without writing the mapping', async (change) => {
     const storedMapping = JSON.stringify({ 'a.example.com|A': 'ip_pool_default', 'b.example.com|TXT': 'ip_pool_001' });
     const store = new Map([

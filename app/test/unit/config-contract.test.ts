@@ -7,6 +7,14 @@ const previous: AppConfig = { ...createDefaultConfig(), zones: [first, second], 
 const masked = (zone: ZoneConfig) => ({ ...zone, apiKey: '' });
 
 describe('masked zone credentials', () => {
+  it('keeps the panel key private while preserving it across an unrelated config update', () => {
+    const base = { ...createDefaultConfig(), authKey: 'fixture-panel-key' };
+    const result = parseAppConfig({ checkApi: 'https://probe.example/?proxyip=' }, base);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.authKey).toBe('fixture-panel-key');
+  });
+
   it('uses the base domain to distinguish tokens when multiple zones share an ID', () => {
     const child = { ...second, baseDomain: 'child.example.com', zoneId: first.zoneId };
     const result = parseAppConfig({ zones: [{ ...masked(child), baseDomain: '.CHILD.EXAMPLE.COM.' }, masked(first)] },

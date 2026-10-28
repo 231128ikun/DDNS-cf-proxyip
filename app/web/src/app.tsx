@@ -44,7 +44,7 @@ interface BatchInterrupt {
   readonly unchecked: number;
 }
 
-export function App() {
+export function App({ client }: { readonly client: ApiClient }) {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
@@ -69,7 +69,6 @@ export function App() {
   const [batchProgressState, setBatchProgressState] = useState<PoolCheckProgressState | null>(null);
   const [batchInterrupt, setBatchInterrupt] = useState<BatchInterrupt | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
-  const client = useMemo(() => new ApiClient(), []);
   const logSequence = useRef(0);
   const activeBatch = useRef<AbortController | null>(null);
   const activeLookup = useRef<AbortController | null>(null);
