@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
-import type { PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
+import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse } from '../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import type { ConfigResponse } from '../../src/contracts/config';
 import { bindingKey } from '../../src/domain/domain-binding';
@@ -27,6 +27,7 @@ import type { OrderRequest } from './components/order-dialog';
 import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatus, type TargetStatusView } from './state/target-status';
+import { mergeBatchProgress, remainingBatch } from './state/batch-resume';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -41,6 +42,7 @@ interface BatchInterrupt {
   readonly checked: number;
   readonly total: number;
   readonly valid: number;
+  readonly rate: string;
   readonly unchecked: number;
 }
 
@@ -81,6 +83,10 @@ export function App({ client }: { readonly client: ApiClient }) {
   const orderModule = useRef<OrderDialogModule | null>(null);
   const OrderDialog = orderModule.current?.OrderDialog;
   const aliveSoFar = useRef(0);
+  const batchSource = useRef('');
+  const batchCompleted = useRef(new Set<number>());
+  const batchGroups = useRef(new Map<number, PoolCheckItemResponse[]>());
+  const batchSourceMap = useRef<readonly number[] | null>(null);
   const startupLogged = useRef(false);
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
@@ -106,6 +112,10 @@ export function App({ client }: { readonly client: ApiClient }) {
     setBatch({ status: 'idle' });
     setBatchProgressState(null);
     setBatchInterrupt(null);
+    batchSource.current = '';
+    batchCompleted.current.clear();
+    batchGroups.current.clear();
+    batchSourceMap.current = null;
   }, []);
 
   const resetLookup = useCallback((): void => {
@@ -341,30 +351,44 @@ export function App({ client }: { readonly client: ApiClient }) {
       .finally(() => setLoadingPool(false));
   };
 
-  const handleCheckBatch = (): void => {
+  const handleCheckBatch = (resume = false): void => {
     if (config.status !== 'ready') {
       notify(config.status === 'error' ? config.message : '正在读取配置，请稍后检测', 'error');
       return;
     }
-    const text = ipText.trim();
+    const sourceText = resume ? batchSource.current : ipText.trim();
+    const resumed = resume ? remainingBatch(sourceText, batchCompleted.current) : null;
+    const text = resumed?.text ?? sourceText;
     if (!text) {
-      notify('请先输入或从库加载 IP', 'error');
+      notify(resume ? '没有未完成的检测项' : '请先输入或从库加载 IP', 'error');
       return;
     }
+    if (!resume) {
+      batchSource.current = sourceText;
+      batchCompleted.current.clear();
+      batchGroups.current.clear();
+      batchSourceMap.current = null;
+      aliveSoFar.current = 0;
+    }
+    if (resumed) batchSourceMap.current = resumed.sourceIndices;
     activeBatch.current?.abort();
     const controller = new AbortController();
     activeBatch.current = controller;
-    aliveSoFar.current = 0;
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: 0, total });
-    appendConsoleLog(`[批量] 开始检测清洗 · ${total} 个地址`);
+    appendConsoleLog(`[批量] ${resume ? '继续检测未完成项' : '开始检测清洗'} · ${total} 个地址`);
     appendConsoleLog(`[批量] 浏览器并发 ${webCheckConcurrency}，每个地址独立请求`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });
       if (event.item.status === 'alive') aliveSoFar.current += 1;
+      const sourceIndex = batchSourceMap.current?.[event.sourceIndex] ?? event.sourceIndex;
+      const group = batchGroups.current.get(sourceIndex) ?? [];
+      group.push(event.item);
+      batchGroups.current.set(sourceIndex, group);
+      if (event.sourceComplete) batchCompleted.current.add(sourceIndex);
       const statusLabel = event.item.status === 'alive' ? '可用' : event.item.status === 'dead' ? '失效' : '未知';
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
       const detail = event.item.status === 'unknown' && event.item.message ? ` · ${event.item.message}` : '';
@@ -374,23 +398,41 @@ export function App({ client }: { readonly client: ApiClient }) {
         if (activeBatch.current !== controller) return;
         activeBatch.current = null;
         setCheckingBatch(false);
-        setBatchProgressState({ completed: report.items.length, total: report.items.length });
-        setBatch({ status: 'ready', data: report });
+        const items = [...batchGroups.current.values()].flat();
+        const combined: PoolCheckResponse = {
+          ...report,
+          total: items.length,
+          alive: items.filter(item => item.status === 'alive').length,
+          dead: items.filter(item => item.status === 'dead').length,
+          unknown: items.filter(item => item.status === 'unknown').length,
+          items,
+        };
+        setBatchProgressState({ completed: items.length, total: items.length });
+        setBatch({ status: 'ready', data: combined });
         // 与 main 的“检测清洗”一致：可用项写成标准格式，未知/无效保留原文，失效项移除。
-        setIpText(cleanedBatchText(report));
+        setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+        batchSource.current = '';
+        batchCompleted.current.clear();
+        batchGroups.current.clear();
+        batchSourceMap.current = null;
         appendConsoleLog(
-          `[批量] 完成 · 可用 ${report.alive} / 失效 ${report.dead} / 未知 ${report.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
-          report.unknown ? 'warning' : report.alive ? 'success' : 'error',
+          `[批量] 完成 · 可用 ${combined.alive} / 失效 ${combined.dead} / 未知 ${combined.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
+          combined.unknown ? 'warning' : combined.alive ? 'success' : 'error',
         );
         notify(
-          `检测完成：可用 ${report.alive}，失效 ${report.dead}，未知 ${report.unknown}${report.invalid.length ? `，无效 ${report.invalid.length}` : ''}`,
-          report.alive > 0 ? 'success' : 'error',
+          `检测完成：可用 ${combined.alive}，失效 ${combined.dead}，未知 ${combined.unknown}${report.invalid.length ? `，无效 ${report.invalid.length}` : ''}`,
+          combined.alive > 0 ? 'success' : 'error',
         );
       })
       .catch((error: unknown) => {
         if (isAbort(error) || activeBatch.current !== controller) return;
         activeBatch.current = null;
         setCheckingBatch(false);
+        setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+        batchSource.current = '';
+        batchCompleted.current.clear();
+        batchGroups.current.clear();
+        batchSourceMap.current = null;
         const message = errorMessage(error);
         setBatch({ status: 'error', message });
         appendConsoleLog(`[批量] ${message}`, 'error');
@@ -406,19 +448,21 @@ export function App({ client }: { readonly client: ApiClient }) {
     controller.abort();
     activeBatch.current = null;
     setCheckingBatch(false);
-    const total = batchProgressState?.total ?? 0;
-    const completed = batchProgressState?.completed ?? 0;
+    setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+    const total = countPoolTextLines(batchSource.current);
+    const completed = batchCompleted.current.size;
     setBatchInterrupt({
       checked: completed,
       total,
       valid: aliveSoFar.current,
+      rate: total ? (aliveSoFar.current / total * 100).toFixed(1) : '0.0',
       unchecked: Math.max(0, total - completed),
     });
   };
 
   const handleResumeBatch = (): void => {
     setBatchInterrupt(null);
-    void handleCheckBatch();
+    handleCheckBatch(true);
   };
 
   const handleAbandonBatch = (): void => {
@@ -426,7 +470,11 @@ export function App({ client }: { readonly client: ApiClient }) {
     setBatch({ status: 'idle' });
     setBatchProgressState(null);
     aliveSoFar.current = 0;
-    appendConsoleLog('[批量] 已放弃，输入框保持原样', 'warning');
+    batchSource.current = '';
+    batchCompleted.current.clear();
+    batchGroups.current.clear();
+    batchSourceMap.current = null;
+    appendConsoleLog('[批量] 已放弃，保留已完成检测结果', 'warning');
   };
 
   const handleSavePool = (): void => {
@@ -654,7 +702,7 @@ export function App({ client }: { readonly client: ApiClient }) {
     lookupSubmit: handleLookupSubmit,
     refresh: handleRefresh,
     loadPool: handleLoadPool,
-    checkBatch: handleCheckBatch,
+    checkBatch: () => handleCheckBatch(),
     stopBatch: handleStopBatch,
     resumeBatch: handleResumeBatch,
     abandonBatch: handleAbandonBatch,
@@ -765,6 +813,7 @@ export function App({ client }: { readonly client: ApiClient }) {
           <div class="custom-modal-stats">
             <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
             <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
+            <div><span class="label">有效率</span><span class="value">{batchInterrupt.rate}%</span></div>
             <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
           </div>
           <div class="custom-modal-buttons">
@@ -778,12 +827,4 @@ export function App({ client }: { readonly client: ApiClient }) {
       </div>
     </>
   );
-}
-
-/** 批量清洗后的输入：保留可用（标准格式）与未知（原文），丢弃失效项，并追加无法识别的原文。 */
-function cleanedBatchText(report: PoolCheckResponse): string {
-  const kept = report.items
-    .filter((item) => item.status === 'alive' || item.status === 'unknown')
-    .map((item) => item.line);
-  return [...kept, ...report.invalid].join('\n');
 }

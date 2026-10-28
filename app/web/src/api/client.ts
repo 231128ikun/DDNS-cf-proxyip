@@ -89,9 +89,16 @@ export class ApiClient {
       if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
       const checked = await this.checkPoolTarget(target, signal);
       total += checked.length - 1;
-      for (const item of checked) {
+      for (const [index, item] of checked.entries()) {
         completed += 1;
-        onProgress?.({ type: 'progress', completed, total, item });
+        onProgress?.({
+          type: 'progress',
+          completed,
+          total,
+          item,
+          sourceIndex: target.sourceIndex,
+          sourceComplete: index === checked.length - 1,
+        });
       }
       return checked;
     });
@@ -291,18 +298,18 @@ export class ApiClient {
       throw new ApiError('无法连接到 Worker API', 0);
     }
 
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
-    }
-
     if (response.status === 401 && !path.startsWith('/api/auth/')) {
       const page = (globalThis as typeof globalThis & {
         readonly window?: { readonly location?: { readonly assign?: (url: string) => void } };
       }).window;
       page?.location?.assign?.('/');
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
     }
 
     if (!response.ok) {
@@ -343,6 +350,7 @@ interface ParsedPoolCheckTarget {
   readonly entry: NonNullable<ReturnType<typeof parsePoolEntry>>;
   readonly target: NonNullable<ReturnType<typeof parseProxyTarget>>;
   readonly sourceLine: string;
+  readonly sourceIndex: number;
 }
 
 /** 复用池文本与地址规则，只负责把用户输入整理成逐个请求的目标。 */
@@ -353,7 +361,7 @@ function parsePoolCheckTargets(text: string): {
   const targets: ParsedPoolCheckTarget[] = [];
   const invalid: string[] = [];
   const seen = new Set<string>();
-  for (const line of parsePoolText(text)) {
+  for (const [sourceIndex, line] of parsePoolText(text).entries()) {
     if (!line.entry) {
       invalid.push(line.raw);
       continue;
@@ -365,7 +373,7 @@ function parsePoolCheckTargets(text: string): {
     }
     if (seen.has(target.key)) continue;
     seen.add(target.key);
-    targets.push({ entry: line.entry, target, sourceLine: line.raw });
+    targets.push({ entry: line.entry, target, sourceLine: line.raw, sourceIndex });
   }
   return { targets, invalid };
 }

@@ -135,6 +135,26 @@ describe('web API client pool endpoints', () => {
     expect(report.items[0]?.line).toBe('203.0.113.10:443,null,null,v4 # node0');
   });
 
+  it('reports the source line index and completion boundary for resumable batches', async () => {
+    const client = new ApiClient({ fetchImpl: async (_input, init) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }], skipped: [] });
+    } });
+    const events: Array<{ readonly sourceIndex: number; readonly sourceComplete: boolean }> = [];
+
+    await client.checkBatch(
+      '203.0.113.10:443 # first\ninvalid input\n203.0.113.12:443 # third',
+      undefined,
+      event => events.push({ sourceIndex: event.sourceIndex, sourceComplete: event.sourceComplete }),
+    );
+
+    expect(events).toEqual([
+      { sourceIndex: 0, sourceComplete: true },
+      { sourceIndex: 2, sourceComplete: true },
+    ]);
+  });
+
   it('turns an individual request failure into unknown and keeps checking later targets', async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

@@ -31,4 +31,8 @@ export interface PoolCheckProgressEvent {
   readonly completed: number;
   readonly total: number;
   readonly item: PoolCheckItemResponse;
+  /** 原始逻辑行下标；续检时用它过滤已完成项。 */
+  readonly sourceIndex: number;
+  /** 一个源域名可能解析成多项，最后一项才表示该源行完成。 */
+  readonly sourceComplete: boolean;
 }

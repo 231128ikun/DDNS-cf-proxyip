@@ -134,7 +134,7 @@ export function DashboardPage({
   onPoolChange,
 }: DashboardPageProps) {
   const [filterHelpOpen, setFilterHelpOpen] = useState(false);
-  const busy = poolBusy !== null;
+  const busy = poolBusy !== null || checkingBatch;
   const inTrash = poolKey === TRASH_POOL_KEY;
 
   return (
@@ -159,6 +159,7 @@ export function DashboardPage({
                   id="pool-selector"
                   class="form-select form-select-sm"
                   value={poolKey}
+                  disabled={checkingBatch}
                   aria-label="选择 IP 池"
                   onChange={(event) => onPoolChange(event.currentTarget.value)}
                 >
@@ -182,6 +183,7 @@ export function DashboardPage({
                   placeholder="远程TXT URL"
                   aria-label="远程 TXT URL"
                   value={remoteUrl}
+                  disabled={checkingBatch}
                   onInput={(event) => onRemoteUrlChange(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') actions.loadRemote();
@@ -192,7 +194,7 @@ export function DashboardPage({
                   type="button"
                   title="从远程URL加载"
                   aria-label="从远程 URL 加载"
-                  disabled={poolBusy === 'remote-load'}
+                  disabled={poolBusy === 'remote-load' || checkingBatch}
                   onClick={actions.loadRemote}
                 >
                   <Icon name="download" /> {poolBusy === 'remote-load' ? '加载中…' : '加载'}
@@ -200,7 +202,7 @@ export function DashboardPage({
                 <button
                   class="btn btn-sm btn-outline-secondary"
                   type="button"
-                  disabled={loadingPool}
+                  disabled={loadingPool || checkingBatch}
                   onClick={actions.loadPool}
                 >
                   <Icon name="folder" /> {loadingPool ? '读取中…' : '从库'}
@@ -208,6 +210,7 @@ export function DashboardPage({
                 <button
                   class="btn btn-sm btn-outline-danger text-nowrap"
                   type="button"
+                  disabled={checkingBatch}
                   onClick={() => onIpTextChange('')}
                 >
                   <Icon name="trash" /> 清空
@@ -219,6 +222,8 @@ export function DashboardPage({
                 class="form-control ip-input mb-2"
                 rows={6}
                 value={ipText}
+                readOnly={checkingBatch}
+                aria-busy={checkingBatch}
                 aria-label="IP 池文本"
                 onInput={(event) => onIpTextChange(event.currentTarget.value)}
                 placeholder={`支持格式：\n1.2.3.4:443\n1.2.3.4 (默认443端口)\nexample.com:8443 (检测时解析为IP)\n1.2.3.4:443 #HK 香港节点 (带注释)`}
@@ -239,6 +244,7 @@ export function DashboardPage({
                     placeholder="筛选"
                     aria-label="筛选条件"
                     value={filterText}
+                    disabled={checkingBatch}
                     onInput={(event) => onFilterChange(event.currentTarget.value)}
                   />
                   <button
@@ -283,7 +289,7 @@ export function DashboardPage({
                   type="button"
                   aria-label="将输入框内容保存到当前 IP 池"
                   title={inTrash ? '垃圾桶只能由维护和洗库流程写入' : undefined}
-                  disabled={savingPool || inTrash}
+                  disabled={savingPool || inTrash || checkingBatch}
                   onClick={actions.savePool}
                 >
                   <Icon name="save" /> {savingPool ? '保存中…' : '入库'}
