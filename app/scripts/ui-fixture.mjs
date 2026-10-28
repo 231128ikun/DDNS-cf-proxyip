@@ -51,7 +51,7 @@ export async function waitForUiRequest(requests, start, path, method, status) {
   throw new Error(`${method} ${path} 尚未完成`);
 }
 
-export function renderReference(config, ref = UI_REFERENCE_REF) {
+export function renderReference(config, ref = UI_REFERENCE_REF, login = false) {
   let source;
   try {
     source = execFileSync('git', ['show', `${ref}:_worker.js`], { cwd: appRoot, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -61,7 +61,8 @@ export function renderReference(config, ref = UI_REFERENCE_REF) {
   const context = createContext({ URL, Response, Request, Headers, AbortController,
     fetch: () => { throw new Error('UI reference cannot access network'); } });
   new Script(source.replace('export default {', 'const referenceWorker = {')).runInContext(context, { timeout: 1000 });
-  return context.renderHTML(config, { kvReady: true });
+  return login ? context.renderLoginHTML(new URL('http://127.0.0.1/reference-login'))
+    : context.renderHTML(config, { kvReady: true });
 }
 
 /** 本地验收：配置与绑定读写使用同次构建的 Worker 和内存 KV，外部操作使用替身。 */
@@ -70,6 +71,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
   const fixture = createUiFixture();
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
   const referenceHtml = reference ? renderReference(fixture.config, ref) : null;
+  const referenceLoginHtml = reference ? renderReference(fixture.config, ref, true) : null;
   const { default: worker } = await import(pathToFileURL(join(appRoot, 'dist', 'release', 'worker.js')).href);
   const kv = {
     async get(key, options) {
@@ -249,16 +251,21 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
             ip, ...mainProbe })) }] : [] });
       }
       if (url.pathname === '/api/get-config') return json({ success: true, config });
-      if (['/api/get-pool', '/api/get-domain-pool-mapping'].includes(url.pathname)) return json({ success: true,
+      if (url.pathname === '/api/get-pool') {
+        const text = await kv.get(url.searchParams.get('poolKey') ?? 'ip_pool_default') ?? '';
+        const ips = text.split('\n').filter(line => line.trim());
+        return json({ success: true, ips, count: ips.length });
+      }
+      if (url.pathname === '/api/get-domain-pool-mapping') return json({ success: true,
         pools: pools.map((item) => item.key), poolNames: Object.fromEntries(pools.map((item) => [item.key, item.name])),
         mapping: Object.fromEntries(bindings.items.map((item) => [item.key, item.poolKey])), domainPoolOrder: bindings.items.map((item) => item.key),
         ips: ['203.0.113.10:443', '203.0.113.11:443'], count: 2 });
       if (/^\/api\/pools\/[^/]+$/.test(url.pathname)) return json({ key: url.pathname.split('/').pop(), content: '203.0.113.10:443\n203.0.113.11:443', count: 2 });
       return json({ error: `Unmocked UI request: ${request.method} ${url.pathname}` }, 501);
     }
-    if (referenceHtml && url.pathname === '/reference') {
+    if (referenceHtml && ['/reference', '/reference-login'].includes(url.pathname)) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return response.end(referenceHtml);
+      return response.end(url.pathname === '/reference-login' ? referenceLoginHtml : referenceHtml);
     }
     const file = resolve(webRoot, url.pathname === '/' ? 'index.html' : `.${url.pathname}`);
     if (!file.startsWith(webRoot + sep) || !existsSync(file)) { response.writeHead(404); return response.end(); }
