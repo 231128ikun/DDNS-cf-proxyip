@@ -16,6 +16,7 @@ export interface ResolvedConfig {
 export interface ConfigServiceOptions {
   readonly envConfig: AppConfig;
   readonly repository?: ConfigRepository;
+  readonly projectUrl?: string;
 }
 
 export class ConfigService {
@@ -25,10 +26,10 @@ export class ConfigService {
     const result = this.options.repository
       ? await loadSafely(() => this.options.repository!.load(this.options.envConfig))
       : missing();
-    if (result.status === 'loaded') return { config: result.config, source: 'kv' };
+    if (result.status === 'loaded') return { config: this.withProjectUrl(result.config), source: 'kv' };
 
     return {
-      config: this.options.envConfig,
+      config: this.withProjectUrl(this.options.envConfig),
       source: 'env',
       ...(result.status === 'invalid' ? { notice: `KV 配置无法读取，已使用环境变量：${result.message}` } : {}),
     };
@@ -37,6 +38,11 @@ export class ConfigService {
   async save(config: AppConfig): Promise<void> {
     if (!this.options.repository) throw new Error('config repository is not configured');
     await this.options.repository.save(config);
+  }
+
+  private withProjectUrl(config: AppConfig): AppConfig {
+    if (config.projectUrl.trim() || !this.options.projectUrl) return config;
+    return { ...config, projectUrl: this.options.projectUrl };
   }
 }
 

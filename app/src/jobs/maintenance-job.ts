@@ -18,6 +18,7 @@ export interface MaintenanceJobOptions {
   readonly stats: MaintenanceStatsRepository;
   readonly fallbackZone: DnsZone;
   readonly isManual: boolean;
+  readonly projectUrl?: string;
   readonly now?: () => Date;
 }
 
@@ -56,6 +57,7 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
 
   const notification = await options.notifier.send(buildTelegramMaintenanceMessage(run, {
     isManual: options.isManual,
+    ...(options.projectUrl ? { projectUrl: options.projectUrl } : {}),
     ...(options.now ? { now: options.now() } : {}),
   }));
   if (notification.sent) await options.stats.saveBaseline(afterCounts);

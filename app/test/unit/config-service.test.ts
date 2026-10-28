@@ -25,6 +25,17 @@ describe('ConfigService', () => {
     await expect(service.resolve()).resolves.toEqual({ config: envConfig, source: 'env' });
   });
 
+  it('uses the current request origin when the stored panel URL is blank', async () => {
+    const service = new ConfigService({
+      envConfig,
+      projectUrl: 'https://panel.example',
+      repository: repository({ status: 'missing', source: 'kv' }),
+    });
+    const resolved = await service.resolve();
+
+    expect(resolved.config.projectUrl).toBe('https://panel.example');
+  });
+
   it('falls back to environment config and reports invalid app_config', async () => {
     const service = new ConfigService({
       envConfig,

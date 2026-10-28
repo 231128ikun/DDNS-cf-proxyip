@@ -39,8 +39,10 @@ const DNS_TIMEOUT_MS = 10_000;
 export function createWorker(): ExportedHandler<RuntimeEnv> {
   const handler: ExportedHandler<RuntimeEnv> = {
     async fetch(request, env, executionContext): Promise<Response> {
-      const configService = createConfigService(env);
+      const url = new URL(request.url);
+      const configService = createConfigService(env, url.origin);
       const resolved = await configService.resolve();
+
       const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
       // 同一份 KV 存储实例既服务维护 runner，也服务域名绑定读写，避免两套读取顺序。
@@ -138,10 +140,11 @@ function createPoolDependencies(
  * 入口与 cron 共用同一套配置装配：少一份重复的读取顺序，
  * 也保证“面板看到的配置”和“定时维护用的配置”永远一致。
  */
-export function createConfigService(env: RuntimeEnv): ConfigService {
+export function createConfigService(env: RuntimeEnv, projectUrl?: string): ConfigService {
   return new ConfigService({
     envConfig: loadEnvConfig(env),
     ...(env.IP_DATA
+    ...(projectUrl ? { projectUrl } : {}),
       ? {
           repository: new KvConfigRepository(env.IP_DATA),
         }
@@ -180,5 +183,6 @@ export function createMaintenanceRunner(
       fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
       isManual,
     }),
+      projectUrl: config.projectUrl,
   };
 }

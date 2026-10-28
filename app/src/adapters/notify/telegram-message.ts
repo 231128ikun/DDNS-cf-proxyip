@@ -3,6 +3,7 @@ import { formatBeijingTimestamp } from '../../util/time';
 
 export interface TelegramMaintenanceMessageOptions {
   readonly isManual: boolean;
+  readonly projectUrl?: string;
   readonly now?: Date;
 }
 
@@ -24,6 +25,9 @@ export function buildTelegramMaintenanceMessage(
 
   for (const result of run.results) {
     lines.push('', `━━ <code>${escapeHtml(result.target.domain)}</code> ━━`, formatTarget(result));
+  }
+  if (options.isManual && options.projectUrl) {
+    lines.push('', `🔗 <a href="${escapeHtml(options.projectUrl)}">打开管理面板</a>`);
   }
 
   return lines.join('\n');
