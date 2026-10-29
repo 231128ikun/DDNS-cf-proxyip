@@ -122,6 +122,14 @@ async function captureBindings(cdp, session, width, failures) {
       pool: row.querySelector('select')?.value,
       options: [...row.querySelectorAll('option')].map(option => option.value),
     }))`);
+  if (currentOnly) {
+    const options = ['ip_pool_default', 'ip_pool_001', 'ip_pool_002'];
+    const expected = [
+      { domain: 'edge.example.com', pool: 'ip_pool_default', options },
+      { domain: 'proxy.example.com', pool: 'ip_pool_001', options },
+    ];
+    if (JSON.stringify(session.bindings) !== JSON.stringify(expected)) failures.push('绑定域名、当前选择或完整可选池集合与测试数据不符');
+  }
   await capture(cdp, session, width, 'bindings', failures);
   await cdp.click(session.sessionId, '.domain-binding-header');
 }
@@ -205,6 +213,7 @@ async function run() {
       }
       if (!currentOnly) failures.push(...differences(sessions[0].data, sessions[1].data, width));
       else if (sessions[0].data.overflow) failures.push('页面横向溢出');
+      if (currentOnly && JSON.stringify(sessions[0].data.poolOrder) !== JSON.stringify(['ip_pool_default', 'ip_pool_001', 'ip_pool_002', 'ip_pool_trash'])) failures.push('池列表或保存顺序与测试数据不符');
       console.log(`${width}px dashboard: ${failures.join('；') || '通过'}`);
       for (const session of sessions) {
         await cdp.send('Target.activateTarget', { targetId: session.targetId });
