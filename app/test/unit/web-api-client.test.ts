@@ -97,6 +97,7 @@ describe('web API client pool endpoints', () => {
     } });
     const pending = client.checkBatch('203.0.113.1:443\n203.0.113.2:443\n203.0.113.3:443', controller.signal, undefined, 2);
     const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(requested).toHaveLength(2));
     controller.abort();
     await assertion;
     expect(requested).toEqual(['203.0.113.1:443', '203.0.113.2:443']);
