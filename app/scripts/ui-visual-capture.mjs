@@ -43,14 +43,15 @@ try {
       await cdp.send('Page.navigate', { url: server.base + path }, sessionId);
       await cdp.until(sessionId, "document.querySelectorAll('#status-table .address-pill').length === 2 && [...document.querySelectorAll('#status-table .status-badge')].every(el => el.textContent === '可用')");
       await cdp.until(sessionId, "document.querySelector('#log-window').textContent.includes('已加载池配置')");
-      await cdp.evaluate(sessionId, `(() => {
-        const style = document.createElement('style');
-        style.textContent = 'html{scroll-behavior:auto!important}*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}';
-        document.head.append(style);
-      })()`);
       const capture = async state => {
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 }, sessionId);
         await cdp.evaluate(sessionId, `(async () => {
+          if (!document.getElementById('visual-capture-motion')) {
+            const style = document.createElement('style');
+            style.id = 'visual-capture-motion';
+            style.textContent = 'html{scroll-behavior:auto!important}*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}';
+            document.head.append(style);
+          }
           await document.fonts.ready;
           document.activeElement?.blur();
           window.scrollTo({ top: 0, behavior: 'instant' });
