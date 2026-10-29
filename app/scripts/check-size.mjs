@@ -17,18 +17,19 @@ const BUDGETS = {
   worker: { rawKb: 230, gzipKb: 60 },
   // 单文件预算保留约 15% 余量：正常小改动可通过，单次数百 KB 的依赖膨胀仍会失败。
   script: { rawKb: 70, gzipKb: 24 },
-  scriptTotal: { rawKb: 100, gzipKb: 38 },
+  // 经用户授权增加源码体积余量；压缩后传输预算不变。
+  scriptTotal: { rawKb: 115, gzipKb: 38 },
   style: { rawKb: 40, gzipKb: 10 },
-  pageTotal: { rawKb: 140, gzipKb: 50 },
+  pageTotal: { rawKb: 155, gzipKb: 50 },
 };
 
 // 调整预算时最多只能相对上一轮生效值放宽 20%，避免连续追涨掩盖体积膨胀。
 const BUDGET_BASELINE = {
   worker: { rawKb: 230, gzipKb: 60 },
   script: { rawKb: 60, gzipKb: 22 },
-  scriptTotal: { rawKb: 90, gzipKb: 35 },
+  scriptTotal: { rawKb: 100, gzipKb: 38 },
   style: { rawKb: 40, gzipKb: 10 },
-  pageTotal: { rawKb: 130, gzipKb: 46 },
+  pageTotal: { rawKb: 140, gzipKb: 50 },
 };
 const MAX_BUDGET_GROWTH = 0.2;
 
