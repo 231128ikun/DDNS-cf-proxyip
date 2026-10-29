@@ -8,7 +8,7 @@ import type { RequestState } from './request-state';
  * refresh 的身份保持稳定，因此首屏的并行预取不会因为重渲染而重复触发。
  */
 export function useResource<T extends object>(
-  load: (signal?: AbortSignal) => Promise<T>,
+  load: (signal?: AbortSignal, progress?: (data: T) => void) => Promise<T>,
   retainData = false,
 ): readonly [
   RequestState<T>,
@@ -27,7 +27,11 @@ export function useResource<T extends object>(
       ? { status: 'ready', data: cached.current, refreshing: true }
       : { status: 'loading' });
     try {
-      const data = await latest.current(signal);
+      const data = await latest.current(signal, (data) => {
+        if (signal?.aborted || request !== latestRequest.current) return;
+        cached.current = data;
+        setState({ status: 'ready', data, refreshing: true });
+      });
       if (signal?.aborted || request !== latestRequest.current) return false;
       cached.current = data;
       setState({ status: 'ready', data });

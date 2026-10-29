@@ -26,8 +26,10 @@ export function currentStatusRows(status: TargetStatusResponse, port: number | '
 /** 复用批量检测的并发、取消和 unknown 处理，每个 Worker 请求仍只检测一个地址。 */
 export async function loadTargetStatus(
   client: ApiClient, key: string, port: number | 'any', signal?: AbortSignal, concurrency?: number,
+  onRecords?: (status: TargetStatusView) => void,
 ): Promise<TargetStatusView> {
   const status = await client.currentStatus(key, signal);
+  onRecords?.({ ...status, probes: [] });
   const addresses = [...new Set(currentStatusRows(status, port).map((row) => row.address))].slice(0, MAX_CURRENT_STATUS_PROBES);
   const checked = await client.checkBatch(addresses.join('\n'), signal, undefined, concurrency);
   return { ...status, probes: checked.items };

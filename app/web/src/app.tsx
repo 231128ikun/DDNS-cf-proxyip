@@ -113,11 +113,11 @@ export function App({ client }: { readonly client: ApiClient }) {
   });
   const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
   const targetPort = configuredTarget?.port ?? 443;
-  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal) => {
+  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal, progress) => {
     if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
     if (config.status !== 'ready') return Promise.reject(new Error(config.status === 'error' ? config.message : '正在读取维护配置，请稍后刷新'));
     if (!configuredTarget) return Promise.reject(new Error('当前目标已变更，请刷新域名绑定'));
-    return loadTargetStatus(client, selectedTargetKey, targetPort, signal, webCheckConcurrency);
+    return loadTargetStatus(client, selectedTargetKey, targetPort, signal, webCheckConcurrency, progress);
   });
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。

@@ -206,6 +206,7 @@ async function run() {
         await cdp.until(sessionId, "document.querySelector('#pool-selector') && document.querySelector('.target-summary-domain')?.textContent === 'edge.example.com'");
         await cdp.until(sessionId, "document.querySelector('#manual-add-ip, .current-status-add input')");
         await cdp.until(sessionId, "document.querySelectorAll('#status-table .address-pill').length === 2");
+        await cdp.until(sessionId, "document.querySelectorAll('#status-table .status-badge.ok').length === 2");
         const data = await cdp.evaluate(sessionId, `(${measure})(${JSON.stringify(selectors)})`);
         const session = { name, sessionId, targetId, data };
         sessions.push(session);

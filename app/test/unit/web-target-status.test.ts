@@ -50,6 +50,20 @@ function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddre
 }
 
 describe('current DNS display through ApiClient and Worker routes', () => {
+  it('publishes DNS records while a slow probe is still pending', async () => {
+    const records: DnsRecord[] = [{ id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' }];
+    const { client } = setup(records);
+    let finish!: () => void;
+    vi.spyOn(client, 'checkBatch').mockImplementation(async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { total: 0, alive: 0, dead: 0, unknown: 0, invalid: [], items: [] };
+    });
+    const progress = vi.fn();
+    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({ records, probes: [] })));
+    finish();
+    await pending;
+  });
   it('uses the configured browser concurrency for automatic current-record probing', async () => {
     const records: DnsRecord[] = Array.from({ length: 6 }, (_, index) => ({
       id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,

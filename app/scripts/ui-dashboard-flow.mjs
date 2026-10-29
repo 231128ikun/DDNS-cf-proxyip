@@ -106,6 +106,7 @@ export async function auditTargetStartup(cdp, sessionId, base, requests, fixture
   try {
     await cdp.send('Page.navigate', { url: `${base}/` }, sessionId);
     await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:2053")');
+    await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
     const checked = requests.slice(start).filter((request) => request.path === '/api/check').map((request) => request.input.proxyip).sort();
     if (JSON.stringify(checked) !== JSON.stringify(['203.0.113.10:2053', '[2001:db8::10]:2053'])) {
       failures.push(`配置延迟返回时首次探测的端口错误：${checked.join('、') || '没有探测请求'}`);
