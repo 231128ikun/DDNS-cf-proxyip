@@ -122,7 +122,7 @@ function StatusRow({ address, result, onCopyAddress, action }: {
     <td class="status-address"><AddressPill address={address} onCopy={onCopyAddress} /></td>
     <td><span class="colo-badge">{result?.colo ?? '-'}</span></td>
     <td><span class="latency-badge">{result?.latencyMs === undefined ? '未知' : `${result.latencyMs}ms`}</span></td>
-    <td><span class={`status-badge ${result?.status === 'alive' ? 'ok' : result?.status === 'dead' ? 'bad' : 'warn'}`} title={result?.message ?? result?.code}>{result ? probeStatusLabel(result.status) : '未检测'}</span></td>
+    <td><span class={`status-badge ${result?.status === 'alive' ? 'ok' : result?.status === 'dead' ? 'bad' : 'warn'}`} title={result?.message ?? result?.code}>{result ? probeStatusLabel(result.status, result.code) : '未检测'}</span></td>
     <td class="status-exit-cell">{result ? <ProbeExits result={result} onCopy={onCopyAddress} /> : '-'}</td>
     <td>{action}</td>
   </tr>;

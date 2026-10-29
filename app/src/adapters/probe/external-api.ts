@@ -130,6 +130,11 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const message = readMessage(record);
   const infrastructureError = readProbeInfrastructureError(record);
   if (infrastructureError) {
+    if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(infrastructureError)) {
+      return unknown(target, 'TIMEOUT', '探针连接超时（节点状态未知）', { endpoint, latencyMs });
+    }
+    const http = infrastructureError.match(/\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i);
+    if (http) return unknown(target, 'HTTP_ERROR', `探针上游 HTTP ${http[1]}（节点状态未知）`, { endpoint, latencyMs });
     return unknown(target, 'PROBE_API_ERROR', infrastructureError, { endpoint, latencyMs });
   }
   if (statusText === 'error' || statusText === 'invalid') {
@@ -316,7 +321,7 @@ function readNestedProbeMessages(value: unknown): string[] {
 }
 
 const PROBE_INFRASTRUCTURE_ERROR_PATTERN =
-  /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|request cancel(?:l)?ed|operation aborted/i;
+  /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|unexpected status:\s*[45]\d{2}|request cancel(?:l)?ed|operation aborted/i;
 
 function isProbeInfrastructureMessage(value: string): boolean {
   return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value);

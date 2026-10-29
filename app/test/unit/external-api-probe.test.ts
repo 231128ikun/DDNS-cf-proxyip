@@ -13,6 +13,27 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('ExternalApiProbeAdapter', () => {
+  it.each([
+    ['tcp connect timeout after 9999ms', 'TIMEOUT', '探针连接超时（节点状态未知）'],
+    ['probe request timed out', 'TIMEOUT', '探针连接超时（节点状态未知）'],
+    ['unexpected status: 502 body: <html><h1>502 Bad Gateway</h1></html>', 'HTTP_ERROR', '探针上游 HTTP 502（节点状态未知）'],
+    ['upstream returned 503 Service Unavailable', 'HTTP_ERROR', '探针上游 HTTP 503（节点状态未知）'],
+  ])('classifies reported infrastructure errors without exposing response bodies: %s', async (message, code, expected) => {
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+      timeoutMs: 15000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code, message: expected });
+  });
+
+  it('retries a reported timeout on the backup without marking the node dead', async () => {
+    let attempts = 0;
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [
+      { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
+      { name: 'backup', urlTemplate: 'https://backup.example/?proxyip=' },
+    ], timeoutMs: 15000, fetchImpl: (async () => ++attempts === 1
+      ? jsonResponse({ success: false, probe_results: { ipv4: { ok: false, error: 'tcp connect timeout after 9999ms' } } })
+      : jsonResponse({ success: true })) as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'alive', endpoint: 'backup' });
+  });
   it('builds URL templates without duplicating parsing logic', () => {
     expect(buildProbeUrl('https://check.example/check?proxyip={proxyip}', target)).toBe(
       'https://check.example/check?proxyip=203.0.113.10%3A8443',
@@ -204,8 +225,6 @@ describe('ExternalApiProbeAdapter', () => {
 
   it.each([
     'Network connection lost.',
-    'probe request timed out',
-    'upstream returned 503 Service Unavailable',
     'Worker exceeded resource limits',
     'too many requests, rate limit exceeded',
     'fetch failed: internal error',
