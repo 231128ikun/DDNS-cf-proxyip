@@ -21,7 +21,8 @@ export async function auditConfigTiming(cdp, sessionId, base, requests, fixture,
     await cdp.send('Page.navigate', { url: base }, sessionId);
     await cdp.until(sessionId, 'document.querySelector(".target-summary-domain")?.textContent === "edge.example.com"');
   };
-  const ready = () => cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:2053")');
+  // DNS 先展示、探测后完成；测手动批次并发前须结束自动探测，不能混计两个批次。
+  const ready = () => cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:2053") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
   const configPage = async () => {
     await click('.nav-tab[data-page="config"]');
     await cdp.until(sessionId, 'Boolean(document.querySelector("#page-config .config-mini-card")?.offsetWidth)');
