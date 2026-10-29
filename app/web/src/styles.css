@@ -1123,7 +1123,6 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 42px;
   padding: var(--space-3) var(--space-6);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-pill);

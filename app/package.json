@@ -25,7 +25,7 @@
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs",
     "audit:ui:main": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-main --out .wrangler/tmp/ui-audit-main",
-    "audit:parity": "node scripts/ui-parity.mjs --flows",
+    "audit:parity": "node scripts/ui-nav-regression.mjs && node scripts/ui-parity.mjs --flows",
     "audit:pixels": "node --test scripts/pixel-diff.test.mjs && node scripts/ui-pixels.mjs",
     "audit:visual": "node --test scripts/pixel-diff.test.mjs && node scripts/ui-visual-capture.mjs && node scripts/ui-pixels.mjs .wrangler/tmp/ui-visual/report.json",
     "dev:web": "vite --config web/vite.config.ts",
