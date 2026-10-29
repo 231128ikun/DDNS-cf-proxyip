@@ -47,8 +47,11 @@
 | IP 池 | `app/src/application/pool-service.ts`、`app/src/domain/pool-entry.ts`、`app/src/adapters/storage/kv-pool-catalog.ts` |
 | 域名绑定 | `app/src/application/domain-bindings.ts`、`app/src/adapters/storage/kv-domain-binding-repository.ts` |
 | DNS 维护 | `app/src/application/maintain-managed-target.ts`、`maintain-managed-targets.ts`、`app/src/adapters/dns/cloudflare-dns.ts` |
-| Telegram | `app/src/adapters/notify/` |
+| Telegram | `app/src/adapters/notify/`；任务通知模板为 `app/src/jobs/maintenance-message.ts` |
 | 浏览器端 | `app/web/src/`，页面入口为 `app.tsx`，请求统一走 `api/client.ts` |
+| 浏览器批量生命周期 | `app/web/src/state/use-batch-check.ts`，续检来源合并为 `batch-resume.ts` |
+| 远程池文本 | `app/src/application/remote-pool-loader.ts`、`ports/remote-pool-source.ts`、`adapters/http/remote-pool-source.ts` |
+| 分层门禁 | `app/test/unit/architecture.test.ts`，随完整门禁执行 |
 | 发布构建 | `app/scripts/build-worker.mjs`，构建前端并产出 `app/dist/release/worker.js` 供体积门禁检查 |
 
 ## 3. 开始任务前
