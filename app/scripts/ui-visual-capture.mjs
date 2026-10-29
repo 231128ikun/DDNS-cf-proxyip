@@ -11,6 +11,7 @@ const out = resolve(option('--out', '.wrangler/tmp/ui-visual'));
 mkdirSync(out, { recursive: true });
 const results = [];
 const server = await serveUiFixture({ reference: true, ref: UI_REFERENCE_REF });
+const emptyServer = await serveUiFixture({ reference: true, ref: UI_REFERENCE_REF, empty: true });
 let browser;
 try {
   browser = await launchBrowser();
@@ -132,6 +133,14 @@ try {
       await select('#pool-selector', 'ip_pool_trash');
       await cdp.until(sessionId, "Boolean(document.querySelector('#trash-actions button')?.offsetWidth) && document.querySelector('#pool-count').textContent === '0'");
       await capture('trash');
+      await cdp.send('Page.navigate', { url: emptyServer.base + path }, sessionId);
+      await cdp.until(sessionId, "document.querySelector('.target-summary-domain')?.textContent === '未配置维护域名' && document.querySelector('#log-window')?.textContent.includes('已加载池配置')");
+      await capture('empty-dashboard');
+      await cdp.click(sessionId, '.domain-binding-header');
+      await capture('empty-bindings');
+      await cdp.click(sessionId, '.nav-tab[data-page="config"]');
+      await cdp.until(sessionId, "Boolean(document.querySelector('#page-config')?.checkVisibility())");
+      await capture('empty-config');
       server.fixture.config.authKey = 'fixture-panel-key';
       await cdp.send('Network.deleteCookies', { name: 'ddns_auth', url: server.base }, sessionId);
       await cdp.send('Page.navigate', { url: server.base + (name === 'main' ? '/reference-login' : '/') }, sessionId);
@@ -147,4 +156,5 @@ try {
 } finally {
   await browser?.close();
   await server.close();
+  await emptyServer.close();
 }

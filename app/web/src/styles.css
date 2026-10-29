@@ -73,6 +73,7 @@
   --exit-tag-padding: 3px 7px;
   --badge-padding: 5px 9px;
   --guide-size: 26px;
+  --empty-state-padding: 18px;
   --exit-row-min: 30px;
   --color-inverse: #ffffff;
 
@@ -665,17 +666,12 @@ body {
             flex-basis: 14px;
         }
 .config-empty-state {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 120px;
-  padding: 18px;
+  padding: var(--empty-state-padding);
   border: 1px dashed var(--color-border-strong);
   border-radius: var(--radius-card-sm);
-  color: var(--color-text-muted);
+  color: var(--color-field-help);
   background: var(--color-surface-muted);
-  font-size: 13px;
+  font-size: var(--font-size-field);
   text-align: center;
 }
 .config-edit-panel {

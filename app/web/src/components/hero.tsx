@@ -13,7 +13,6 @@ interface HeroProps {
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
   readonly onSelectTarget: (key: string | null) => void;
-  readonly onOpenConfig: () => void;
 }
 
 export function Hero({
@@ -25,7 +24,6 @@ export function Hero({
   usageOpen,
   onToggleUsage,
   onSelectTarget,
-  onOpenConfig,
 }: HeroProps) {
   return (
     <div class="container hero">
@@ -83,11 +81,6 @@ export function Hero({
             )}
           </select>
         </label>
-        {bindings.status === 'ready' && targetChoices.length === 0 && (
-          <button class="btn btn-sm btn-outline-primary mt-2" type="button" onClick={onOpenConfig}>
-            前往配置中心添加
-          </button>
-        )}
       </div>
     </div>
   );
@@ -141,7 +134,7 @@ function TargetSummary({
     return (
       <>
         <span class="target-summary-domain">未配置维护域名</span>
-        <span class="target-summary-meta">点击前往配置中心添加</span>
+        <span class="target-summary-meta">请先到配置中心添加</span>
       </>
     );
   }

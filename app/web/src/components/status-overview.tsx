@@ -44,7 +44,7 @@ export function StatusOverview({ check, current, selectedKey, targetPort, lookup
           </button>
         </form>
       </div>
-      <form id="manual-add-section" class="input-group input-group-sm mb-2" onSubmit={async (event) => {
+      {selectedKey && <form id="manual-add-section" class="input-group input-group-sm mb-2" onSubmit={async (event) => {
         event.preventDefault();
         if (adding || !addValue.trim()) return;
         const submitted = addValue;
@@ -57,7 +57,7 @@ export function StatusOverview({ check, current, selectedKey, targetPort, lookup
           placeholder="手动添加IP到当前域名 (如: 1.2.3.4:443)" value={addValue}
           onInput={(event) => setAddValue(event.currentTarget.value)} />
         <button class="btn btn-success" type="submit" disabled={adding || !selectedKey} aria-label={adding ? '添加中…' : '添加'} title="添加"><Icon name="plus" /></button>
-      </form>
+      </form>}
       <div id="status-display" class="scroll-box status-display">
         <div class="table-responsive">
           <table class="table text-center mb-0 status-table">

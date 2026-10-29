@@ -215,6 +215,7 @@ export function App({ client }: { readonly client: ApiClient }) {
     appendConsoleLog(`⚙️ 配置: 并发${webCheckConcurrency} | 超时${config.data.config.settings.CHECK_TIMEOUT}ms`);
     const target = targetChoices.find(item => item.key === selectedTargetKey);
     if (target) appendConsoleLog(`切换到: ${target.domain} (${target.mode})`);
+    else appendConsoleLog('请先在配置中心添加管理域名', 'warning');
     appendConsoleLog('✅ 已加载池配置', 'success');
   }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices, webCheckConcurrency]);
 
@@ -769,7 +770,6 @@ export function App({ client }: { readonly client: ApiClient }) {
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
         onSelectTarget={handleSelectTarget}
-        onOpenConfig={() => setPage('config')}
       />
 
       <div class="container">

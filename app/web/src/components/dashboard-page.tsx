@@ -513,9 +513,6 @@ function DomainBindingsCard({
       </summary>
       {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
       {bindings.status === 'ready' && (
-        bindings.data.items.length === 0 ? (
-          <p class="text-secondary small mb-0">还没有维护目标；请先到“域名管理”创建域名配置。</p>
-        ) : (
           <div class="domain-binding-table-wrap">
             <table class="table table-sm mb-0">
               <thead>
@@ -525,7 +522,9 @@ function DomainBindingsCard({
                 </tr>
               </thead>
               <tbody>
-                {bindings.data.items.map(item => (
+                {bindings.data.items.length === 0 ? (
+                  <tr><td colspan={2} class="text-center text-secondary">请先到配置中心添加管理域名</td></tr>
+                ) : bindings.data.items.map(item => (
                   <tr key={item.key}>
                     <td>
                       <div class="domain-binding-domain">
@@ -552,7 +551,6 @@ function DomainBindingsCard({
               </tbody>
             </table>
           </div>
-        )
       )}
     </details>
     </>
