@@ -5,6 +5,7 @@ import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { PoolService } from '../../src/application/pool-service';
 import { RemotePoolLoader } from '../../src/application/remote-pool-loader';
+import { HttpRemotePoolSource } from '../../src/adapters/http/remote-pool-source';
 import { TargetStatus } from '../../src/application/target-status';
 import { createDefaultConfig, type AppConfig, type ConfigResponse } from '../../src/contracts/config';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
@@ -369,10 +370,10 @@ describe('HTTP app remote load route', () => {
   }
 
   function loaderReturning(body: string, init: ResponseInit = {}): RemotePoolLoader {
-    return new RemotePoolLoader({
+    return new RemotePoolLoader(new HttpRemotePoolSource({
       timeoutMs: 1_000,
       fetchImpl: (async () => new Response(body, { status: 200, ...init })) as typeof fetch,
-    });
+    }));
   }
 
   it('returns the downloaded pool text with a line count', async () => {

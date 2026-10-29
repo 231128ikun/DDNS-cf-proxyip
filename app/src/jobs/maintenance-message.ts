@@ -1,5 +1,5 @@
-import type { MaintenanceRunReport, TargetMaintenanceResult } from '../../application/maintain-managed-targets';
-import { formatBeijingTimestamp } from '../../util/time';
+import type { MaintenanceRunReport, TargetMaintenanceResult } from '../application/maintain-managed-targets';
+import { formatBeijingTimestamp } from '../util/time';
 
 export interface TelegramMaintenanceMessageOptions {
   readonly isManual: boolean;

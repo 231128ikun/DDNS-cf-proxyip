@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HttpRemotePoolSource, type HttpRemotePoolSourceOptions } from '../../src/adapters/http/remote-pool-source';
 import { RemotePoolLoader } from '../../src/application/remote-pool-loader';
 
 function textResponse(body: string, init: ResponseInit = {}): Response {
@@ -18,7 +19,7 @@ function abortablePendingFetch(): typeof fetch {
 
 describe('RemotePoolLoader', () => {
   it('normalises remote pool text and reports the final URL', async () => {
-    const loader = new RemotePoolLoader({
+    const loader = createLoader({
       timeoutMs: 1_000,
       fetchImpl: (async () =>
         textResponse('# 注释\n203.0.113.10:443\n\nnot a target\n203.0.113.10:443\n203.0.113.11:443,AS64500,US,v4\n')) as typeof fetch,
@@ -34,7 +35,7 @@ describe('RemotePoolLoader', () => {
 
   it('follows redirects but re-validates every hop', async () => {
     const seen: string[] = [];
-    const loader = new RemotePoolLoader({
+    const loader = createLoader({
       timeoutMs: 1_000,
       fetchImpl: (async (input: RequestInfo | URL) => {
         seen.push(String(input));
@@ -53,7 +54,7 @@ describe('RemotePoolLoader', () => {
 
   it('refuses a redirect that points at a private address', async () => {
     const seen: string[] = [];
-    const loader = new RemotePoolLoader({
+    const loader = createLoader({
       timeoutMs: 1_000,
       fetchImpl: (async (input: RequestInfo | URL) => {
         seen.push(String(input));
@@ -67,7 +68,7 @@ describe('RemotePoolLoader', () => {
   });
 
   it('stops redirect loops with a clear failure', async () => {
-    const loader = new RemotePoolLoader({
+    const loader = createLoader({
       timeoutMs: 1_000,
       maxRedirects: 2,
       fetchImpl: (async () => redirectResponse('https://example.com/loop')) as typeof fetch,
@@ -77,14 +78,14 @@ describe('RemotePoolLoader', () => {
   });
 
   it('rejects oversized payloads from header and from body', async () => {
-    const headerLoader = new RemotePoolLoader({
+    const headerLoader = createLoader({
       timeoutMs: 1_000,
       maxBytes: 8,
       fetchImpl: (async () => textResponse('203.0.113.10:443', { headers: { 'content-length': '4096' } })) as typeof fetch,
     });
     await expect(headerLoader.load('https://example.com/pool.txt')).resolves.toEqual({ ok: false, reason: 'too-large' });
 
-    const bodyLoader = new RemotePoolLoader({
+    const bodyLoader = createLoader({
       timeoutMs: 1_000,
       maxBytes: 8,
       fetchImpl: (async () => textResponse('203.0.113.10:443')) as typeof fetch,
@@ -93,13 +94,13 @@ describe('RemotePoolLoader', () => {
   });
 
   it('maps HTTP errors and unreachable hosts', async () => {
-    const notFound = new RemotePoolLoader({
+    const notFound = createLoader({
       timeoutMs: 1_000,
       fetchImpl: (async () => new Response('nope', { status: 404 })) as typeof fetch,
     });
     await expect(notFound.load('https://example.com/pool.txt')).resolves.toEqual({ ok: false, reason: 'http-error' });
 
-    const offline = new RemotePoolLoader({
+    const offline = createLoader({
       timeoutMs: 1_000,
       fetchImpl: (async () => {
         throw new TypeError('network down');
@@ -109,12 +110,12 @@ describe('RemotePoolLoader', () => {
   });
 
   it('reports its own timeout as timeout', async () => {
-    const loader = new RemotePoolLoader({ timeoutMs: 20, fetchImpl: abortablePendingFetch() });
+    const loader = createLoader({ timeoutMs: 20, fetchImpl: abortablePendingFetch() });
     await expect(loader.load('https://example.com/slow.txt')).resolves.toEqual({ ok: false, reason: 'timeout' });
   });
 
   it('distinguishes caller cancellation from its own timeout', async () => {
-    const loader = new RemotePoolLoader({ timeoutMs: 5_000, fetchImpl: abortablePendingFetch() });
+    const loader = createLoader({ timeoutMs: 5_000, fetchImpl: abortablePendingFetch() });
     const controller = new AbortController();
     const pending = loader.load('https://example.com/slow.txt', { signal: controller.signal });
     controller.abort();
@@ -122,3 +123,6 @@ describe('RemotePoolLoader', () => {
     await expect(pending).resolves.toEqual({ ok: false, reason: 'network-error' });
   });
 });
+function createLoader(options: HttpRemotePoolSourceOptions): RemotePoolLoader {
+  return new RemotePoolLoader(new HttpRemotePoolSource(options));
+}

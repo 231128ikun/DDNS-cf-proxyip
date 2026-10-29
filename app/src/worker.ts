@@ -17,6 +17,7 @@ import { MaintainManagedTarget } from './application/maintain-managed-target';
 import { MaintainManagedTargets } from './application/maintain-managed-targets';
 import { PoolService } from './application/pool-service';
 import { RemotePoolLoader } from './application/remote-pool-loader';
+import { HttpRemotePoolSource } from './adapters/http/remote-pool-source';
 import { ResolveTarget } from './application/resolve-target';
 import { TargetStatus } from './application/target-status';
 import { TargetRecords } from './application/target-records';
@@ -66,7 +67,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         authKey: resolved.config.authKey,
         configSource: resolved.source,
         config: configService,
-        remotePoolLoader: new RemotePoolLoader({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT }),
+        remotePoolLoader: new RemotePoolLoader(new HttpRemotePoolSource({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT })),
         ...(kv
           ? {
               ...createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance),

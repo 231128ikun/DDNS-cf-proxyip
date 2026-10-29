@@ -4,7 +4,7 @@ import {
   type MaintenanceRunReport,
   type MaintenanceRunSummary,
 } from '../application/maintain-managed-targets';
-import { buildTelegramMaintenanceMessage } from '../adapters/notify/telegram-message';
+import { buildTelegramMaintenanceMessage } from './maintenance-message';
 import type { PoolSummary } from '../contracts/pool';
 import type { DnsZone } from '../ports/dns-repository';
 import type { MaintenanceSource } from '../ports/maintenance-source';

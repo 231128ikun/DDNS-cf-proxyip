@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTelegramMaintenanceMessage } from '../../src/adapters/notify/telegram-message';
+import { buildTelegramMaintenanceMessage } from '../../src/jobs/maintenance-message';
 import type { MaintenanceRunReport } from '../../src/application/maintain-managed-targets';
 
 const run: MaintenanceRunReport = {

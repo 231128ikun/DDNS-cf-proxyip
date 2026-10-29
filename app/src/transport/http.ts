@@ -4,7 +4,8 @@ import type { EffectiveConfigSource, ResolvedConfig } from '../application/confi
 import type { CleanPool } from '../application/clean-pool';
 import { DomainBindingsInputError, type DomainBindings } from '../application/domain-bindings';
 import { PoolInputError, type PoolService } from '../application/pool-service';
-import type { RemoteLoadFailure, RemotePoolLoader } from '../application/remote-pool-loader';
+import type { RemotePoolLoader } from '../application/remote-pool-loader';
+import type { RemoteLoadFailure } from '../ports/remote-pool-source';
 import {
   parseAppConfig,
   toPublicConfig,
