@@ -6,13 +6,15 @@
  *   npm run build && npm run audit:ui
  * 默认启动只接收模拟数据的本地服务器；--base 可检查已启动的本地页面。
  *
- * 可选参数：--base / --out / --chrome
+ * 可选参数：--base / --out / --chrome / --compare-main
+ * --compare-main 保留严格报告，但只容许 main 中同一内容、同等或更轻的问题。
  * 脚本会自行启动 headless Chrome，用户数据目录放在系统临时目录，绝不写进仓库。
  * 只依赖 Node 内置能力（Node >= 22 提供全局 WebSocket），不引入任何依赖。
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { launchBrowser } from "./ui-browser.mjs";
-import { serveUiFixture } from "./ui-fixture.mjs";
+import { serveUiFixture, UI_REFERENCE_REF } from "./ui-fixture.mjs";
+import { compareAudit } from "./ui-audit-diff.mjs";
 import { join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
@@ -21,6 +23,8 @@ const flag = (name, fallback) => {
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 };
 let BASE = flag("base", "");
+const compareMain = args.includes("--compare-main");
+if (compareMain && BASE) throw new Error('--compare-main 必须使用本地同数据 fixture，不能配合 --base');
 const OUT = resolve(flag("out", ".wrangler/tmp/ui-audit"));
 const MIN_TARGET = 32;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -35,7 +39,7 @@ const VIEWPORTS = [
 ];
 const PAGES = [
   { key: "dashboard", path: "/" },
-  { key: "config", path: "/", tab: "#tab-config", expect: "#page-config" },
+  { key: "config", path: "/", tab: '.nav-tab[data-page="config"]', expect: "#page-config" },
 ];
 
 /** 在页面上下文中执行，返回单个视口的审计结果。 */
@@ -82,6 +86,7 @@ const auditProbe = () => {
     return { kind: "color", color: base };
   };
   const visible = (el) => {
+    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return false;
     const style = getComputedStyle(el);
@@ -100,6 +105,18 @@ const auditProbe = () => {
       .filter(Boolean)
       .join(" ")
       .trim();
+  // main 的 emoji 位于文本节点，当前页面使用 aria-hidden 的图标 span。
+  // 彩色 emoji 的可见颜色不等于 CSS color，不按普通文字计算对比度。
+  const textKey = (text) => text.normalize('NFKC').replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\s+/g, '');
+  const issueKey = (el, text) => {
+    const region = el.closest('#page-dashboard, #page-config, .hero, .top-nav, footer');
+    const area = region?.id || (region?.matches('footer') ? 'footer' : region?.matches('.hero') ? 'hero' : region?.matches('.top-nav') ? 'top-nav' : 'document');
+    const anchors = ['#manual-add-section', ':has(> #lookup-domain)', '#status-display', '.domain-binding-card',
+      '.toolbar-row', '.filter-line', '.hero-actions', '.domain-selector', '.config-details', '.config-card-grid', '#log-window'];
+    const feature = el.closest(anchors.join(','));
+    const anchor = anchors.find(selector => feature?.matches(selector)) || 'content';
+    return `${area}:${anchor}:${area === 'footer' ? 'footer' : textKey(text) || text.trim()}`;
+  };
 
   const all = [...document.querySelectorAll("*")];
   const contrastFailures = [];
@@ -114,6 +131,7 @@ const auditProbe = () => {
     const bucket = (fontSizes[size] ||= { count: 0, samples: [] });
     bucket.count += 1;
     if (bucket.samples.length < 4) bucket.samples.push({ el: describe(el), text: text.slice(0, 30) });
+    if (!textKey(text)) continue;
 
     const fg = parseColor(style.color);
     if (!fg) continue;
@@ -130,9 +148,10 @@ const auditProbe = () => {
     const required = large ? 3 : 4.5;
     if (r < required) {
       contrastFailures.push({
+        key: issueKey(el, text),
         el: describe(el),
         text: text.slice(0, 40),
-        ratio: Math.round(r * 100) / 100,
+        ratio: r,
         required,
         color: style.color,
         bg: `rgb(${Math.round(bg.color.r)}, ${Math.round(bg.color.g)}, ${Math.round(bg.color.b)})`,
@@ -143,7 +162,7 @@ const auditProbe = () => {
   }
 
   const smallTargets = [];
-  for (const el of document.querySelectorAll("a[href], button, input, select, textarea, summary, [role='button'], [tabindex]:not([tabindex='-1'])")) {
+  for (const el of document.querySelectorAll("a[href], button, input, select, textarea, summary, [onclick], [role='button'], [tabindex]:not([tabindex='-1'])")) {
     if (!visible(el)) continue;
     if (el.tagName === "INPUT" && el.type === "hidden") continue;
     // 复选框的关联 label 也是实际点击目标；只量 13px 的 input 会误报。
@@ -153,9 +172,10 @@ const auditProbe = () => {
     const rect = target.getBoundingClientRect();
     if (rect.height < 32) {
       smallTargets.push({
+        key: issueKey(el, target.textContent?.trim() || el.getAttribute('placeholder') || el.getAttribute('title') || el.id || el.tagName),
         el: describe(el),
-        w: Math.round(rect.width),
-        h: Math.round(rect.height),
+        w: rect.width,
+        h: rect.height,
         text: (target.textContent || el.value || "").trim().slice(0, 24),
       });
     }
@@ -249,7 +269,7 @@ const checkPage = async (cdp, sessionId) => {
  * 用确定性的浏览器内响应跑一次真实检测流程。
  * 测试不依赖外部探针，只验证页面能否消费逐地址检测结果并把结论呈现出来。
  */
-async function runBatchFlowCheck(cdp, sessionId, viewport) {
+async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
   const source = `(() => {
     const nativeFetch = window.fetch.bind(window);
     window.__batchDelayMs = 0;
@@ -308,6 +328,17 @@ async function runBatchFlowCheck(cdp, sessionId, viewport) {
         if (!input || !button) return { failures: ["检测控件未渲染"] };
 
         const failures = [];
+        if (${expectEmpty}) {
+        if (document.querySelector('#manual-add-section')?.checkVisibility()) failures.push('未配置目标时不应显示 DNS 添加控件');
+        if (document.querySelector('.domain-selector > button')) failures.push('未配置目标时多出偏离 main 的独立跳转按钮');
+        if (document.querySelector('.target-summary-meta')?.textContent !== '请先到配置中心添加') failures.push('空目标摘要与 main 不同');
+        if (!document.querySelector('#log-window')?.textContent.includes('请先在配置中心添加管理域名')) failures.push('空配置缺少启动引导日志');
+        document.querySelector('.domain-binding-header')?.click();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const emptyBinding = document.querySelector('.domain-binding-table-wrap tbody td[colspan="2"]');
+        if (emptyBinding?.textContent !== '请先到配置中心添加管理域名') failures.push('空绑定没有保留 main 的表格占位行');
+        document.querySelector('.domain-binding-header')?.click();
+        }
         const original = "203.0.113.10:443\\n203.0.113.11:443";
         input.value = original;
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: original }));
@@ -402,6 +433,13 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
         document.querySelector("#tab-config")?.click();
         const page = await waitFor(() => document.querySelector("#page-config"));
         if (!page) return { failures: ["配置中心未渲染"] };
+        const emptyFailures = [...page.querySelectorAll('.config-empty-state')].flatMap(element => {
+          const box = element.getBoundingClientRect();
+          const grid = element.parentElement;
+          const column = parseFloat(getComputedStyle(grid).gridTemplateColumns);
+          return box.height > 80 || Math.abs(box.width - column) > 1
+            ? ['空配置占位卡没有保持 main 的单列宽度和内容高度'] : [];
+        });
 
         for (let index = 0; index < 2; index += 1) {
           const addZone = await waitFor(() => buttonByText("添加权限配置"));
@@ -431,7 +469,7 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
         document.querySelector(".config-details-summary").click();
         await new Promise((resolve) => setTimeout(resolve, 80));
 
-        const failures = [];
+        const failures = [...emptyFailures];
         const grids = [...document.querySelectorAll(".config-card-grid")];
         const zoneCards = [...(grids[0]?.querySelectorAll(".config-mini-card") ?? [])];
         const targetCards = [...(grids[1]?.querySelectorAll(".config-mini-card") ?? [])];
@@ -495,7 +533,7 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
 }
 
 async function main() {
-  const fixture = BASE ? null : await serveUiFixture({ empty: true });
+  const fixture = BASE ? null : await serveUiFixture({ empty: true, reference: compareMain });
   BASE ||= fixture.base;
   mkdirSync(OUT, { recursive: true });
   let browser;
@@ -509,17 +547,21 @@ async function main() {
     await cdp.send("Runtime.enable", {}, sessionId);
 
     const results = [];
+    const referenceResults = [];
     for (const viewport of VIEWPORTS) {
       for (const page of PAGES) {
+        for (const surface of compareMain ? ['main', 'current'] : ['current']) {
         await cdp.send(
           "Emulation.setDeviceMetricsOverride",
           { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile },
           sessionId,
         );
         const loaded = cdp.wait(sessionId, "Page.loadEventFired");
-        await cdp.send("Page.navigate", { url: `${BASE}${page.path}` }, sessionId);
+        await cdp.send("Page.navigate", { url: `${BASE}${surface === 'main' ? '/reference' : page.path}` }, sessionId);
         await loaded.catch(() => {});
-        await sleep(1200);
+        if (fixture) await cdp.until(sessionId, "document.querySelector('#pool-count')?.textContent === '2'");
+        else await sleep(1200);
+        await cdp.evaluate(sessionId, 'document.fonts.ready.then(() => true)');
         if (page.tab) {
           await cdp.send("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(page.tab)})?.click()`, returnByValue: true }, sessionId);
           await sleep(700);
@@ -531,10 +573,11 @@ async function main() {
               sessionId,
             );
             if (switched.result?.value !== true) throw new Error(`${page.key} 页面未切换：缺少 ${page.expect}`);
+            await cdp.until(sessionId, `Boolean(document.querySelector(${target})?.checkVisibility())`);
           }
         }
         const data = await checkPage(cdp, sessionId);
-        results.push({ page: page.key, viewport: viewport.name, ...data });
+        (surface === 'main' ? referenceResults : results).push({ page: page.key, viewport: viewport.name, ...data });
 
         const metrics = await cdp.send("Page.getLayoutMetrics", {}, sessionId);
         const size = metrics.cssContentSize;
@@ -543,7 +586,8 @@ async function main() {
           { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } },
           sessionId,
         );
-        writeFileSync(join(OUT, `${page.key}-${viewport.name}.png`), Buffer.from(shot.data, "base64"));
+        writeFileSync(join(OUT, `${surface === 'main' ? 'main-' : ''}${page.key}-${viewport.name}.png`), Buffer.from(shot.data, "base64"));
+        }
       }
     }
     const interactionFailures = [];
@@ -552,7 +596,7 @@ async function main() {
       const flowSession = await cdp.send("Target.attachToTarget", { targetId: flowTarget.targetId, flatten: true });
       await cdp.send("Page.enable", {}, flowSession.sessionId);
       await cdp.send("Runtime.enable", {}, flowSession.sessionId);
-      const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport);
+      const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport, Boolean(fixture));
       interactionFailures.push(...failures.map((failure) => `${viewport.name}: ${failure}`));
       const cardFailures = await runConfigCardCheck(cdp, flowSession.sessionId, viewport);
       interactionFailures.push(...cardFailures.map((failure) => `${viewport.name}: ${failure}`));
@@ -561,9 +605,14 @@ async function main() {
 
     await cdp.send("Target.closeTarget", { targetId });
 
+    const comparisons = compareMain ? results.map(current => ({ page: current.page, viewport: current.viewport,
+      ...compareAudit(referenceResults.find(reference => reference.page === current.page && reference.viewport === current.viewport), current),
+    })) : [];
+
     writeFileSync(
       join(OUT, "report.json"),
-      JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, results, interactionFailures }, null, 2),
+      JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, mode: compareMain ? 'main-regression' : 'strict',
+        reference: compareMain ? UI_REFERENCE_REF : null, results, referenceResults, comparisons, interactionFailures }, null, 2),
     );
 
     for (const r of results) {
@@ -589,14 +638,20 @@ async function main() {
     });
     for (const r of headingSkips) console.log(`  A11Y ${r.page}@${r.viewport} 标题层级跳级：${r.headings.map((h) => h.level).join(" > ")}`);
     for (const failure of interactionFailures) console.log(`  FLOW ${failure}`);
+    for (const comparison of comparisons) for (const failure of comparison.regressions) {
+      console.log(`  REGRESSION ${comparison.page}@${comparison.viewport} ${failure}`);
+    }
 
     const problems =
-      results.filter((r) => r.overflow || r.contrastFailures.length || r.smallTargets.length || r.a11y.unnamedControls.length || r.a11y.duplicateIds.length).length +
+      results.filter((r) => r.overflow || (!compareMain && (r.contrastFailures.length || r.smallTargets.length))
+        || r.a11y.unnamedControls.length || r.a11y.duplicateIds.length || r.a11y.imagesMissingAlt).length +
       headingSkips.length +
-      interactionFailures.length;
+      interactionFailures.length + comparisons.reduce((count, comparison) => count + comparison.regressions.length, 0);
     if (problems > 0) exitCode = 1;
     console.log(`\n报告与截图输出目录：${OUT}`);
-    console.log(problems === 0 ? "结论：全部视口通过（无横向溢出、无对比度失败、无小于 32px 目标、无 a11y 问题）" : `结论：存在 ${problems} 类问题，见上方明细`);
+    console.log(problems === 0 ? (compareMain
+      ? "结论：相对 main 无新增对比度或点击目标退步；main 已有问题仍在报告中，不代表严格无障碍通过"
+      : "结论：全部视口通过（无横向溢出、无对比度失败、无小于 32px 目标、无 a11y 问题）") : `结论：存在 ${problems} 类问题，见上方明细`);
   } finally {
     await browser?.close();
     await fixture?.close();
