@@ -20,6 +20,36 @@ async function request(path: string, init?: RequestInit, runtimeEnv: RuntimeEnv 
 }
 
 describe('发布 Worker 装配', () => {
+  it.each([
+    ['203.0.113.10:443 # 旧备注', '203.0.113.10:443,null,null,null # 旧备注'],
+    ['203.0.113.10:443,AS64500 # 旧备注', '203.0.113.10:443,AS64500,null,null # 旧备注'],
+    ['203.0.113.10:443,AS64500,JP # 旧备注', '203.0.113.10:443,AS64500,JP,null # 旧备注'],
+    ['[2001:db8::10]:8443,AS64500,JP,v6 # 旧备注', '[2001:db8::10]:8443,AS64500,JP,v6 # 旧备注'],
+  ])('keeps legacy pool data through the deployed client/route/storage chain (%s)', async (legacy, expected) => {
+    const store = new Map([
+      ['app_config', JSON.stringify({ settings: { DOH_TIMEOUT: 9000 } })],
+      ['ip_pool_default', legacy],
+      ['domain_pool_mapping', JSON.stringify({ 'edge.example.com|A': 'ip_pool_default' })],
+      ['ip_pool_names', JSON.stringify({ ip_pool_001: '用户池' })],
+    ]);
+    const before = new Map(store);
+    const writes: string[] = [];
+    const kv = { get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => { writes.push(key); store.set(key, value); },
+    } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    expect((await client.readPool('ip_pool_default')).content).toBe(legacy);
+    await client.saveConfig({ tgId: 'fixture-chat' });
+    const address = legacy.startsWith('[') ? '[2001:db8::10]:8443' : '203.0.113.10:443';
+    await client.savePool('ip_pool_default', address + ',null,null,null', 'append');
+    expect((await client.readPool('ip_pool_default')).content.trim()).toBe(expected);
+    expect((await client.config()).config.settings.DOH_TIMEOUT).toBe(9000);
+    expect(new Set(writes)).toEqual(new Set(['app_config', 'ip_pool_default']));
+    expect([...store.keys()]).toEqual([...before.keys()]);
+    expect(store.get('domain_pool_mapping')).toBe(before.get('domain_pool_mapping'));
+    expect(store.get('ip_pool_names')).toBe(before.get('ip_pool_names'));
+  });
+
   it('keeps tokens with a shared Zone ID through a real client save and KV read', async () => {
     const zones = [
       { label: '根域', baseDomain: 'example.com', zoneId: 'shared-fixture-zone', apiKey: 'root-fixture-token' },
