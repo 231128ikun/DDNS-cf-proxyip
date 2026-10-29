@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { ApiClient } from './api/client';
 import { errorMessage } from './api/errors';
 
@@ -15,19 +15,27 @@ export function AuthGate() {
   const [key, setKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [AppComponent, setAppComponent] = useState<AppComponent | null>(null);
+  const appModule = useRef<Promise<typeof import('./app')> | null>(null);
 
   const openApp = (): void => {
     setState({ phase: 'loading-app' });
-    void import('./app')
+    void (appModule.current ?? import('./app'))
       .then((module) => {
         setAppComponent(() => module.App);
         setState({ phase: 'ready' });
       })
-      .catch((error: unknown) => setState({ phase: 'login', error: errorMessage(error) }));
+      .catch((error: unknown) => {
+        appModule.current = null;
+        setState({ phase: 'login', error: errorMessage(error) });
+      });
   };
 
   useEffect(() => {
     let cancelled = false;
+    // 只预取公开静态代码；管理页面和数据仍等待鉴权成功。
+    const loading = import('./app');
+    appModule.current = loading;
+    void loading.catch(() => { if (appModule.current === loading) appModule.current = null; });
     const queryKey = new URL(window.location.href).searchParams.get('key')?.trim() ?? '';
     const clearQueryKey = (): void => {
       if (!queryKey) return;

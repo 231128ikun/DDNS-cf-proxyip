@@ -5,4 +5,5 @@ import './styles.css';
 const root = document.getElementById('app');
 if (!root) throw new Error('missing #app root');
 
+root.replaceChildren();
 render(<AuthGate />, root);
