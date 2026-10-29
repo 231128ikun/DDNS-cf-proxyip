@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, renameSync, rmdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -28,6 +28,9 @@ if (!existsSync(join(webDir, 'index.html'))) {
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
+// 清单只用于验收，不能作为静态资源发布。
+renameSync(join(webDir, '.vite', 'manifest.json'), join(outDir, 'web-manifest.json'));
+rmdirSync(join(webDir, '.vite'));
 
 runWrangler(['deploy', '--dry-run', '--config', 'wrangler.toml', '--outdir', toPosix(relative(root, outDir))]);
 

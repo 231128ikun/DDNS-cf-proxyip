@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib';
  *
  *   - Worker 打包体积：冷启动与部署大小。面板不再打包进 Worker，
  *     因此这里只含 `app/src/` 的逻辑，预算是它自己的量级。
- *   - 首屏页面重量：浏览器端 JS 与 CSS 的 gzip 合计。面板由 Cloudflare
+ *   - 页面重量：入口静态依赖单列，全量 JS 与 CSS 预算覆盖动态块。面板由 Cloudflare
  *     静态资源分发，和 Worker 体积互不影响，所以分开计量。
  *
  * 重新引入 Zod/Hono 等重型运行时依赖，或把大块逻辑塞进首屏，都应让 `npm run check` 失败。
@@ -89,9 +89,35 @@ for (const { label, path, budget } of targets) {
   report(label, rawKb, gzipKb, budget);
 }
 
-report('首屏 js 合计', scriptRaw, scriptGzip, BUDGETS.scriptTotal);
-report('首屏 css 合计', styleRaw, styleGzip, BUDGETS.style);
-report('首屏 js + css 合计', scriptRaw + styleRaw, scriptGzip + styleGzip, BUDGETS.pageTotal);
+if (!scriptRaw || !styleRaw) throw new Error('构建不完整：缺少 JS 或 CSS 产物');
+report('全量前端 js 合计', scriptRaw, scriptGzip, BUDGETS.scriptTotal);
+report('全量前端 css 合计', styleRaw, styleGzip, BUDGETS.style);
+report('全量前端 js + css 合计', scriptRaw + styleRaw, scriptGzip + styleGzip, BUDGETS.pageTotal);
+
+const manifest = JSON.parse(readFileSync(new URL('dist/release/web-manifest.json', appRoot), 'utf8'));
+const entry = Object.keys(manifest).find(key => manifest[key].isEntry);
+if (!entry) throw new Error('构建不完整：缺少 HTML 入口清单');
+const visited = new Set();
+const initialFiles = new Set();
+function visit(key) {
+  if (visited.has(key)) return;
+  visited.add(key);
+  const chunk = manifest[key];
+  if (!chunk) throw new Error(`构建清单引用缺失：${key}`);
+  initialFiles.add(chunk.file);
+  for (const file of chunk.css ?? []) initialFiles.add(file);
+  for (const imported of chunk.imports ?? []) visit(imported);
+}
+visit(entry);
+let initialRaw = 0, initialGzip = 0;
+for (const file of initialFiles) {
+  if (!/^assets\/[\w.-]+\.(js|css)$/.test(file)) throw new Error(`非法入口资源路径：${file}`);
+  const bytes = readFileSync(new URL(`dist/web/${file}`, appRoot));
+  initialRaw += bytes.length / 1024;
+  initialGzip += gzipSync(bytes).length / 1024;
+}
+report('HTML 静态入口依赖 js + css', initialRaw, initialGzip, BUDGETS.pageTotal);
+console.log('  入口统计不含登录后动态导入和预取；全量预算仍覆盖所有懒加载块。单位为 KiB。');
 
 if (failed) {
   console.error('\n体积超出预算：请先确认新增依赖或静态资源是否必要；不要直接调高预算。');
