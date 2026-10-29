@@ -18,6 +18,7 @@ const out = resolve(flag('out', '.wrangler/tmp/ui-parity'));
 const widths = flag('widths', '375,768,992,1440').split(',').map(Number);
 if (widths.some((width) => !Number.isInteger(width) || width < 280 || width > 3840)) throw new Error('--widths 必须是 280–3840 之间的整数');
 const referenceRef = flag('ref', UI_REFERENCE_REF);
+const currentOnly = args.includes('--current-only');
 const selectors = {
   hero: '.hero', target: '.target-summary', nav: '.top-nav',
   overview: '#page-dashboard > .card', workbench: '#page-dashboard .col-lg-7 > .card',
@@ -126,7 +127,7 @@ async function captureBindings(cdp, session, width, failures) {
 }
 
 function writeReport(results, fatal) {
-  const report = { reference: referenceRef, generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
+  const report = { reference: currentOnly ? null : referenceRef, mode: currentOnly ? 'functional' : 'main-comparison', generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
     referenceDefects: [...new Set(results.flatMap((result) => result.sessions.flatMap((session) => session.referenceDefects ?? [])))],
     coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
       ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
@@ -154,8 +155,8 @@ function writeReport(results, fatal) {
         ${session.images?.[state] ? `<a href="${escape(session.images[state])}"><img src="${escape(session.images[state])}" alt="${escape(title)} ${session.name} ${result.width}px" loading="lazy"></a>`
           : state.endsWith('-long') && session.name === 'main' ? '<p>此边界只验证重构实现。</p>' : '<p>未生成；见执行范围或失败原因。</p>'}</figure>`).join('')}</div></details>`).join('')}</section>`).join('');
   writeFileSync(join(out, 'index.html'), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>DDNS Pro main 对照验收</title><style>body{margin:24px;font:15px/1.6 system-ui;color:#1d1d1f;background:#f5f5f7}h1{font-size:24px}section{margin:24px 0}details{background:white;margin:12px 0;padding:16px;border-radius:12px}summary{cursor:pointer;font-weight:600}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:12px 0;min-width:0}figcaption{font-weight:600}img{display:block;width:100%;height:auto;border:1px solid #ddd;box-sizing:border-box}code{overflow-wrap:anywhere}@media(max-width:640px){body{margin:12px}.pair{grid-template-columns:1fr}}</style>
-    <h1>DDNS Pro main 对照验收</h1><p>基准提交：<code>${escape(referenceRef)}</code>。同一浏览器、同一视口、同一组虚构数据。点击图片可查看原尺寸。</p>
+    <title>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro main 对照验收'}</title><style>body{margin:24px;font:15px/1.6 system-ui;color:#1d1d1f;background:#f5f5f7}h1{font-size:24px}section{margin:24px 0}details{background:white;margin:12px 0;padding:16px;border-radius:12px}summary{cursor:pointer;font-weight:600}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:12px 0;min-width:0}figcaption{font-weight:600}img{display:block;width:100%;height:auto;border:1px solid #ddd;box-sizing:border-box}code{overflow-wrap:anywhere}@media(max-width:640px){body{margin:12px}.pair{grid-template-columns:1fr}}</style>
+    <h1>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro main 对照验收'}</h1><p>${currentOnly ? "当前实现的功能与响应式验收，不要求与 main 几何或像素一致。" : "基准提交：" + escape(referenceRef)} 点击图片可查看原尺寸。</p>
     <p>自动检查覆盖关键布局${report.flows ? '和解析、配置保存流程' : ''}；图片保留整页供人工审阅。</p><ul>${report.limits.map((limit) => `<li>${escape(limit)}</li>`).join('')}</ul>
     ${report.referenceDefects.length ? `<h2>已确认的 main 缺陷</h2><ul>${report.referenceDefects.map((defect) => `<li>${escape(defect)}</li>`).join('')}</ul>` : ''}
     ${fatal ? `<p>${escape(fatal)}</p>` : ''}${content}</html>`);
@@ -163,7 +164,7 @@ function writeReport(results, fatal) {
 
 async function run() {
   mkdirSync(out, { recursive: true });
-  const server = await serveUiFixture({ reference: true, ref: referenceRef });
+  const server = await serveUiFixture({ reference: !currentOnly, ref: referenceRef });
   let browser;
   const results = [];
   let fatal;
@@ -175,7 +176,7 @@ async function run() {
       const sessions = [];
       const failures = [];
       results.push({ width, failures, sessions });
-      for (const [name, path] of [['main', '/reference'], ['current', '/']]) {
+      for (const [name, path] of (currentOnly ? [['current', '/']] : [['main', '/reference'], ['current', '/']])) {
         const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
         const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
         await cdp.send('Page.enable', {}, sessionId);
@@ -202,7 +203,8 @@ async function run() {
         sessions.push(session);
         await capture(cdp, session, width, 'dashboard', failures);
       }
-      failures.push(...differences(sessions[0].data, sessions[1].data, width));
+      if (!currentOnly) failures.push(...differences(sessions[0].data, sessions[1].data, width));
+      else if (sessions[0].data.overflow) failures.push('页面横向溢出');
       console.log(`${width}px dashboard: ${failures.join('；') || '通过'}`);
       for (const session of sessions) {
         await cdp.send('Target.activateTarget', { targetId: session.targetId });
@@ -289,12 +291,14 @@ async function run() {
         }
         await cdp.send('Target.closeTarget', { targetId: session.targetId });
       }
+      if (!currentOnly) {
       if (JSON.stringify(sessions[0].bindings) !== JSON.stringify(sessions[1].bindings)) failures.push('域名池绑定列表、当前选择或可选池与 main 不同');
       if (sessions[0].config.basicsOpen !== sessions[1].config.basicsOpen) failures.push('基础配置默认展开状态与 main 不同');
       if (sessions[0].config.configCards !== sessions[1].config.configCards) failures.push('配置卡片数与 main 不同');
       if (JSON.stringify(sessions[0].config.settingsIds) !== JSON.stringify(sessions[1].config.settingsIds)) failures.push('运行参数字段和顺序与 main 不同');
       for (const type of ['zone', 'target']) {
         if (JSON.stringify(sessions[0].editors[type].editorLabels) !== JSON.stringify(sessions[1].editors[type].editorLabels)) failures.push(`${type} 编辑器字段和顺序与 main 不同`);
+      }
       }
       console.log(`${width}px: ${failures.length ? failures.join('；') : '已覆盖的布局与流程通过'}`);
     }

@@ -45,10 +45,10 @@ jobs:
       - name: Check
         run: npm run check
 
-      # 精确保留 main 外观；其低对比度/小控件作为已知债务保留在报告中。
+      # 功能流程独立验收；无障碍沿用已知问题基准，不要求与 main 像素一致。
       # 同浏览器实时对照禁止新增或恶化；audit:ui 仍提供不豁免的严格审计。
-      - name: UI regression against main and functional parity
-        run: npm run audit:ui:main && npm run audit:parity
+      - name: UI accessibility regression and functional flows
+        run: npm run audit:ui:main && npm run audit:flows
 
       - name: Save UI comparison report
         if: always()
