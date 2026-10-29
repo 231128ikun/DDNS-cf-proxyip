@@ -1,7 +1,5 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-> [!NOTE]
-> `main` 仍是旧版入口；当前唯一维护实现位于 `codex/modular-refactor`。部署、构建和页面文档均以 `app/` 与根目录 `wrangler.toml` 为准，当前状态见 [docs/refactor-status.md](./docs/refactor-status.md)。
 
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
@@ -31,6 +29,10 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 ---
 
+## 合并前的部署切换
+
+合并与部署均需单独确认。若 main 已接入自动部署，合并前先核实构建设置，避免合并立即覆盖现有服务。保留原 Worker 名称 `ddns-cf-proxyip`、域名路由和原 `IP_DATA` 绑定；入口改为 `app/src/index.ts`，静态资源为 `app/dist/web`。旧单文件复制和旧文件同步发布流程不再适用。切换前保留部署版本及受控 KV 备份；代码回退不会恢复 KV 或 DNS。
+
 ## 💡 快速部署
 
 > [!TIP]
@@ -46,7 +48,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 - Worker 名称、入口和静态资源目录都由仓库根目录的 [`wrangler.toml`](./wrangler.toml) 决定：入口是 `app/src/index.ts`，静态资源目录是 `app/dist/web`。
 - `npm run deploy` 会先执行 `npm run check`；类型检查、接口契约、单测、构建、体积门禁或部署形态冒烟任一失败时，不会发布。
-- Cloudflare 会读取 `wrangler.toml` 并自动创建/绑定 `IP_DATA` KV 命名空间；如果这一步没有自动完成，按下面的手动步骤补一个同名绑定，功能不受影响。
+- 部署前确认 `IP_DATA` 绑定到原有 KV Namespace，避免重新创建空库；资源标识仅在部署环境配置，不提交仓库。
 - 部署完成后打开 Worker 地址，在 **配置中心** 填写 Zone ID、CF Key、维护域名与检测 API。
 - 建议设置 `AUTH_KEY` 或在配置中心填写“面板密钥”。开启后，静态前端只会渲染登录卡片，`/api/*` 统一拒绝未认证请求；支持 `?key=`、Bearer、`X-Auth-Key` 和 HttpOnly Cookie。
 
@@ -117,7 +119,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 <summary><code><strong>「 Git 集成部署文字教程 」</strong></code></summary>
 
 1. 在 Cloudflare Workers 中连接本仓库。
-2. 生产分支选择 `codex/modular-refactor`；Worker 项目名称需与 `wrangler.toml` 里的 `name` 一致，即 `ddns-pro-refactor`。
+2. 确认合并获批后，生产分支选择 `main`；Worker 项目名称需与 `wrangler.toml` 里的 `name` 一致，即 `ddns-cf-proxyip`。
 3. 在构建配置中填写：
 
    ```text
@@ -266,7 +268,6 @@ txt@example.com      # 读取 TXT 记录里的地址列表并逐个探测
 | `app/src/config/` | 环境变量解析与运行时适配器装配 |
 | `app/web/` | 浏览器端 Preact 源码（构建到 `app/dist/web`） |
 | `app/scripts/` | 构建、清理、体积门禁、冒烟与 UI 验收脚本 |
-| `docs/` | 重构状态、IP 池与存储设计等文档 |
 | `wrangler.toml` | 部署事实源：Worker 入口、静态资源目录、KV 绑定与 Cron |
 
 依赖方向固定为 `transport/jobs -> application -> domain + ports <- adapters`：业务规则不依赖 HTTP、KV、`fetch` 或页面。
@@ -285,7 +286,7 @@ https://example.com/check?proxyip={proxyip}
 
 使用 `{proxyip}` 时，Worker 会替换占位符；否则会把编码后的地址直接拼到 URL 末尾。
 
-Worker 会以 `GET` 请求调用检测接口，请求地址中的 `proxyip` 值为待检测地址，例如 `1.2.3.4:443` 或 `[2606:4700::1]:443`。接口需要返回可识别的检测 JSON 对象（例如含布尔值 `success`）。HTTP 非 2xx、非 JSON、空对象或不符合检测结构的 JSON 视为接口异常；纯超时按上文的慢 IP 淘汰策略处理，配置备用接口时仍会确认。
+Worker 会以 `GET` 请求调用检测接口，请求地址中的 `proxyip` 值为待检测地址，例如 `1.2.3.4:443` 或 `[2606:4700::1]:443`。接口需要返回可识别的检测 JSON 对象（例如含布尔值 `success`）。HTTP 非 2xx、非 JSON、空对象或不符合检测结构的 JSON 视为接口异常；超时（包括上游报告的 TCP 连接超时）仍为未知，不据此删除 DNS 或移入垃圾桶；配置备用接口时会按既有规则重试。日志会区分“未知（超时）”与“未知（HTTP 异常）”，HTTP 502 错误页不会直接展示在日志中。
 
 代码实际消费的返回字段样式如下：
 
