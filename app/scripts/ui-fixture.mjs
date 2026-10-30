@@ -32,7 +32,8 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, probeDelay: 0, probeDelays: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0 };
+    poolContents: {}, probeDelay: 0, probeDelays: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
+    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0 };
 }
 
 /** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
@@ -241,6 +242,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
         return json({ ok: true, success: true });
       }
       if (url.pathname === '/api/current-status') {
+        if (fixture.currentStatusDelay) await new Promise(resolve => setTimeout(resolve, fixture.currentStatusDelay));
         const target = config.targets.find((item) => `${item.domain}|${item.mode}` === url.searchParams.get('target'))
           ?? config.targets[Number(url.searchParams.get('target')) || 0];
         const records = fixture.records[`${target.domain}|${target.mode}`] ?? [];
@@ -270,7 +272,11 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
     }
     const file = resolve(webRoot, url.pathname === '/' ? 'index.html' : `.${url.pathname}`);
     if (!file.startsWith(webRoot + sep) || !existsSync(file)) { response.writeHead(404); return response.end(); }
-    if (url.pathname.includes('/order-dialog-') && fixture.orderChunkDelay) await new Promise(resolve => setTimeout(resolve, fixture.orderChunkDelay));
+    const chunkDelay = url.pathname.includes('/order-dialog-') ? fixture.orderChunkDelay
+      : url.pathname.includes('/app-') ? fixture.appChunkDelay
+      : url.pathname.includes('/batch-check-') ? fixture.batchChunkDelay
+      : url.pathname.includes('/index-') && extname(file) === '.js' ? fixture.entryChunkDelay : 0;
+    if (chunkDelay) await new Promise(resolve => setTimeout(resolve, chunkDelay));
     response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });

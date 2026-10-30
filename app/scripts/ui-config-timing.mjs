@@ -47,7 +47,7 @@ export async function auditConfigTiming(cdp, sessionId, base, requests, fixture,
       fixture.configDelay = 800;
       const initialStart = requests.length;
       await cdp.send('Page.navigate', { url: base }, sessionId);
-      await cdp.until(sessionId, 'document.body.textContent.includes("正在验证访问权限")');
+      await cdp.until(sessionId, 'document.querySelector("#auth-loading")?.dataset.phase === "checking"');
       assert(await read('!document.querySelector("#main-actions")'), '首次配置鉴权未完成时已经开放检测');
       assert(!requests.slice(initialStart).some(request => request.path === '/api/check'), '首次配置未就绪就发起了探测');
       await ready();

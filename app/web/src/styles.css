@@ -141,6 +141,13 @@
   --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.07);
   --shadow-target: 0 8px 24px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.18);
+  --loading-panel-width: 380px;
+  --loading-mark-size: 44px;
+  --loading-mark-stroke: 3px;
+  --loading-panel-border: 1px;
+  --motion-spin-duration: 1s;
+  --motion-enter-duration: 180ms;
+  --motion-enter-ease: ease-out;
 }
         *, *::before, *::after { box-sizing: border-box; }
 body {
@@ -153,6 +160,42 @@ body {
   font-size: var(--font-size-md);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+/* 启动反馈与页面进入只使用轻量动效，不延长实际加载。 */
+.loading-shell {
+  min-height: calc(100dvh - var(--page-bottom-space));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-9) var(--space-7);
+}
+.loading-panel {
+  width: min(100%, var(--loading-panel-width));
+  display: grid;
+  justify-items: center;
+  gap: var(--space-7);
+  padding: var(--space-10);
+  background: var(--color-surface);
+  border: var(--loading-panel-border) solid var(--color-border);
+  border-radius: var(--radius-auth);
+  box-shadow: var(--shadow-auth);
+  text-align: center;
+}
+.loading-indicator {
+  width: var(--loading-mark-size);
+  height: var(--loading-mark-size);
+  border: var(--loading-mark-stroke) solid var(--color-primary-alpha-soft);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-pill);
+  animation: loading-spin var(--motion-spin-duration) linear infinite;
+}
+.loading-title { margin: 0; font-size: var(--font-size-lg); color: var(--color-text); }
+.loading-message { margin: 0; font-size: var(--font-size-sm); color: var(--color-text-muted); }
+.app-entrance { animation: app-enter var(--motion-enter-duration) var(--motion-enter-ease); }
+@keyframes loading-spin { to { transform: rotate(1turn); } }
+@keyframes app-enter { from { opacity: .6; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading-indicator, .app-entrance { animation: none; }
 }
         button, input, select, textarea { font-family: inherit; font-size: inherit; line-height: inherit; margin: 0; }
         ::placeholder { color: var(--color-placeholder); opacity: 1; }

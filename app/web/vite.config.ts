@@ -14,8 +14,8 @@ export default defineConfig({
     minify: 'terser',
     // booleans_as_integers 会破坏 Preact 事件绑定，不能启用。
     terserOptions: { ecma: 2022, module: true, compress: { passes: 3 }, mangle: { toplevel: true } },
-    // 单页静态资源由 Worker 同源返回，不需要 Vite 的 modulepreload 运行时代码。
-    modulePreload: false,
+    // 现代浏览器不需要兼容补丁，但动态模块的共享依赖仍应提前并行加载。
+    modulePreload: { polyfill: false },
   },
   server: {
     host: '127.0.0.1',

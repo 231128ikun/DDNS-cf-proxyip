@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
@@ -8,7 +8,7 @@ import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
 import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { sortByKeyOrder } from '../../src/util/key-order';
-import { ApiClient } from './api/client';
+import { ApiClient, loadBatchCheckModule } from './api/client';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../src/contracts/runtime-settings';
 import { errorMessage, isAbort } from './api/errors';
 import {
@@ -141,22 +141,28 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     });
   }, [configuredTargets, confirmedBindings, targetKeys]);
 
-  /** 配置就绪后读取当前记录；目标或端口变化时中止旧请求并重新检测。 */
-  useEffect(() => {
+  /** 配置就绪后立即发起读取；公开检测模块与 DNS 并行加载，不提前执行探测。 */
+  useLayoutEffect(() => {
     if (!selectedTargetKey || config.status === 'loading' || config.status === 'idle') return;
     resetLookup();
     const controller = new AbortController();
     void refreshTargetStatus(controller.signal);
+    void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
     return () => controller.abort();
   }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort, webCheckConcurrency]);
 
-  /** 首次配置已由登录入口读取；其余只读资源并行拉取，配置中心分块同时预取。 */
-  useEffect(() => {
+  /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
+  useLayoutEffect(() => {
     const controller = new AbortController();
     void refreshHealth(controller.signal);
     void refreshPools(controller.signal);
     void refreshBindings(controller.signal);
     if (!initialConfig) void refreshConfig(controller.signal);
+    return () => controller.abort();
+  }, [initialConfig, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
+
+  /** 配置中心仍预取并保留原有重试/草稿生命周期，但不占用首屏请求的启动时机。 */
+  useEffect(() => {
     let cancelled = false;
     void import('./components/config-page')
       .then((module) => {
@@ -165,11 +171,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       .catch(() => {
         if (!cancelled) notify('配置中心加载失败，请刷新页面重试', 'error');
       });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [initialConfig, notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
+    return () => { cancelled = true; };
+  }, [notify]);
 
   useEffect(() => {
     if (!toast) return;

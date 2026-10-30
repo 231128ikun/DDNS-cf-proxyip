@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ConfigResponse } from '../../src/contracts/config';
 import { ApiClient, ApiError } from './api/client';
 import { errorMessage } from './api/errors';
+import { LoadingState } from './components/loading-state';
 
 type AppComponent = typeof import('./app').App;
 type AuthState =
@@ -46,7 +47,7 @@ export function AuthGate() {
       });
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let cancelled = false;
     // 只预取公开静态代码；管理页面和数据仍等待鉴权成功。
     const loading = import('./app');
@@ -79,9 +80,11 @@ export function AuthGate() {
     return () => { cancelled = true; controller.abort(); };
   }, [client]);
 
-  if (state.phase === 'ready' && AppComponent) return <AppComponent client={client} {...(initialConfig ? { initialConfig } : {})} />;
+  if (state.phase === 'ready' && AppComponent) {
+    return <div class="app-entrance"><AppComponent client={client} {...(initialConfig ? { initialConfig } : {})} /></div>;
+  }
   if (state.phase === 'checking' || state.phase === 'loading-app' || (state.phase === 'ready' && !AppComponent)) {
-    return <div class="container py-5 text-center text-secondary">正在验证访问权限…</div>;
+    return <LoadingState phase={state.phase === 'checking' ? 'checking' : 'loading-app'} />;
   }
 
   const submit = (event: Event): void => {

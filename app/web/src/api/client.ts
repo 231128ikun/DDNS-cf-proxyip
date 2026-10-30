@@ -38,6 +38,10 @@ export class ApiError extends Error {
   }
 }
 
+export function loadBatchCheckModule(): Promise<typeof import('./batch-check')> {
+  return import('./batch-check');
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
@@ -69,7 +73,7 @@ export class ApiClient {
    * 单个 Worker 请求只承担一个目标的主/备探测，避免整批耗尽子请求预算。
    */
   async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
-    const { checkBatch } = await import('./batch-check');
+    const { checkBatch } = await loadBatchCheckModule();
     return checkBatch(this, text, signal, onProgress, concurrency);
   }
 
