@@ -53,11 +53,11 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
 
-      const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.BACKEND_CONCURRENT_CHECKS);
+      const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.CONCURRENT_CHECKS);
       const checkTarget = new CheckTarget({
         resolver: new ResolveTarget(new DohLookup({ endpoint: resolved.config.dohApi, timeoutMs: resolved.config.settings.DOH_TIMEOUT })),
         checkProxy,
-        concurrency: resolved.config.settings.BACKEND_CONCURRENT_CHECKS,
+        concurrency: resolved.config.settings.CONCURRENT_CHECKS,
       });
 
       const dependencies: HttpAppDependencies = {
@@ -167,7 +167,7 @@ export function createMaintenanceRunner(
       probe: createProbeAdapterFromConfig(toProbeConfig(config)),
       pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
       dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
-      concurrency: config.settings.BACKEND_CONCURRENT_CHECKS,
+      concurrency: config.settings.CONCURRENT_CHECKS,
     }),
   });
   const notifier = new TelegramNotifier({

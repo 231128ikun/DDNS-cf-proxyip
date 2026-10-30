@@ -17,6 +17,12 @@ describe('runtime configuration', () => {
     expect(parseRuntimeSettings(raw)).toMatchObject({ CONCURRENT_CHECKS: concurrency, DOH_TIMEOUT: timeout });
   });
 
+  it('drops the retired backend setting without changing the shared concurrency', () => {
+    const settings = parseRuntimeSettings({ CONCURRENT_CHECKS: 24, BACKEND_CONCURRENT_CHECKS: 1 });
+    expect(settings.CONCURRENT_CHECKS).toBe(24);
+    expect(settings).not.toHaveProperty('BACKEND_CONCURRENT_CHECKS');
+  });
+
   it('uses environment browser and DNS settings only as configuration fallback', () => {
     const config = loadEnvConfig({ CONCURRENT_CHECKS: '7', DOH_TIMEOUT: '9000' });
     expect(config.settings).toMatchObject({ CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 });

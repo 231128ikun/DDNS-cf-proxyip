@@ -3,8 +3,7 @@ import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse }
 import type { CheckTargetResponse } from '../../../src/contracts/probe';
 import { formatPoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
-import { DEFAULT_RUNTIME_SETTINGS, SETTINGS_LIMITS } from '../../../src/contracts/runtime-settings';
-import { readClampedInteger } from '../../../src/contracts/parse';
+import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
 
 export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
@@ -17,8 +16,7 @@ export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
   let completed = 0;
   let total = targets.length;
 
-  const { min, max } = SETTINGS_LIMITS.CONCURRENT_CHECKS;
-  const limit = readClampedInteger(concurrency, DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS, min, max);
+  const limit = parseRuntimeSetting('CONCURRENT_CHECKS', concurrency);
   const itemGroups = await mapWithConcurrency(targets, limit, async (target) => {
     if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
     const checked = await checkPoolTarget(client, target, signal);

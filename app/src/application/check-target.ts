@@ -1,3 +1,4 @@
+import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import type { ProbeResult } from '../domain/probe-result';
 import { parseProxyTarget } from '../domain/proxy-target';
 import type { ProbeContext } from '../ports/probe';
@@ -45,7 +46,7 @@ export class CheckTarget {
   private readonly concurrency: number;
 
   constructor(private readonly dependencies: CheckTargetDependencies) {
-    this.concurrency = Math.max(1, Math.min(16, dependencies.concurrency ?? 4));
+    this.concurrency = parseRuntimeSetting('CONCURRENT_CHECKS', dependencies.concurrency);
   }
 
   async execute(input: string, context: ProbeContext = {}): Promise<CheckTargetOutcome> {

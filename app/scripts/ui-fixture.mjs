@@ -19,7 +19,7 @@ export function createUiFixture() {
     minActive: 3, exitFilter: 'any', country: '', asn: '', countries: [], asns: [], enabled: true }));
   const config = { zones, targets, apiKey: '', zoneId: '', checkApi: 'https://probe.example.test/?proxyip={proxyip}',
     checkApiBackup: '', dohApi: 'https://dns.example.test/dns-query', projectUrl: '', tgToken: '', tgId: '',
-    tgEnabled: false, scheduledEnabled: true, settings: { CONCURRENT_CHECKS: 32, BACKEND_CONCURRENT_CHECKS: 4, CHECK_TIMEOUT: 15000,
+    tgEnabled: false, scheduledEnabled: true, settings: { CONCURRENT_CHECKS: 32, CHECK_TIMEOUT: 15000,
       REMOTE_LOAD_TIMEOUT: 8000, DOH_TIMEOUT: 5000, DEFAULT_MIN_ACTIVE: 3, MAX_TRASH_SIZE: 1000 } };
   const pools = [{ key: 'ip_pool_default', name: '默认池', count: 2 }, { key: 'ip_pool_001', name: '香港节点', count: 2 },
     { key: 'ip_pool_002', name: '备用节点', count: 2 }, { key: 'ip_pool_trash', name: '垃圾桶', count: 0 }];

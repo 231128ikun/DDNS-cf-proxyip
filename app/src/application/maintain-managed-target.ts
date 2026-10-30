@@ -1,3 +1,4 @@
+import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import { dnsRecordTypeForHost, formatProxyAuthority } from '../domain/proxy-target';
 import { parseTxtAddresses } from '../domain/txt-record';
 import {
@@ -58,7 +59,7 @@ export class MaintainManagedTarget {
   private readonly concurrency: number;
 
   constructor(private readonly dependencies: MaintainManagedTargetDependencies) {
-    this.concurrency = Math.max(1, Math.min(8, dependencies.concurrency ?? 4));
+    this.concurrency = parseRuntimeSetting('CONCURRENT_CHECKS', dependencies.concurrency);
   }
 
   async execute(command: MaintainManagedTargetCommand): Promise<MaintenanceReport> {

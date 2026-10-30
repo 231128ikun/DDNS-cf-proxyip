@@ -1,3 +1,4 @@
+import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import { parsePoolText, updatePoolEntryFromProbe, type PoolEntry } from '../domain/pool-entry';
 import { parseProxyTarget } from '../domain/proxy-target';
 import type { ProbeResult } from '../domain/probe-result';
@@ -39,9 +40,9 @@ export class CheckPoolText {
 
   constructor(
     private readonly checkProxy: CheckProxy,
-    concurrency = 8,
+    concurrency?: number,
   ) {
-    this.concurrency = Math.max(1, Math.min(16, concurrency));
+    this.concurrency = parseRuntimeSetting('CONCURRENT_CHECKS', concurrency);
   }
 
   async execute(

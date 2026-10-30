@@ -40,7 +40,7 @@ describe('KV configuration storage', () => {
         tgToken: 'tg-token',
         tgId: '42',
         projectUrl: 'https://github.com/example/project',
-        settings: { CHECK_TIMEOUT: 8_000, BACKEND_CONCURRENT_CHECKS: 5 },
+        settings: { CHECK_TIMEOUT: 8_000, CONCURRENT_CHECKS: 5 },
         zones: [{ name: '主域名', baseDomain: 'example.com', zoneId: 'zone-1', apiKey: 'cf-token' }],
         targets: [{
           mode: 'TXT',
@@ -72,7 +72,7 @@ describe('KV configuration storage', () => {
       tgToken: 'tg-token',
       tgId: '42',
       projectUrl: 'https://github.com/example/project',
-      settings: { CHECK_TIMEOUT: 8_000, BACKEND_CONCURRENT_CHECKS: 5 },
+      settings: { CHECK_TIMEOUT: 8_000, CONCURRENT_CHECKS: 5 },
       zones: [{ name: '主域名', label: '主域名', baseDomain: 'example.com', zoneId: 'zone-1', apiKey: 'cf-token' }],
       targets: [{
         mode: 'TXT',
@@ -98,7 +98,7 @@ describe('KV configuration storage', () => {
     const raw = JSON.parse(store.get(CONFIG_KEY) ?? '{}') as Record<string, unknown>;
     expect(raw).toMatchObject({
       checkApi: 'https://primary.example/?proxyip=',
-      settings: { BACKEND_CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
+      settings: { CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
       zones: [{ name: '主域名', label: '主域名' }],
       targets: [{ mode: 'TXT', port: 'any', country: 'US', asn: '64500' }],
     });
@@ -171,6 +171,6 @@ function validConfig(): AppConfig {
     tgToken: 'tg-token',
     tgId: '42',
     projectUrl: 'https://github.com/example/project',
-    settings: { ...defaults.settings, BACKEND_CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
+    settings: { ...defaults.settings, CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
   };
 }
