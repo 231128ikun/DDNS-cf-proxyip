@@ -10,6 +10,7 @@ import type { RequestState } from './request-state';
 export function useResource<T extends object>(
   load: (signal?: AbortSignal, progress?: (data: T) => void) => Promise<T>,
   retainData = false,
+  initialData?: T,
 ): readonly [
   RequestState<T>,
   (signal?: AbortSignal) => Promise<boolean>,
@@ -17,9 +18,9 @@ export function useResource<T extends object>(
 ] {
   const latest = useRef(load);
   latest.current = load;
-  const [state, setState] = useState<RequestState<T>>({ status: 'loading' });
+  const [state, setState] = useState<RequestState<T>>(initialData ? { status: 'ready', data: initialData } : { status: 'loading' });
   const latestRequest = useRef(0);
-  const cached = useRef<T | null>(null);
+  const cached = useRef<T | null>(initialData ?? null);
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     const request = ++latestRequest.current;

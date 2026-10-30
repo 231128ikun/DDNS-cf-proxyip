@@ -40,6 +40,20 @@ describe('web API client', () => {
     }
   });
 
+  it('lets the startup configuration request handle 401 without a reload loop', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('window', { location: { assign } });
+    try {
+      const client = new ApiClient({ fetchImpl: async () => Response.json({ error: '未授权' }, { status: 401 }) });
+      await expect(client.config(undefined, false)).rejects.toMatchObject({ status: 401 });
+      expect(assign).not.toHaveBeenCalled();
+      await expect(client.config()).rejects.toMatchObject({ status: 401 });
+      expect(assign).toHaveBeenCalledWith('/');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads auth state and posts a panel key through the shared API', async () => {
     const requests: Array<{ readonly url: string; readonly method: string; readonly body?: string }> = [];
     const client = new ApiClient({ fetchImpl: async (input, init) => {

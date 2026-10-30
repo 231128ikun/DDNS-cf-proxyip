@@ -20,7 +20,7 @@ export class DomainBindings {
   ) {}
 
   async list(): Promise<DomainBindingsResponse> {
-    const data = await this.source.load();
+    const [data, order] = await Promise.all([this.source.load(), this.repository.readOrder()]);
     const mapping = data.poolMapping;
     const items: DomainBindingItem[] = data.targets.map(({ target, enabled }) => {
       const poolKey = resolvePoolKey(mapping, target);
@@ -34,7 +34,7 @@ export class DomainBindings {
       };
     });
     // 显示顺序只影响面板排序，不影响维护执行顺序。
-    return { items: sortByKeyOrder(items, await this.repository.readOrder()) };
+    return { items: sortByKeyOrder(items, order) };
   }
 
   async save(value: unknown): Promise<void> {

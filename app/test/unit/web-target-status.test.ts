@@ -64,6 +64,31 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     finish();
     await pending;
   });
+  it('publishes each probe result without waiting for the slowest address', async () => {
+    const records: DnsRecord[] = ['203.0.113.10', '203.0.113.11'].map((content, index) => ({
+      id: String(index), type: 'A', name: 'edge.example.com', content,
+    }));
+    const { client, writes } = setup(records);
+    let finish!: () => void;
+    const slow = new Promise<void>(resolve => { finish = resolve; });
+    const check = client.checkTarget.bind(client);
+    vi.spyOn(client, 'checkTarget').mockImplementation(async (address, signal) => {
+      if (address === '203.0.113.11:2053') await slow;
+      return check(address, signal);
+    });
+    const progress = vi.fn();
+    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    try {
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({
+        records, probes: [expect.objectContaining({ address: '203.0.113.10:2053', status: 'alive' })],
+      })));
+    } finally {
+      finish();
+    }
+    expect((await pending).probes.map(item => item.address)).toEqual(['203.0.113.10:2053', '203.0.113.11:2053']);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
   it('uses the configured browser concurrency for automatic current-record probing', async () => {
     const records: DnsRecord[] = Array.from({ length: 6 }, (_, index) => ({
       id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,

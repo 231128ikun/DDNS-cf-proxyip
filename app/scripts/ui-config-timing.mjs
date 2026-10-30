@@ -45,10 +45,13 @@ export async function auditConfigTiming(cdp, sessionId, base, requests, fixture,
   try {
     await run('config-startup', async () => {
       fixture.configDelay = 800;
-      await navigate();
-      await setValue('#ip-input', Array.from({ length: 40 }, (_, index) => `203.0.113.${index + 1}:443`).join('\n'));
-      assert(await read('document.querySelector("#main-actions button:first-child").disabled'), '首次配置未就绪仍可启动批量检测');
+      const initialStart = requests.length;
+      await cdp.send('Page.navigate', { url: base }, sessionId);
+      await cdp.until(sessionId, 'document.body.textContent.includes("正在验证访问权限")');
+      assert(await read('!document.querySelector("#main-actions")'), '首次配置鉴权未完成时已经开放检测');
+      assert(!requests.slice(initialStart).some(request => request.path === '/api/check'), '首次配置未就绪就发起了探测');
       await ready();
+      await setValue('#ip-input', Array.from({ length: 40 }, (_, index) => `203.0.113.${index + 1}:443`).join('\n'));
       fixture.probeDelay = 100;
       fixture.probeMetrics.peak = 0;
       const start = requests.length;

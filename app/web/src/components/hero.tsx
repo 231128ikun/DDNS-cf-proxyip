@@ -89,8 +89,8 @@ export function Hero({
 /**
  * 顶部维护目标摘要。
  *
- * 这里只陈述"实际读到了什么"：绑定还没读完、接口失败、或一条都没配，
- * 都按各自的事实提示，绝不把"读不到"说成"权限没配"。
+ * 目标来自已读取的配置时立即展示，不等待绑定的排序和池映射。
+ * 没有目标可展示时，仍区分绑定未读完、读取失败和未初始化。
  */
 function TargetSummary({
   state,
@@ -103,6 +103,18 @@ function TargetSummary({
   readonly port: number | 'any';
   readonly targetChoices: HeroProps['targetChoices'];
 }) {
+  const item = targetChoices.find((candidate) => candidate.key === selectedKey) ?? targetChoices[0];
+  if (item) {
+    return (
+      <>
+        <RecordBadge mode={item.mode} />
+        <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
+        <span class="target-summary-meta">
+          {item.mode === 'A' && port !== 'any' ? `端口 ${port}` : `${item.mode === 'TXT' ? 'TXT' : 'A/AAAA'} 记录`}
+        </span>
+      </>
+    );
+  }
   if (state.status === 'loading' || state.status === 'idle') {
     return (
       <>
@@ -129,23 +141,10 @@ function TargetSummary({
     );
   }
 
-  const item = targetChoices.find((candidate) => candidate.key === selectedKey) ?? targetChoices[0];
-  if (!item) {
-    return (
-      <>
-        <span class="target-summary-domain">未配置维护域名</span>
-        <span class="target-summary-meta">请先到配置中心添加</span>
-      </>
-    );
-  }
-
   return (
     <>
-      <RecordBadge mode={item.mode} />
-      <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
-      <span class="target-summary-meta">
-        {item.mode === 'A' && port !== 'any' ? `端口 ${port}` : `${item.mode === 'TXT' ? 'TXT' : 'A/AAAA'} 记录`}
-      </span>
+      <span class="target-summary-domain">未配置维护域名</span>
+      <span class="target-summary-meta">请先到配置中心添加</span>
     </>
   );
 }

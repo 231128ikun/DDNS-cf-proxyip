@@ -126,8 +126,9 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'DELETE', undefined, signal);
   }
 
-  async config(signal?: AbortSignal): Promise<ConfigResponse> {
-    return await this.request<ConfigResponse>('/api/config', 'GET', undefined, signal);
+  /** 首次读取兼作鉴权，由登录页处理 401；面板内的读取仍在会话失效时跳转。 */
+  async config(signal?: AbortSignal, redirectOnUnauthorized = true): Promise<ConfigResponse> {
+    return await this.request<ConfigResponse>('/api/config', 'GET', undefined, signal, redirectOnUnauthorized);
   }
 
   /** 未提交的密钥字段由服务端沿用旧值，前端只提交用户改动的密钥。 */
@@ -191,7 +192,7 @@ export class ApiClient {
     }, signal);
   }
 
-  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true): Promise<T> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
@@ -208,7 +209,7 @@ export class ApiClient {
       throw new ApiError('无法连接到 Worker API', 0);
     }
 
-    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+    if (redirectOnUnauthorized && response.status === 401 && !path.startsWith('/api/auth/')) {
       const page = (globalThis as typeof globalThis & {
         readonly window?: { readonly location?: { readonly assign?: (url: string) => void } };
       }).window;

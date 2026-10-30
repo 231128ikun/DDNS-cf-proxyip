@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { ApiClient } from './api/client';
+import type { ConfigResponse } from '../../src/contracts/config';
+import { ApiClient, ApiError } from './api/client';
 import { errorMessage } from './api/errors';
 
 type AppComponent = typeof import('./app').App;
@@ -15,9 +16,24 @@ export function AuthGate() {
   const [key, setKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [AppComponent, setAppComponent] = useState<AppComponent | null>(null);
+  const [initialConfig, setInitialConfig] = useState<ConfigResponse | undefined>();
   const appModule = useRef<Promise<typeof import('./app')> | null>(null);
 
-  const openApp = (): void => {
+  const loadSession = async (signal?: AbortSignal): Promise<ConfigResponse | undefined> => {
+    try {
+      // 已有会话直接读取配置：同一请求完成鉴权，不再先往返一次 auth/status。
+      return await client.config(signal, false);
+    } catch (error) {
+      if (signal?.aborted || (error instanceof ApiError && error.status === 401)) throw error;
+      // 配置接口异常时仍允许已鉴权用户进入面板重试，不把服务故障说成密钥错误。
+      const status = await client.authStatus(signal);
+      if (!status.authenticated) throw new ApiError('未授权', 401);
+      return undefined;
+    }
+  };
+
+  const openApp = (config?: ConfigResponse): void => {
+    setInitialConfig(config);
     setState({ phase: 'loading-app' });
     void (appModule.current ?? import('./app'))
       .then((module) => {
@@ -43,24 +59,27 @@ export function AuthGate() {
       url.searchParams.delete('key');
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     };
-    const initial = queryKey ? client.login(queryKey) : client.authStatus();
+    const controller = new AbortController();
+    const initial = queryKey ? client.login(queryKey, controller.signal).then(() => loadSession(controller.signal))
+      : loadSession(controller.signal);
     initial
-      .then((status) => {
+      .then((config) => {
         if (cancelled) return;
         clearQueryKey();
-        if (status.authenticated) openApp();
-        else setState({ phase: 'login' });
+        openApp(config);
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           clearQueryKey();
-          setState({ phase: 'login', error: queryKey ? '访问密钥无效' : errorMessage(error) });
+          const unauthorized = error instanceof ApiError && error.status === 401;
+          const message = unauthorized ? (queryKey ? '访问密钥无效' : '') : errorMessage(error);
+          setState({ phase: 'login', ...(message ? { error: message } : {}) });
         }
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [client]);
 
-  if (state.phase === 'ready' && AppComponent) return <AppComponent client={client} />;
+  if (state.phase === 'ready' && AppComponent) return <AppComponent client={client} {...(initialConfig ? { initialConfig } : {})} />;
   if (state.phase === 'checking' || state.phase === 'loading-app' || (state.phase === 'ready' && !AppComponent)) {
     return <div class="container py-5 text-center text-secondary">正在验证访问权限…</div>;
   }
@@ -72,6 +91,7 @@ export function AuthGate() {
     setSubmitting(true);
     setState({ phase: 'login' });
     client.login(value)
+      .then(() => loadSession())
       .then(openApp)
       .catch((error: unknown) => setState({ phase: 'login', error: errorMessage(error) }))
       .finally(() => setSubmitting(false));

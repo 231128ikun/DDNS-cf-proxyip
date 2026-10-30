@@ -91,6 +91,27 @@ describe('发布 Worker 装配', () => {
     expect([...store.keys()]).toEqual(['app_config']);
   });
 
+  it('reads configuration once per request and does not reuse it across requests', async () => {
+    const store = new Map([['app_config', JSON.stringify({ settings: { CONCURRENT_CHECKS: 24, BACKEND_CONCURRENT_CHECKS: 1 } })]]);
+    const get = vi.fn(async (key: string) => store.get(key) ?? null);
+    const kv = { get, put: async (key: string, value: string) => { store.set(key, value); } } as unknown as KVNamespace;
+    const worker = createWorker();
+    const client = new ApiClient({ fetchImpl: async (input, init) => worker.fetch!(
+      new Request(new URL(String(input), 'https://panel.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0],
+      { ...env, IP_DATA: kv }, context,
+    ) as Promise<Response> });
+    expect((await client.config()).config.settings.CONCURRENT_CHECKS).toBe(24);
+    expect(get.mock.calls.filter(([key]) => key === 'app_config')).toHaveLength(1);
+    get.mockClear();
+    const saved = await client.saveConfig({ settings: { CONCURRENT_CHECKS: 7 } });
+    expect(saved.config.settings.CONCURRENT_CHECKS).toBe(7);
+    expect(saved.config.settings).not.toHaveProperty('BACKEND_CONCURRENT_CHECKS');
+    expect(JSON.parse(store.get('app_config')!).settings).not.toHaveProperty('BACKEND_CONCURRENT_CHECKS');
+    expect(get.mock.calls.filter(([key]) => key === 'app_config')).toHaveLength(1);
+    store.set('app_config', JSON.stringify({ settings: { CONCURRENT_CHECKS: 9 } }));
+    expect((await client.config()).config.settings.CONCURRENT_CHECKS).toBe(9);
+  });
+
   it.each(['新的备注', ''])('keeps credential-only rows and target references when an unidentified masked update is rejected (%j)', async (label) => {
     const zones = [
       { name: '旧权限', label: '旧权限', baseDomain: '', zoneId: '', apiKey: 'legacy-fixture-token' },

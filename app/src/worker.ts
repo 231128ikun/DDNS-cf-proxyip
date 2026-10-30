@@ -66,7 +66,8 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         version: APP_VERSION,
         authKey: resolved.config.authKey,
         configSource: resolved.source,
-        config: configService,
+        // 鉴权与路由共享本次请求的配置快照，不重复读 KV；下一次请求重新解析。
+        config: { resolve: async () => resolved, save: (config) => configService.save(config) },
         remotePoolLoader: new RemotePoolLoader(new HttpRemotePoolSource({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT })),
         ...(kv
           ? {

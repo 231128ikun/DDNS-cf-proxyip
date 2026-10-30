@@ -35,7 +35,7 @@ interface Toast {
   readonly type: 'success' | 'error';
 }
 
-export function App({ client }: { readonly client: ApiClient }) {
+export function App({ client, initialConfig }: { readonly client: ApiClient; readonly initialConfig?: ConfigResponse }) {
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
@@ -46,7 +46,11 @@ export function App({ client }: { readonly client: ApiClient }) {
   const [remoteUrl, setRemoteUrl] = useState('');
   const [maintenance, setMaintenance] = useState<RequestState<MaintenanceRunResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
-  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
+  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(() => {
+    const first = initialConfig?.config.targets[0];
+    return first ? bindingKey(first) : null;
+  });
+  const initialOrderPending = useRef(true);
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
   const [loadingPool, setLoadingPool] = useState(false);
   const [savingPool, setSavingPool] = useState(false);
@@ -94,7 +98,7 @@ export function App({ client }: { readonly client: ApiClient }) {
   // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
   const [pools, refreshPools, patchPools] = useResource((signal) => client.pools(signal), true);
-  const [config, refreshConfig, acceptConfig] = useResource((signal) => client.config(signal), true);
+  const [config, refreshConfig, acceptConfig] = useResource((signal) => client.config(signal), true, initialConfig);
   const [bindings, refreshBindings, patchBindings] = useResource((signal) => client.domainBindings(signal), true);
   const confirmedBindings = bindings.status === 'ready' ? bindings.data : null;
   const configuredTargets = config.status === 'ready' ? config.data.config.targets : null;
@@ -126,14 +130,16 @@ export function App({ client }: { readonly client: ApiClient }) {
     setPoolKey((current) => (pools.data.pools.some((pool) => pool.key === current) ? current : DEFAULT_POOL_KEY));
   }, [pools]);
 
-  /** 绑定就绪后默认选中第一个维护目标，并在目标被删后回退到首个仍存在的 key。 */
+  /** 配置先决定首个目标，不等绑定回读；首次绑定就绪后应用保存顺序，但不覆盖用户选择。 */
   useEffect(() => {
-    if (!confirmedBindings) return;
+    if (!configuredTargets && !confirmedBindings) return;
+    const applySavedOrder = initialOrderPending.current && Boolean(confirmedBindings);
+    if (confirmedBindings) initialOrderPending.current = false;
     setSelectedTargetKey((current) => {
-      if (current && targetKeys.includes(current)) return current;
+      if (!applySavedOrder && current && targetKeys.includes(current)) return current;
       return targetKeys[0] ?? null;
     });
-  }, [confirmedBindings, targetKeys]);
+  }, [configuredTargets, confirmedBindings, targetKeys]);
 
   /** 配置就绪后读取当前记录；目标或端口变化时中止旧请求并重新检测。 */
   useEffect(() => {
@@ -144,16 +150,13 @@ export function App({ client }: { readonly client: ApiClient }) {
     return () => controller.abort();
   }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort, webCheckConcurrency]);
 
-  /**
-   * 首屏把配置、维护域名、IP 池和健康度并行拉完，同时预取配置中心分块，
-   * 所以点过去时数据和代码都已就绪，不会再等一轮网络往返。
-   */
+  /** 首次配置已由登录入口读取；其余只读资源并行拉取，配置中心分块同时预取。 */
   useEffect(() => {
     const controller = new AbortController();
     void refreshHealth(controller.signal);
     void refreshPools(controller.signal);
     void refreshBindings(controller.signal);
-    void refreshConfig(controller.signal);
+    if (!initialConfig) void refreshConfig(controller.signal);
     let cancelled = false;
     void import('./components/config-page')
       .then((module) => {
@@ -166,7 +169,7 @@ export function App({ client }: { readonly client: ApiClient }) {
       cancelled = true;
       controller.abort();
     };
-  }, [notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
+  }, [initialConfig, notify, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
 
   useEffect(() => {
     if (!toast) return;
@@ -241,6 +244,7 @@ export function App({ client }: { readonly client: ApiClient }) {
   };
 
   const handleSelectTarget = (key: string | null): void => {
+    initialOrderPending.current = false;
     resetLookup();
     setSelectedTargetKey(key);
     const target = targetChoices.find(item => item.key === key);
@@ -522,6 +526,7 @@ export function App({ client }: { readonly client: ApiClient }) {
   };
 
   const handleConfigSaved = (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>): void => {
+    initialOrderPending.current = false;
     const nextKeys = response.config.targets.map(bindingKey);
     setSelectedTargetKey(current => {
       const next = current ? targetKeys[current] ?? current : null;
