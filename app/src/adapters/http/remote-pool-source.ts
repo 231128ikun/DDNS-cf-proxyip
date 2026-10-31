@@ -1,6 +1,7 @@
 import { validateRemoteUrl } from '../../domain/remote-url';
-import type { RemoteLoadFailure, RemotePoolLoadResult, RemoteLoadRequestOptions, RemotePoolSource } from '../../ports/remote-pool-source';
+import type { RemotePoolLoadResult, RemoteLoadRequestOptions, RemotePoolSource } from '../../ports/remote-pool-source';
 import { appFetch } from '../../util/fetch';
+import { createRequestTimeout } from '../../util/request-timeout';
 
 const DEFAULT_MAX_REMOTE_BYTES = 512 * 1024;
 const DEFAULT_MAX_REDIRECTS = 3;
@@ -19,7 +20,7 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
  *
  * 由 Worker 代前端请求远程 TXT，前端永远不直接访问第三方地址：
  * - 每一跳（含重定向目标）都重新做公网校验，防止 302 到内网绕过黑名单；
- * - 显式超时与响应体上限，避免被慢接口或超大文件拖垮 Worker。
+ * - 超时覆盖响应头与正文，按字节限制正文，避免慢接口或超大文件拖垮 Worker。
  */
 export class HttpRemotePoolSource implements RemotePoolSource {
   private readonly timeoutMs: number;
@@ -39,71 +40,70 @@ export class HttpRemotePoolSource implements RemotePoolSource {
     if (!target.ok) return { ok: false, reason: target.reason };
 
     for (let hop = 0; hop <= this.maxRedirects; hop += 1) {
-      const response = await this.fetchOnce(target.url, options);
-      if (!response.ok) return response;
-
-      const location = response.value.headers.get('location');
-      if (REDIRECT_STATUSES.has(response.value.status) && location) {
-        const next = validateRedirect(location, target.url);
-        if (!next.ok) return { ok: false, reason: next.reason };
-        target = next;
-        continue;
+      const timeout = createRequestTimeout(this.timeoutMs, options.signal);
+      let response: Response | undefined;
+      try {
+        timeout.signal.throwIfAborted();
+        // 每跳自行校验，而不是交给运行时自动跟随。
+        response = await this.fetchImpl(target.url.toString(), {
+          redirect: 'manual', signal: timeout.signal,
+          headers: { accept: 'text/plain, text/*;q=0.9, */*;q=0.8' },
+        });
+        timeout.signal.throwIfAborted();
+        const location = response.headers.get('location');
+        if (REDIRECT_STATUSES.has(response.status) && location) {
+          const next = validateRedirect(location, target.url);
+          if (!next.ok) return { ok: false, reason: next.reason };
+          target = next;
+          continue;
+        }
+        if (!response.ok) return { ok: false, reason: 'http-error' };
+        return await this.readBody(response, target.url.toString(), timeout.signal);
+      } catch {
+        return { ok: false, reason: timeout.didTimeout() ? 'timeout' : 'network-error' };
+      } finally {
+        // 废弃响应不等待远端结束；已开始读取的正文由 readBody 负责清理。
+        if (response?.body && !response.bodyUsed && !response.body.locked) {
+          void response.body.cancel().catch(() => undefined);
+        }
+        timeout.cleanup();
       }
-
-      return await this.readBody(response.value, target.url.toString());
     }
 
     return { ok: false, reason: 'too-many-redirects' };
   }
 
-  private async fetchOnce(
-    url: URL,
-    options: RemoteLoadRequestOptions,
-  ): Promise<{ readonly ok: true; readonly value: Response } | { readonly ok: false; readonly reason: RemoteLoadFailure }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const abortUpstream = () => controller.abort();
-    options.signal?.addEventListener('abort', abortUpstream, { once: true });
-
-    try {
-      // redirect: 'manual' 让每一跳都由这里重新校验，而不是交给运行时自动跟随。
-      const response = await this.fetchImpl(url.toString(), {
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { accept: 'text/plain, text/*;q=0.9, */*;q=0.8' },
-      });
-      if (REDIRECT_STATUSES.has(response.status) && response.headers.get('location')) return { ok: true, value: response };
-      if (!response.ok) return { ok: false, reason: 'http-error' };
-      return { ok: true, value: response };
-    } catch {
-      // 本地定时器触发才是超时；调用方主动取消同样按网络错误处理，由上层决定文案。
-      return this.timedOut(options.signal, controller.signal)
-        ? { ok: false, reason: 'timeout' }
-        : { ok: false, reason: 'network-error' };
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener('abort', abortUpstream);
-    }
-  }
-
-  private async readBody(response: Response, finalUrl: string): Promise<RemotePoolLoadResult> {
+  private async readBody(response: Response, finalUrl: string, signal: AbortSignal): Promise<RemotePoolLoadResult> {
     const declared = Number(response.headers.get('content-length') ?? Number.NaN);
     if (Number.isFinite(declared) && declared > this.maxBytes) return { ok: false, reason: 'too-large' };
+    if (!response.body) return { ok: true, content: '', finalUrl };
 
-    let text: string;
+    const reader = response.body.getReader();
+    // 取消 reader 会立即结束挂起的 read；不等待可能永不结束的底层 cancel。
+    const cancel = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+    signal.addEventListener('abort', cancel, { once: true });
+    let complete = false;
     try {
-      text = await response.text();
-    } catch {
-      return { ok: false, reason: 'network-error' };
+      signal.throwIfAborted();
+      const decoder = new TextDecoder();
+      const chunks: string[] = [];
+      let bytes = 0;
+      while (true) {
+        const chunk = await reader.read();
+        signal.throwIfAborted();
+        if (chunk.done) {
+          complete = true;
+          return { ok: true, content: chunks.join('') + decoder.decode(), finalUrl };
+        }
+        bytes += chunk.value.byteLength;
+        if (bytes > this.maxBytes) return { ok: false, reason: 'too-large' };
+        chunks.push(decoder.decode(chunk.value, { stream: true }));
+      }
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      if (!complete) cancel();
+      reader.releaseLock();
     }
-    if (text.length > this.maxBytes) return { ok: false, reason: 'too-large' };
-
-    return { ok: true, content: text, finalUrl };
-  }
-
-  /** 只有本地超时控制器被触发、且调用方没有主动取消，才算超时。 */
-  private timedOut(upstream: AbortSignal | undefined, local: AbortSignal): boolean {
-    return local.aborted && !upstream?.aborted;
   }
 }
 

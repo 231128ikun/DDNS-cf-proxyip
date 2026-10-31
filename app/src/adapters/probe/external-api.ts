@@ -135,7 +135,10 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
     }
     const http = infrastructureError.match(/\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i);
     if (http) return unknown(target, 'HTTP_ERROR', `探针上游 HTTP ${http[1]}（节点状态未知）`, { endpoint, latencyMs });
-    return unknown(target, 'PROBE_API_ERROR', infrastructureError, { endpoint, latencyMs });
+    return unknown(target, 'PROBE_API_ERROR', trimMessage(infrastructureError) ?? '检测接口异常', { endpoint, latencyMs });
+  }
+  if (record.apiError === true) {
+    return unknown(target, 'PROBE_API_ERROR', message ?? '检测接口报告异常（节点状态未知）', { endpoint, latencyMs });
   }
   if (statusText === 'error' || statusText === 'invalid') {
     return unknown(target, 'API_ERROR', message ?? '检测接口返回错误', { endpoint, latencyMs });
@@ -144,7 +147,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const decision = readBooleanDecision(record) ?? readStatusDecision(statusText) ?? readProbeResultsDecision(record.probe_results);
   const exits = readProbeExits(record);
   const exitIp = pickExitIp(record, exits);
-  const exitFamily = pickExitFamily(record, exitIp);
+  const exitFamily = pickExitFamily(record, exitIp, exits);
   const colo = readText(record.colo)?.toUpperCase();
   const details = { endpoint, latencyMs, ...(colo && /^[A-Z]{3}$/.test(colo) ? { colo } : {}) };
 
@@ -188,6 +191,7 @@ function isRecognizedPayload(record: JsonRecord): boolean {
   return [
     'success',
     'ok',
+    'apiError',
     'status',
     'proxyIP',
     'proxy_ip',
@@ -290,7 +294,7 @@ function isSuccessfulProbe(probe: JsonRecord): boolean {
   return probe.ok === true || probe.success === true || readText(probe.status)?.toLowerCase() === 'success' || asRecord(probe.exit) !== null;
 }
 
-function pickExitFamily(record: JsonRecord, exitIp: string | undefined): ExitFamily {
+function pickExitFamily(record: JsonRecord, exitIp: string | undefined, exits: readonly ProbeExit[]): ExitFamily {
   const stack = (readText(record.inferred_stack) ?? readText(record.stack) ?? readText(record.ipType) ?? '').toLowerCase();
   if (stack === 'dual_stack' || stack === 'dual' || stack === 'v4/v6') return 'dual';
   if (stack === 'ipv4_only' || stack === 'ipv4' || stack === 'v4') return 'ipv4';
@@ -302,22 +306,22 @@ function pickExitFamily(record: JsonRecord, exitIp: string | undefined): ExitFam
   if (supportsIpv4) return 'ipv4';
   if (supportsIpv6) return 'ipv6';
 
+  const hasIpv4 = exits.some(exit => exit.family === 'ipv4');
+  const hasIpv6 = exits.some(exit => exit.family === 'ipv6');
+  if (hasIpv4 && hasIpv6) return 'dual';
+  if (hasIpv4) return 'ipv4';
+  if (hasIpv6) return 'ipv6';
   return exitFamilyFromIp(exitIp);
 }
 
 function readProbeInfrastructureError(record: JsonRecord): string | undefined {
-  const messages = [readMessage(record), ...readNestedProbeMessages(record.probe_results)];
-  return messages.find((value): value is string => Boolean(value && isProbeInfrastructureMessage(value)));
-}
-
-function readNestedProbeMessages(value: unknown): string[] {
-  const probes = asRecord(value);
-  if (!probes) return [];
-  return Object.values(probes).flatMap((probeValue) => {
-    const probe = asRecord(probeValue);
-    if (!probe) return [];
-    return [readMessage(probe), ...readNestedProbeMessages(probe.exit)].filter((value): value is string => Boolean(value));
-  });
+  // 展示文案可选第一项，但安全判定必须检查所有独立证据与所有接口别名。
+  for (const key of ['message', 'errorMessage', 'detail', 'reason', 'error', 'probe_results', 'probeResults', 'probes']) {
+    const value = record[key];
+    const evidence = typeof value === 'string' ? value : value && typeof value === 'object' ? JSON.stringify(value) : undefined;
+    if (evidence && isProbeInfrastructureMessage(evidence)) return evidence;
+  }
+  return undefined;
 }
 
 const PROBE_INFRASTRUCTURE_ERROR_PATTERN =

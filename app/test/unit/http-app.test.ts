@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DomainBindings } from '../../src/application/domain-bindings';
 import { CheckProxy } from '../../src/application/check-proxy';
+import { CheckPoolText } from '../../src/application/check-pool';
+import { CleanPool } from '../../src/application/clean-pool';
 import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { PoolService } from '../../src/application/pool-service';
@@ -654,5 +656,30 @@ describe('HTTP app target status route', () => {
     const missing = await app.request('/api/current-status?target=missing.example.com%7CA');
     expect(missing.status).toBe(400);
     await expect(missing.json()).resolves.toEqual({ error: '管理域名不存在或已被删除，请刷新后重试' });
+  });
+});
+
+describe('HTTP cleaning completeness', () => {
+  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('returns JSON 400 before probing or writing an oversized %s', async (poolKey) => {
+    const content = Array.from({ length: 201 }, (_, index) => `node-${index}.example:443 # 用户备注`).join('\n');
+    const catalog = new MemoryPoolCatalog({ [poolKey]: content, ip_pool_001: 'existing.example:443' });
+    const initial = new Map(catalog.data);
+    const pools = new PoolService(catalog);
+    const probe = new FakeProbeAdapter();
+    const run = vi.spyOn(probe, 'probe');
+    const write = vi.spyOn(catalog, 'write');
+    const trash = { load: async () => '', save: async () => undefined, addToTrash: vi.fn(async () => undefined) };
+    const checkPool = new CheckPoolText(new CheckProxy(probe));
+    const cleanPool = new CleanPool({ catalog, pools, trash, checkPool });
+    const app = createHttpApp({ checkTarget: createCheckTarget(probe), version: 'test', pools, cleanPool });
+
+    const response = await postJson(app, `/api/pools/${poolKey}/clean`, {});
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('200') });
+    expect(run).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(trash.addToTrash).not.toHaveBeenCalled();
+    expect(catalog.data).toEqual(initial);
   });
 });

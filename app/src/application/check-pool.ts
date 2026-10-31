@@ -5,6 +5,7 @@ import type { ProbeResult } from '../domain/probe-result';
 import type { ProbeContext } from '../ports/probe';
 import { mapWithConcurrency } from '../util/concurrency';
 import type { CheckProxy } from './check-proxy';
+import { PoolInputError } from './pool-service';
 
 /** 单次批量检测的目标上限，用来兜住 Worker 子请求与 CPU 预算。 */
 export const MAX_BATCH_TARGETS = 200;
@@ -84,13 +85,16 @@ function collectEntries(text: string): { entries: readonly PoolEntry[]; invalid:
       invalid.push(line.raw.trim());
       continue;
     }
-    if (entries.length >= MAX_BATCH_TARGETS) break;
     const target = parseProxyTarget(line.entry.address, 443);
     if (!target) {
       invalid.push(line.entry.address);
       continue;
     }
     if (seen.has(target.key)) continue;
+    // 收集完整输入后才启动检测，不能把部分结果当成整池结果写回。
+    if (entries.length >= MAX_BATCH_TARGETS) {
+      throw new PoolInputError(`单次批量检测最多支持 ${MAX_BATCH_TARGETS} 个不同有效地址，请拆分 IP 池或使用面板逐地址批量检测；原池未修改`);
+    }
     seen.add(target.key);
     entries.push(line.entry);
   }

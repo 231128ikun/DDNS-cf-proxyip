@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { MaintainManagedTarget } from '../../src/application/maintain-managed-target';
 import { normalizeManagedTarget, type ManagedTarget } from '../../src/domain/managed-target';
 import { alive, dead, unknown, type ProbeResult } from '../../src/domain/probe-result';
@@ -297,6 +298,57 @@ describe('MaintainManagedTarget', () => {
     expect(report.plan.current[0]?.item.result.status).toBe('unknown');
     expect(report.probeErrors).toBe(1);
     expect(report.plan.exhausted).toBe(true);
+    expect(pools.trash).toEqual([]);
+  });
+});
+
+function externalMaintenance(type: 'A' | 'AAAA' | 'TXT', payload: unknown) {
+  const target = requireTarget({ mode: type === 'TXT' ? 'TXT' : 'A', domain: 'edge.example.com', port: 443, minActive: 1, exitFilter: 'dual' });
+  const host = type === 'AAAA' ? '2001:db8::10' : '203.0.113.10';
+  const address = type === 'AAAA' ? `[${host}]:443` : `${host}:443`;
+  const record: DnsRecord = { id: 'current', type, name: target.domain, content: type === 'TXT' ? `"${address}"` : host };
+  const dns = new MemoryDnsRepository(type === 'TXT' ? [] : [record], type === 'TXT' ? [record] : []);
+  const initial = `${address},AS64500,JP,v4/v6 # 用户备注`;
+  const pools = new MemoryPoolRepository(initial);
+  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+    timeoutMs: 1_000, fetchImpl: (async () => new Response(JSON.stringify(payload))) as typeof fetch });
+  const service = new MaintainManagedTarget({ probe, pools, dns });
+  return { target, dns, pools, initial, service };
+}
+
+describe('external probe to maintenance safety', () => {
+  const types = ['A', 'AAAA', 'TXT'] as const;
+  const errors = [
+    { success: false, apiError: true },
+    { success: true, apiError: true },
+    { success: false, detail: 'Network connection lost.' },
+    { success: false, reason: 'Network connection lost.' },
+    { success: false, message: 'node failed', error: 'Network connection lost.' },
+    { success: false, probeResults: { ipv4: { ok: false, error: 'Network connection lost.' } } },
+  ];
+
+  it.each(errors.flatMap(payload => types.map(type => ({ type, payload }))))('preserves $type DNS and pool on error $payload', async ({ type, payload }) => {
+    const { target, dns, pools, initial, service } = externalMaintenance(type, payload);
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+    expect(report).toMatchObject({ deleted: 0, added: 0, dnsUpdated: false, probeErrors: 1 });
+    expect(report.plan.current[0]?.decision).toBe('keep-unknown');
+    expect(dns.deleted).toEqual([]);
+    expect(dns.upserted).toEqual([]);
+    expect(pools.value()).toBe(initial);
+    expect(pools.trash).toEqual([]);
+  });
+
+  it.each(types.flatMap(type => [false, true].map(reversed => ({ type, reversed }))))('retains dual-stack $type DNS (reversed=$reversed)', async ({ type, reversed }) => {
+    const exits = [{ stack: 'ipv4', ip: '198.51.100.1', asn: 'AS64500', country: 'JP' },
+      { stack: 'ipv6', ip: '2001:db8::1', asn: 'AS64500', country: 'JP' }];
+    const { target, dns, pools, initial, service } = externalMaintenance(type, { success: true, exits: reversed ? exits.reverse() : exits });
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+    expect(report).toMatchObject({ deleted: 0, added: 0, dnsUpdated: false, probeErrors: 0 });
+    expect(report.plan.current[0]?.decision).toBe('active');
+    expect(report.plan.current[0]?.item.result.exitFamily).toBe('dual');
+    expect(dns.deleted).toEqual([]);
+    expect(dns.upserted).toEqual([]);
+    expect(pools.value()).toBe(initial);
     expect(pools.trash).toEqual([]);
   });
 });

@@ -246,5 +246,3 @@ function normalizePoolOrder(submitted: readonly string[], actual: readonly strin
     ...(actual.includes(TRASH_POOL_KEY) ? [TRASH_POOL_KEY] : []),
   ];
 }
-
-

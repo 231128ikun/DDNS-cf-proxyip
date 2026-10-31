@@ -241,3 +241,79 @@ describe('ExternalApiProbeAdapter', () => {
     expect(result.code).toBe('PROBE_API_ERROR');
   });
 });
+
+describe('external probe safety regressions', () => {
+  const adapterFor = (payload: unknown) => new ExternalApiProbeAdapter({
+    endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+    timeoutMs: 1_000,
+    fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
+  });
+
+  it.each([true, false])('apiError:true overrides success:%s and exit evidence', async (success) => {
+    const result = await adapterFor({ success, apiError: true, exits: [{ ip: '198.51.100.1', stack: 'ipv4' }] }).probe(target);
+    expect(result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
+  it('recognizes a standalone apiError:true response as an API error', async () => {
+    expect(await adapterFor({ apiError: true }).probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
+  it.each([true, false])('apiError:false does not override success:%s', async (success) => {
+    expect((await adapterFor({ success, apiError: false }).probe(target)).status).toBe(success ? 'alive' : 'dead');
+  });
+
+  it.each([
+    ['detail', { detail: 'Network connection lost.' }],
+    ['reason', { reason: 'Network connection lost.' }],
+    ['error alongside ordinary message', { message: 'node failed', error: 'Network connection lost.' }],
+    ['error object alongside ordinary message', { message: 'node failed', error: { detail: 'Network connection lost.' } }],
+    ['probe_results', { probe_results: { ipv4: { ok: false, error: 'Network connection lost.' } } }],
+    ['probeResults', { probeResults: { ipv4: { ok: false, error: 'Network connection lost.' } } }],
+    ['probes', { probes: { ipv4: { ok: false, error: 'Network connection lost.' } } }],
+    ['simultaneous aliases', { probe_results: { ipv4: { ok: false, error: 'connection refused' } }, probeResults: { ipv6: { ok: false, error: 'Network connection lost.' } } }],
+    ['nested probe error', { probes: { ipv4: { ok: false, error: { cause: { message: 'Network connection lost.' } } } } }],
+    ['untruncated evidence', { message: 'ordinary details '.repeat(30) + 'Network connection lost.' }],
+  ] as const)('detects infrastructure evidence in %s', async (_label, evidence) => {
+    const result = await adapterFor({ success: false, ...evidence }).probe(target);
+    expect(result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+    expect(result.message!.length).toBeLessThanOrEqual(240);
+  });
+
+  it('keeps specific timeout classification even when apiError is set', async () => {
+    expect(await adapterFor({ success: false, apiError: true, detail: 'tcp connect timeout after 9999ms' }).probe(target))
+      .toMatchObject({ status: 'unknown', code: 'TIMEOUT' });
+  });
+
+  it.each([
+    { success: false, apiError: true },
+    { success: false, detail: 'Network connection lost.' },
+  ])('uses the backup after a reported API/infrastructure error: %j', async (payload) => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(payload))
+      .mockResolvedValueOnce(jsonResponse({ success: true }));
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [
+      { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
+      { name: 'backup', urlTemplate: 'https://backup.example/?proxyip=' },
+    ], timeoutMs: 1_000, fetchImpl: fetchImpl as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'alive', endpoint: 'backup' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  const dualExits = [{ stack: 'ipv4', ip: '198.51.100.1', asn: 'AS64500', country: 'JP' },
+    { stack: 'ipv6', ip: '2001:db8::1', asn: 'AS64501', country: 'US' }];
+
+  it.each([false, true])('infers dual stack from all exits (reversed=%s)', async (reversed) => {
+    const exits = reversed ? [...dualExits].reverse() : dualExits;
+    const result = await adapterFor({ success: true, exits }).probe(target);
+    expect(result).toMatchObject({ status: 'alive', exitFamily: 'dual', exitIp: exits[0]!.ip });
+    expect(result.exits).toHaveLength(2);
+    expect(result.exits.map(exit => exit.asn)).toEqual(exits.map(exit => exit.asn.replace('AS', '')));
+  });
+
+  it.each([
+    [{ inferred_stack: 'v6' }, 'ipv6'],
+    [{ supports_ipv4: true }, 'ipv4'],
+  ] as const)('keeps explicit family hints ahead of exit inference: %j', async (hint, family) => {
+    expect(await adapterFor({ success: true, exits: dualExits, ...hint }).probe(target)).toMatchObject({ exitFamily: family });
+  });
+});
