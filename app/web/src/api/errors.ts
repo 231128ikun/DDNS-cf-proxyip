@@ -1,0 +1,19 @@
+import { ApiError } from './client';
+
+/** 前端统一的请求错误文案，避免每个页面各写一份判断。 */
+export function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 503) return '该功能需要绑定 KV/配置后才可用';
+    return error.message;
+  }
+  return error instanceof Error ? error.message : '请求失败';
+}
+
+/** 503 是"存储未绑定"，属于未初始化状态，界面要给出引导而不是报错。 */
+export function isUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 503;
+}
+
+export function isAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}

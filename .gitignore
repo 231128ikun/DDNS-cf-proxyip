@@ -1,0 +1,15 @@
+# 本地快照/备份目录，不参与构建与提交
+_snapshot/
+
+# 构建与本地运行产物：面板由 Cloudflare 静态资源分发，Worker 由 Wrangler 从源码打包
+/_worker.js
+/.wrangler/
+/app/dist/
+/app/.wrangler/
+
+# 本地环境与系统杂项
+.env
+.dev.vars
+.DS_Store
+Thumbs.db
+*.log

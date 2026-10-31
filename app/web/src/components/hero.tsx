@@ -1,0 +1,150 @@
+import type { DomainBindingItem, DomainBindingsResponse } from '../../../src/contracts/maintenance';
+import type { HealthResponse } from '../../../src/contracts/probe';
+import type { RequestState } from '../state/request-state';
+import { Icon, iconText } from './icon';
+import { RecordBadge } from './record-badge';
+
+interface HeroProps {
+  readonly health: RequestState<HealthResponse>;
+  readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly selectedTargetKey: string | null;
+  readonly targetPort: number | 'any';
+  readonly targetChoices: readonly Pick<DomainBindingItem, 'key' | 'domain' | 'mode'>[];
+  readonly usageOpen: boolean;
+  readonly onToggleUsage: () => void;
+  readonly onSelectTarget: (key: string | null) => void;
+}
+
+export function Hero({
+  health,
+  bindings,
+  selectedTargetKey,
+  targetPort,
+  targetChoices,
+  usageOpen,
+  onToggleUsage,
+  onSelectTarget,
+}: HeroProps) {
+  return (
+    <div class="container hero">
+      <div class="hero-copy">
+        <h1>{`${iconText('globe')} DDNS Pro 多域名管理`}</h1>
+        <div class="hero-actions">
+          <button
+            type="button"
+            class="guide-toggle"
+            onClick={onToggleUsage}
+            aria-expanded={usageOpen}
+            aria-controls="usage-guide"
+            aria-label={usageOpen ? '收起使用说明' : '使用说明'}
+          >
+            <Icon name="help" />
+          </button>
+          <div class="config-info"><span><Icon name="compass" /> 建议流程：导入IP → 检测 → 入库 → 执行维护</span></div>
+        </div>
+      </div>
+
+      {health.status === 'error' && (
+        <div class="kv-alert">
+          <strong>Worker API 暂不可用。</strong>
+          {health.message}。页面仍可浏览，但检测和后续维护功能不可用。
+        </div>
+      )}
+
+      <div id="usage-guide" class="usage-guide" hidden={!usageOpen}>
+        <ol>
+          <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【{iconText('activity')} 检测】筛出可用 IP。</li>
+          <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【{iconText('save')} 入库】将可用 IP 入库。</li>
+          <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【{iconText('wrench')} 执行全部维护】或依靠定时任务自动维护。</li>
+        </ol>
+      </div>
+
+      <div class="domain-selector">
+        <label class="target-summary">
+          <span id="current-target-summary-content">
+            <TargetSummary state={bindings} selectedKey={selectedTargetKey} port={targetPort} targetChoices={targetChoices} />
+          </span>
+          <select
+            class="target-select-overlay"
+            aria-label="选择维护域名"
+            value={selectedTargetKey ?? ''}
+            onChange={(event) => onSelectTarget(event.currentTarget.value || null)}
+          >
+            {targetChoices.length > 0 ? (
+              targetChoices.map((item) => (
+                <option key={item.key} value={item.key}>
+                  {item.domain} - {item.mode === 'TXT' ? 'TXT' : 'A/AAAA'}
+                </option>
+              ))
+            ) : (
+              <option value="">未配置维护域名</option>
+            )}
+          </select>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 顶部维护目标摘要。
+ *
+ * 目标来自已读取的配置时立即展示，不等待绑定的排序和池映射。
+ * 没有目标可展示时，仍区分绑定未读完、读取失败和未初始化。
+ */
+function TargetSummary({
+  state,
+  selectedKey,
+  port,
+  targetChoices,
+}: {
+  readonly state: RequestState<DomainBindingsResponse>;
+  readonly selectedKey: string | null;
+  readonly port: number | 'any';
+  readonly targetChoices: HeroProps['targetChoices'];
+}) {
+  const item = targetChoices.find((candidate) => candidate.key === selectedKey) ?? targetChoices[0];
+  if (item) {
+    return (
+      <>
+        <RecordBadge mode={item.mode} />
+        <span class="target-summary-domain" title={item.domain}>{item.domain}</span>
+        <span class="target-summary-meta">
+          {item.mode === 'A' && port !== 'any' ? `端口 ${port}` : `${item.mode === 'TXT' ? 'TXT' : 'A/AAAA'} 记录`}
+        </span>
+      </>
+    );
+  }
+  if (state.status === 'loading' || state.status === 'idle') {
+    return (
+      <>
+        <span class="target-summary-domain">正在读取维护域名…</span>
+        <span class="target-summary-meta">稍候即可</span>
+      </>
+    );
+  }
+  if (state.status === 'error') {
+    // 503 是"存储还没绑定"，新部署第一次打开就是这种状态，按未初始化引导。
+    if (state.unavailable) {
+      return (
+        <>
+          <span class="target-summary-domain">尚未初始化</span>
+          <span class="target-summary-meta">绑定 KV 后在配置中心保存配置即可开始</span>
+        </>
+      );
+    }
+    return (
+      <>
+        <span class="target-summary-domain">维护域名读取失败</span>
+        <span class="target-summary-meta text-danger">{state.message}</span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <span class="target-summary-domain">未配置维护域名</span>
+      <span class="target-summary-meta">请先到配置中心添加</span>
+    </>
+  );
+}

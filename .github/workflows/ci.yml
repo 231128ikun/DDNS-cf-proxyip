@@ -1,0 +1,72 @@
+name: CI
+
+# 校验模块源码和测试；部署入口是 wrangler.toml 指向的 app/src/index.ts，仓库不提交构建产物。
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'wrangler.toml'
+      - 'AGENTS.md'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'wrangler.toml'
+      - 'AGENTS.md'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  check:
+    name: typecheck / test / build / size / deployment shape
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run check`：类型检查、接口契约、单元测试、构建、体积门禁和部署形态冒烟。
+      # 面板由 Cloudflare 静态资源分发，Worker 只处理 /api/*；全部用例使用内存 KV 与 mock fetch。
+      - name: Check
+        run: npm run check
+
+      # 功能流程独立验收；无障碍沿用已知问题基准，不要求与 main 像素一致。
+      # 同浏览器实时对照禁止新增或恶化；audit:ui 仍提供不豁免的严格审计。
+      - name: UI accessibility regression and functional flows
+        run: npm run audit:ui:main && npm run audit:flows
+
+      - name: Save UI comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-review
+          path: |
+            app/.wrangler/tmp/ui-parity
+            app/.wrangler/tmp/ui-audit
+            app/.wrangler/tmp/ui-audit-main
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+      # 部署入口是源码，仓库里不应再出现构建产物。
+      - name: Reject committed build artifacts
+        working-directory: .
+        run: |
+          if git ls-files --error-unmatch _worker.js >/dev/null 2>&1; then
+            echo "_worker.js 不应提交：部署入口是 app/src/index.ts"
+            exit 1
+          fi
