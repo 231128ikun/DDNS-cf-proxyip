@@ -8,13 +8,13 @@
     "url": "https://github.com/231128ikun/DDNS-cf-proxyip.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "dev": "npm run build && wrangler dev",
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && npm run build:worker",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "vitest run",
     "test:contract": "vitest run test/unit/api-contract.test.ts",
     "test:unit": "vitest run --exclude test/unit/api-contract.test.ts",
@@ -38,8 +38,8 @@
     "@types/node": "^26.6.2",
     "terser": "^5.51.2",
     "typescript": "^5.9.0",
-    "vite": "^7.3.6",
-    "vitest": "^3.2.0",
-    "wrangler": "^4.0.0"
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.156.0"
   }
 }

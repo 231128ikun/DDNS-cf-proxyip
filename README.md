@@ -46,7 +46,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | Root directory | `app` | 仓库根目录 |
 | Build command | `npm run build` | `npm run build` |
 | Deploy command | `npm run deploy` | `npm run deploy` |
-| Node.js | `22` 或更新版本 | `22` 或更新版本 |
+| Node.js | `22.12+`（22 LTS）或 24 LTS | `22.12+`（22 LTS）或 24 LTS |
 
 依赖按 `package-lock.json` 安装；若构建环境未自动安装依赖，Build command 使用 `npm ci && npm run build`。Worker 名称应与 `app/wrangler.toml` 的 `name` 一致，默认 `ddns-cf-proxyip`。
 
@@ -54,7 +54,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 ### Wrangler 本地部署
 
-安装 Node.js 22 或更新版本，在完整仓库的 `app/` 目录执行；一键部署生成的仓库则直接在根目录执行：
+安装 Node.js 22 LTS（至少 22.12）或 24 LTS，在完整仓库的 `app/` 目录执行；一键部署生成的仓库则直接在根目录执行：
 
 ```sh
 npm ci
