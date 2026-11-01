@@ -4,17 +4,9 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
-/**
- * 构建检查产物：
- *   1. 用 Vite 构建 `app/web/` 到 `app/dist/web/`，该目录就是部署时的静态资源目录；
- *   2. 用 Wrangler 打包 `app/src/index.ts` 到 `app/dist/release/worker.js`，只用于体积门禁。
- *
- * 部署入口由 `wrangler.toml` 指向源码，仓库不提交任何构建产物，
- * 因此这里不再生成第二份“可复制部署”的单文件。
- */
+/** 构建静态面板与 Worker 验收 bundle；只有 dist/web 是发布资源目录。 */
 
-const root = fileURLToPath(new URL('../../', import.meta.url));
-const appRoot = join(root, 'app');
+const appRoot = fileURLToPath(new URL('../', import.meta.url));
 const webDir = join(appRoot, 'dist', 'web');
 const outDir = join(appRoot, 'dist', 'release');
 const releaseWorkerPath = join(outDir, 'worker.js');
@@ -23,7 +15,7 @@ console.log('构建检查产物:');
 runNpm('build:web');
 
 if (!existsSync(join(webDir, 'index.html'))) {
-  throw new Error('app/dist/web/index.html 缺失：前端构建结果不完整');
+  throw new Error('dist/web/index.html 缺失：前端构建结果不完整');
 }
 
 rmSync(outDir, { recursive: true, force: true });
@@ -32,13 +24,13 @@ mkdirSync(outDir, { recursive: true });
 renameSync(join(webDir, '.vite', 'manifest.json'), join(outDir, 'web-manifest.json'));
 rmdirSync(join(webDir, '.vite'));
 
-runWrangler(['deploy', '--dry-run', '--config', 'wrangler.toml', '--outdir', toPosix(relative(root, outDir))]);
+runWrangler(['deploy', '--dry-run', '--config', 'wrangler.toml', '--outdir', toPosix(relative(appRoot, outDir))]);
 
 const bundle = createBundle();
 writeFileSync(releaseWorkerPath, bundle, 'utf8');
 
 console.log(`  worker.js  raw ${formatKb(Buffer.byteLength(bundle))}  gzip ${formatKb(gzipSync(bundle).length)}`);
-console.log('  静态资源：app/dist/web（部署时由 wrangler.toml 的 [assets] 指向）');
+console.log('  静态资源：dist/web');
 
 /** npm 在 Windows 上是 .cmd 包装器，用字符串形式交给 shell 启动，避免 spawn EINVAL。 */
 function runNpm(script) {
@@ -52,7 +44,7 @@ function runNpm(script) {
 function runWrangler(args) {
   try {
     execFileSync(process.execPath, [join(appRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js'), ...args], {
-      cwd: root,
+      cwd: appRoot,
       stdio: 'inherit',
       timeout: 90_000,
       env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },

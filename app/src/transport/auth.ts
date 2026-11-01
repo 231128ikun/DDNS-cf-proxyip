@@ -8,7 +8,7 @@ export interface AuthDecision {
   readonly shouldSetCookie: boolean;
 }
 
-/** 与 main 保持同一组认证入口：Bearer、X-Auth-Key、查询参数和 HttpOnly Cookie。 */
+/** 认证入口：Bearer、X-Auth-Key、查询参数和 HttpOnly Cookie。 */
 export function checkRequestAuth(request: Request, url: URL, configuredKey: string): AuthDecision {
   const requiredKey = configuredKey.trim();
   if (!requiredKey) return { enabled: false, authorized: true, shouldSetCookie: false };

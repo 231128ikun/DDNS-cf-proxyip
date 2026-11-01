@@ -6,14 +6,14 @@
  *   npm run build && npm run audit:ui
  * 默认启动只接收模拟数据的本地服务器；--base 可检查已启动的本地页面。
  *
- * 可选参数：--base / --out / --chrome / --compare-main
- * --compare-main 保留严格报告，但只容许 main 中同一内容、同等或更轻的问题。
+ * 可选参数：--base / --out / --chrome / --compare-baseline
+ * --compare-baseline 保留严格报告，但只容许基准页面中同一内容、同等或更轻的问题。
  * 脚本会自行启动 headless Chrome，用户数据目录放在系统临时目录，绝不写进仓库。
  * 只依赖 Node 内置能力（Node >= 22 提供全局 WebSocket），不引入任何依赖。
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { launchBrowser } from "./ui-browser.mjs";
-import { serveUiFixture, UI_REFERENCE_REF } from "./ui-fixture.mjs";
+import { serveUiFixture, UI_BASELINE_REF } from "./ui-fixture.mjs";
 import { compareAudit } from "./ui-audit-diff.mjs";
 import { join, resolve } from "node:path";
 
@@ -23,8 +23,8 @@ const flag = (name, fallback) => {
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 };
 let BASE = flag("base", "");
-const compareMain = args.includes("--compare-main");
-if (compareMain && BASE) throw new Error('--compare-main 必须使用本地同数据 fixture，不能配合 --base');
+const compareBaseline = args.includes("--compare-baseline");
+if (compareBaseline && BASE) throw new Error('--compare-baseline 必须使用本地同数据 fixture，不能配合 --base');
 const OUT = resolve(flag("out", ".wrangler/tmp/ui-audit"));
 const MIN_TARGET = 32;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -105,7 +105,7 @@ const auditProbe = () => {
       .filter(Boolean)
       .join(" ")
       .trim();
-  // main 的 emoji 位于文本节点，当前页面使用 aria-hidden 的图标 span。
+  //基准页面的 emoji 位于文本节点，当前页面使用 aria-hidden 的图标 span。
   // 彩色 emoji 的可见颜色不等于 CSS color，不按普通文字计算对比度。
   const textKey = (text) => text.normalize('NFKC').replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\s+/g, '');
   const issueKey = (el, text) => {
@@ -330,13 +330,13 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         const failures = [];
         if (${expectEmpty}) {
         if (document.querySelector('#manual-add-section')?.checkVisibility()) failures.push('未配置目标时不应显示 DNS 添加控件');
-        if (document.querySelector('.domain-selector > button')) failures.push('未配置目标时多出偏离 main 的独立跳转按钮');
-        if (document.querySelector('.target-summary-meta')?.textContent !== '请先到配置中心添加') failures.push('空目标摘要与 main 不同');
+        if (document.querySelector('.domain-selector > button')) failures.push('未配置目标时多出独立跳转按钮');
+        if (document.querySelector('.target-summary-meta')?.textContent !== '请先到配置中心添加') failures.push('空目标摘要与基准页面不同');
         if (!document.querySelector('#log-window')?.textContent.includes('请先在配置中心添加管理域名')) failures.push('空配置缺少启动引导日志');
         document.querySelector('.domain-binding-header')?.click();
         await new Promise(resolve => setTimeout(resolve, 50));
         const emptyBinding = document.querySelector('.domain-binding-table-wrap tbody td[colspan="2"]');
-        if (emptyBinding?.textContent !== '请先到配置中心添加管理域名') failures.push('空绑定没有保留 main 的表格占位行');
+        if (emptyBinding?.textContent !== '请先到配置中心添加管理域名') failures.push('空绑定没有保留基准页面的表格占位行');
         document.querySelector('.domain-binding-header')?.click();
         }
         const original = "203.0.113.10:443\\n203.0.113.11:443";
@@ -438,7 +438,7 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
           const grid = element.parentElement;
           const column = parseFloat(getComputedStyle(grid).gridTemplateColumns);
           return box.height > 80 || Math.abs(box.width - column) > 1
-            ? ['空配置占位卡没有保持 main 的单列宽度和内容高度'] : [];
+            ? ['空配置占位卡没有保持基准页面的单列宽度和内容高度'] : [];
         });
 
         for (let index = 0; index < 2; index += 1) {
@@ -495,7 +495,7 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
         const gridStyle = grids[0] ? getComputedStyle(grids[0]) : null;
         if (gridStyle && gridStyle.columnGap !== "12px") failures.push("配置卡片网格间距应为 12px");
         const formGrid = document.querySelector("#page-config .config-grid");
-        if (formGrid && getComputedStyle(formGrid).columnGap !== "10px") failures.push("配置表单网格间距与 main 的 10px 不同");
+        if (formGrid && getComputedStyle(formGrid).columnGap !== "10px") failures.push("配置表单网格间距与基准页面的 10px 不同");
         const formControl = formGrid?.querySelector(".form-control-sm, .form-select-sm");
         if (formControl && formControl.getBoundingClientRect().height < 38) failures.push("配置表单控件高度不足 38px");
         for (const metric of metrics) {
@@ -533,7 +533,7 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
 }
 
 async function main() {
-  const fixture = BASE ? null : await serveUiFixture({ empty: true, reference: compareMain });
+  const fixture = BASE ? null : await serveUiFixture({ empty: true, reference: compareBaseline });
   BASE ||= fixture.base;
   mkdirSync(OUT, { recursive: true });
   let browser;
@@ -550,14 +550,14 @@ async function main() {
     const referenceResults = [];
     for (const viewport of VIEWPORTS) {
       for (const page of PAGES) {
-        for (const surface of compareMain ? ['main', 'current'] : ['current']) {
+        for (const surface of compareBaseline ? ['baseline', 'current'] : ['current']) {
         await cdp.send(
           "Emulation.setDeviceMetricsOverride",
           { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile },
           sessionId,
         );
         const loaded = cdp.wait(sessionId, "Page.loadEventFired");
-        await cdp.send("Page.navigate", { url: `${BASE}${surface === 'main' ? '/reference' : page.path}` }, sessionId);
+        await cdp.send("Page.navigate", { url: `${BASE}${surface === 'baseline' ? '/reference' : page.path}` }, sessionId);
         await loaded.catch(() => {});
         if (fixture) await cdp.until(sessionId, "document.querySelector('#pool-count')?.textContent === '2'");
         else await sleep(1200);
@@ -577,7 +577,7 @@ async function main() {
           }
         }
         const data = await checkPage(cdp, sessionId);
-        (surface === 'main' ? referenceResults : results).push({ page: page.key, viewport: viewport.name, ...data });
+        (surface === 'baseline' ? referenceResults : results).push({ page: page.key, viewport: viewport.name, ...data });
 
         const metrics = await cdp.send("Page.getLayoutMetrics", {}, sessionId);
         const size = metrics.cssContentSize;
@@ -586,7 +586,7 @@ async function main() {
           { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } },
           sessionId,
         );
-        writeFileSync(join(OUT, `${surface === 'main' ? 'main-' : ''}${page.key}-${viewport.name}.png`), Buffer.from(shot.data, "base64"));
+        writeFileSync(join(OUT, `${surface === 'baseline' ? 'baseline-' : ''}${page.key}-${viewport.name}.png`), Buffer.from(shot.data, "base64"));
         }
       }
     }
@@ -605,14 +605,14 @@ async function main() {
 
     await cdp.send("Target.closeTarget", { targetId });
 
-    const comparisons = compareMain ? results.map(current => ({ page: current.page, viewport: current.viewport,
+    const comparisons = compareBaseline ? results.map(current => ({ page: current.page, viewport: current.viewport,
       ...compareAudit(referenceResults.find(reference => reference.page === current.page && reference.viewport === current.viewport), current),
     })) : [];
 
     writeFileSync(
       join(OUT, "report.json"),
-      JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, mode: compareMain ? 'main-regression' : 'strict',
-        reference: compareMain ? UI_REFERENCE_REF : null, results, referenceResults, comparisons, interactionFailures }, null, 2),
+      JSON.stringify({ generatedAt: new Date().toISOString(), base: BASE, mode: compareBaseline ? 'baseline-regression' : 'strict',
+        reference: compareBaseline ? UI_BASELINE_REF : null, results, referenceResults, comparisons, interactionFailures }, null, 2),
     );
 
     for (const r of results) {
@@ -643,14 +643,14 @@ async function main() {
     }
 
     const problems =
-      results.filter((r) => r.overflow || (!compareMain && (r.contrastFailures.length || r.smallTargets.length))
+      results.filter((r) => r.overflow || (!compareBaseline && (r.contrastFailures.length || r.smallTargets.length))
         || r.a11y.unnamedControls.length || r.a11y.duplicateIds.length || r.a11y.imagesMissingAlt).length +
       headingSkips.length +
       interactionFailures.length + comparisons.reduce((count, comparison) => count + comparison.regressions.length, 0);
     if (problems > 0) exitCode = 1;
     console.log(`\n报告与截图输出目录：${OUT}`);
-    console.log(problems === 0 ? (compareMain
-      ? "结论：相对 main 无新增对比度或点击目标退步；main 已有问题仍在报告中，不代表严格无障碍通过"
+    console.log(problems === 0 ? (compareBaseline
+      ? "结论：相对基准页面无新增对比度或点击目标退步；基准已有问题仍在报告中，不代表严格无障碍通过"
       : "结论：全部视口通过（无横向溢出、无对比度失败、无小于 32px 目标、无 a11y 问题）") : `结论：存在 ${problems} 类问题，见上方明细`);
   } finally {
     await browser?.close();

@@ -1,4 +1,4 @@
-/** main 与重构页面的配置编辑流程，所有写请求只到 ui-fixture 的内存替身。 */
+/** 基准页面与当前页面的配置编辑流程，所有写请求只到 ui-fixture 的内存替身。 */
 export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture) {
   const failures = [];
   const referenceDefects = [];
@@ -16,9 +16,9 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     })()`);
     await flush();
   };
-  const zoneInput = surface === 'main' ? '#edit-zone-label' : '#zone-name-0';
-  const portInput = surface === 'main' ? '#edit-target-port' : '#target-port-0';
-  const modeSelect = surface === 'main' ? '#edit-target-mode' : '#target-mode-0';
+  const zoneInput = surface === 'baseline' ? '#edit-zone-label' : '#zone-name-0';
+  const portInput = surface === 'baseline' ? '#edit-target-port' : '#target-port-0';
+  const modeSelect = surface === 'baseline' ? '#edit-target-mode' : '#target-mode-0';
   const section = (type) => `#page-config > :has(> #${type}-edit-panel)`;
   const card = (type) => `${section(type)} .config-mini-card`;
   let zoneOpenAttempts = 0;
@@ -79,13 +79,13 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
   await flush();
   check(writes().length === initialWrites, '管理域名的保存到页面提前写入了 KV');
   const enabledAfterCommit = await read(`document.querySelector(${JSON.stringify(`${card('target')} .actions input[type="checkbox"]`)}).checked`);
-  if (surface === 'main' && maintenanceToggleApplied && enabledAfterCommit) {
-    referenceDefects.push('main 的管理域名编辑器保留了旧的维护开关值：编辑时关闭卡片维护开关，再保存到页面，会重新开启维护。重构版必须保留用户刚切换的值。');
+  if (surface === 'baseline' && maintenanceToggleApplied && enabledAfterCommit) {
+    referenceDefects.push('基准页面保存编辑器时会恢复旧的维护开关；当前实现应保留编辑期间的新值。');
   } else check(!enabledAfterCommit, '提交编辑草稿覆盖了刚切换的维护开关');
 
   await click('.config-details-summary > :first-child');
   await cdp.until(sessionId, 'Boolean(document.querySelector("#cfg-concurrent-checks")?.offsetWidth)');
-  check(await read('Boolean(document.querySelector("#cfg-auth-key")?.offsetWidth)'), '配置中心没有恢复 main 的面板密钥字段');
+  check(await read('Boolean(document.querySelector("#cfg-auth-key")?.offsetWidth)'), '配置中心缺少面板密钥字段');
   await setValue('#cfg-concurrent-checks', '7');
   await setValue('#cfg-doh-timeout', '9000');
   await click('.config-details-summary > :first-child');
@@ -108,7 +108,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     const update = saved?.config ?? saved;
     check(writes().length === initialWrites + 2, '失败重试应只有两次明确的配置写请求');
     check(update?.zones?.[0]?.label === '已保存到页面' && Number(update?.targets?.[0]?.port) === 2053, '保存到 KV 没有合并权限配置和管理域名的页面草稿');
-    check(update?.targets?.[0]?.enabled === (surface === 'main' ? enabledAfterCommit : false), '保存到 KV 丢失了维护开关改动');
+    check(update?.targets?.[0]?.enabled === (surface === 'baseline' ? enabledAfterCommit : false), '保存到 KV 丢失了维护开关改动');
     check(Number(update?.settings?.CONCURRENT_CHECKS) === 7 && Number(update?.settings?.DOH_TIMEOUT) === 9000, '统一保存没有保留浏览器并发与 DoH 超时');
     if (surface === 'current') check(update?.zones?.[0]?.apiKey === '', '编辑备注不应回传已保存的 Token');
   } else failures.push('无法完成统一保存到 KV 的流程');
@@ -129,7 +129,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
   check(writes().length === initialWrites + 2, '还原改动不应写入 KV');
 
   await click(`${section('zone')} > :first-child button`);
-  const newZoneDomain = surface === 'main' ? '#edit-zone-base' : '#zone-domain-1';
+  const newZoneDomain = surface === 'baseline' ? '#edit-zone-base' : '#zone-domain-1';
   await cdp.until(sessionId, `Boolean(document.querySelector(${JSON.stringify(newZoneDomain)})?.offsetWidth)`);
   await setValue(newZoneDomain, 'example.com');
   await click('#zone-edit-panel .config-edit-actions button:last-child');

@@ -12,13 +12,13 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
       input.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await flush();
   };
-  const lookupButton = surface === 'main' ? '[onclick="lookupDomain()"]' : '.ddns-lookup-form button:first-of-type';
-  const refreshButton = surface === 'main' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
+  const lookupButton = surface === 'baseline' ? '[onclick="lookupDomain()"]' : '.ddns-lookup-form button:first-of-type';
+  const refreshButton = surface === 'baseline' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
   const select = '.target-select-overlay';
   if (surface === 'current') {
     const remove = '#main-actions button:last-child';
     const canRemove = await read(`!document.querySelector('${remove}').disabled`);
-    check(canRemove, '空输入应像 main 一样允许点击移除，并在本地提示');
+    check(canRemove, '空输入应允许点击移除，并在本地提示');
     if (canRemove) {
       await click(remove);
       await flush();
@@ -39,12 +39,12 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
     check(await read('document.querySelector(".action-menu-item:last-child").disabled'), '默认池的删除菜单应禁用');
     await click('.action-menu-trigger');
   }
-  check(await read('document.querySelector("#status-table").textContent.includes("AS64500")'), '当前 DNS 地址没有像 main 一样显示探测出口信息');
+  check(await read('document.querySelector("#status-table").textContent.includes("AS64500")'), '当前 DNS 地址没有显示探测出口信息');
   check(await read('document.querySelector("#status-table").textContent.includes("SJC")'), '可信探针返回的 Colo 没有显示');
-  await setValue(select, surface === 'main' ? '1' : 'proxy.example.com|TXT');
+  await setValue(select, surface === 'baseline' ? '1' : 'proxy.example.com|TXT');
   await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("8443")');
   check(await read('document.querySelectorAll("#status-table tr").length === 2'), 'TXT 列表没有逐地址显示');
-  await setValue(select, surface === 'main' ? '0' : 'edge.example.com|A');
+  await setValue(select, surface === 'baseline' ? '0' : 'edge.example.com|A');
   await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:443")');
   await click('#status-table .address-pill');
   await flush();
@@ -63,7 +63,7 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
 
   fixture.failRecordSave = true;
   await setValue('#manual-add-ip', '203.0.113.42:443');
-  await click(surface === 'main' ? '[onclick="manualAddIP()"]' : '#manual-add-section button');
+  await click(surface === 'baseline' ? '[onclick="manualAddIP()"]' : '#manual-add-section button');
   await cdp.until(sessionId, 'performance.getEntriesByType("resource").some(entry => /\\/api\\/add-(a-)?record$/.test(new URL(entry.name).pathname) && entry.responseEnd > 0)');
   await flush();
   check(await read('document.querySelector("#manual-add-ip").value === "203.0.113.42:443"'), 'DNS 添加失败后丢失了待重试的输入');
@@ -71,7 +71,7 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   await setValue('#lookup-domain', '203.0.113.55:443');
   await click(lookupButton);
   await cdp.until(sessionId, 'document.querySelector("#status-table").textContent.includes("203.0.113.55:443")');
-  await click(surface === 'main' ? '[onclick="manualAddIP()"]' : '#manual-add-section button');
+  await click(surface === 'baseline' ? '[onclick="manualAddIP()"]' : '#manual-add-section button');
   await cdp.until(sessionId, 'document.querySelector("#status-table").textContent.includes("203.0.113.42:443")');
   check(await read('document.querySelectorAll("#status-table tr").length === 3 && document.querySelector("#manual-add-ip").value === ""'), '添加成功后没有清空已提交输入并恢复当前 DNS 记录');
   await Promise.all([
@@ -79,7 +79,7 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
       await cdp.wait(sessionId, 'Page.javascriptDialogOpening');
       await cdp.send('Page.handleJavaScriptDialog', { accept: true }, sessionId);
     })(),
-    click(`#status-table tr:last-child td:last-child ${surface === 'main' ? 'a' : 'button'}`),
+    click(`#status-table tr:last-child td:last-child ${surface === 'baseline' ? 'a' : 'button'}`),
   ]);
   await cdp.until(sessionId, 'document.querySelectorAll("#status-table tr").length === 2 && !document.querySelector("#status-table").textContent.includes("203.0.113.42:443")');
 

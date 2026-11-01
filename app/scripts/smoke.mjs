@@ -30,7 +30,7 @@ const indexHtml = join(appRoot, 'dist', 'web', 'index.html');
 if (!existsSync(wrangler)) throw new Error('未安装 wrangler：先执行 npm ci');
 if (!existsSync(indexHtml)) throw new Error('app/dist/web/index.html 缺失：先执行 npm run build');
 
-const child = spawn(process.execPath, [wrangler, 'dev', '--config', '../wrangler.toml', '--port', String(port), '--local'], {
+const child = spawn(process.execPath, [wrangler, 'dev', '--config', 'wrangler.toml', '--port', String(port), '--local'], {
   cwd: appRoot,
   stdio: 'ignore',
   env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },

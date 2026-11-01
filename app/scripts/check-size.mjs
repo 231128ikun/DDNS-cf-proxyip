@@ -3,21 +3,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
-/**
- * 体积门禁分两条，都只拦数量级回归，不锁死精确值：
- *
- *   - Worker 打包体积：冷启动与部署大小。面板不再打包进 Worker，
- *     因此这里只含 `app/src/` 的逻辑，预算是它自己的量级。
- *   - 页面重量：入口静态依赖单列，全量 JS 与 CSS 预算覆盖动态块。面板由 Cloudflare
- *     静态资源分发，和 Worker 体积互不影响，所以分开计量。
- *
- * 重新引入 Zod/Hono 等重型运行时依赖，或把大块逻辑塞进首屏，都应让 `npm run check` 失败。
- */
+/** Worker 与静态前端分别计量；前端预算同时覆盖入口依赖和全部动态模块。 */
 const BUDGETS = {
   worker: { rawKb: 230, gzipKb: 60 },
-  // 单文件预算保留约 15% 余量：正常小改动可通过，单次数百 KB 的依赖膨胀仍会失败。
+  // 单个脚本与全部脚本分别设限。
   script: { rawKb: 70, gzipKb: 24 },
-  // 经用户授权增加源码体积余量；压缩后传输预算不变。
+  // 全量脚本同时限制未压缩与 gzip 体积。
   scriptTotal: { rawKb: 115, gzipKb: 38 },
   style: { rawKb: 40, gzipKb: 10 },
   pageTotal: { rawKb: 155, gzipKb: 50 },
@@ -34,10 +25,9 @@ const BUDGET_BASELINE = {
 const MAX_BUDGET_GROWTH = 0.2;
 
 const appRoot = new URL('../', import.meta.url);
-const repoRoot = new URL('../../', import.meta.url);
 const assetsDir = fileURLToPath(new URL('dist/web/assets', appRoot));
 const targets = [
-  { label: 'worker  app/dist/release/worker.js', path: fileURLToPath(new URL('app/dist/release/worker.js', repoRoot)), budget: BUDGETS.worker },
+  { label: 'worker  dist/release/worker.js', path: fileURLToPath(new URL('dist/release/worker.js', appRoot)), budget: BUDGETS.worker },
 ];
 
 let scriptRaw = 0;

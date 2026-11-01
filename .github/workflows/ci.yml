@@ -1,20 +1,7 @@
 name: CI
 
-# 校验模块源码和测试；部署入口是 wrangler.toml 指向的 app/src/index.ts，仓库不提交构建产物。
-on:
-  push:
-    paths:
-      - 'app/**'
-      - 'wrangler.toml'
-      - 'AGENTS.md'
-      - '.github/workflows/ci.yml'
-  pull_request:
-    paths:
-      - 'app/**'
-      - 'wrangler.toml'
-      - 'AGENTS.md'
-      - '.github/workflows/ci.yml'
-  workflow_dispatch:
+# Required checks run for every PR, including documentation-only changes.
+on: [push, pull_request, workflow_dispatch]
 
 defaults:
   run:
@@ -45,10 +32,10 @@ jobs:
       - name: Check
         run: npm run check
 
-      # 功能流程独立验收；无障碍沿用已知问题基准，不要求与 main 像素一致。
+      # 功能流程与无障碍回归独立验收；不要求与基准页面像素一致。
       # 同浏览器实时对照禁止新增或恶化；audit:ui 仍提供不豁免的严格审计。
       - name: UI accessibility regression and functional flows
-        run: npm run audit:ui:main && npm run audit:flows
+        run: npm run audit:ui:regression && npm run audit:flows
 
       - name: Save UI comparison report
         if: always()
@@ -56,9 +43,9 @@ jobs:
         with:
           name: ui-review
           path: |
-            app/.wrangler/tmp/ui-parity
+            app/.wrangler/tmp/ui-flows
             app/.wrangler/tmp/ui-audit
-            app/.wrangler/tmp/ui-audit-main
+            app/.wrangler/tmp/ui-regression
           include-hidden-files: true
           if-no-files-found: ignore
 

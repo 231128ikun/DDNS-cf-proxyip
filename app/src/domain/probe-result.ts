@@ -47,11 +47,7 @@ export function unknown(
   return withOptionalDetails({ status: 'unknown', target, exitFamily: 'unknown', code, message }, details);
 }
 
-/**
- * "未知态"里只有这两类不是检测异常：从未探测过，以及 DNS 内容本身无法解析。
- * 其余未知态（超时、HTTP、网络异常、响应无法解析、未配置、主动取消……）都算检测接口异常，
- * 这样以后新增错误码时会默认落到"提示用户"而不是被静默忽略。
- */
+/** 未探测和无效 DNS 值不属于探针故障；其余 unknown 结果均计为检测接口异常。 */
 const NON_PROBE_ERROR_CODES = new Set(['NOT_PROBED', 'INVALID_DNS_VALUE']);
 
 export function isProbeErrorResult(result: ProbeResult): boolean {

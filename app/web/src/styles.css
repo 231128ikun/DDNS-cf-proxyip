@@ -1546,7 +1546,7 @@ body {
             box-shadow: none;
         }
 
-        /* 与 main 共用同一张表：窄屏在表格内部横向滚动，保留行列关系。 */
+        /* 窄屏在表格内部横向滚动，保留行列关系。 */
         .status-table-head {
             position: sticky;
             top: 0;

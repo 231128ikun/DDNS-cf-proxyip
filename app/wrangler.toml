@@ -1,0 +1,23 @@
+name = "ddns-cf-proxyip"
+main = "src/index.ts"
+compatibility_date = "2026-09-24"
+
+# API requests run in the Worker; other paths use static assets.
+[assets]
+directory = "dist/web"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = ["/api/*"]
+
+# Inherit the existing binding or provision a namespace on initial deployment.
+[[kv_namespaces]]
+binding = "IP_DATA"
+
+# Startup defaults; saved app_config values take precedence.
+[vars]
+CHECK_API = ""
+CHECK_API_BACKUP = ""
+CHECK_TIMEOUT = "15000"
+
+[triggers]
+crons = ["0 */3 * * *"]

@@ -22,7 +22,7 @@ export type IconName =
   | 'trash'
   | 'wrench';
 
-/** 保留 DDNS Pro 的原有图标语言，名称与显示字符只维护在这里。 */
+/** 图标名称与显示字符的统一映射。 */
 const ICONS: Record<IconName, string> = {
   activity: '⚡',
   antenna: '📡',
