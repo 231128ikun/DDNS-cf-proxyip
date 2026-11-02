@@ -46,7 +46,7 @@ describe('standalone application layout', () => {
 
   it('uses the same build for npm and native Wrangler deployment without running tests in the hook', () => {
     const { scripts } = JSON.parse(read('package.json'));
-    expect(scripts.deploy).toBe('wrangler deploy');
+    expect(scripts.deploy).toBe('node scripts/deploy.mjs');
     expect(scripts.build).toBe('node scripts/build-worker.mjs');
     expect(scripts.dev).toBe('wrangler dev');
     const config = read('wrangler.toml');

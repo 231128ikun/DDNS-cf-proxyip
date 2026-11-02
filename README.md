@@ -33,16 +33,16 @@ DDNS Pro 部署于 Cloudflare Workers，通过外部检测接口验证 ProxyIP�
    | --- | --- |
    | 根目录 | `app` |
    | 构建命令 | 留空，由 Wrangler 自动构建 |
-   | 部署命令 | `npx wrangler deploy` |
+   | 部署命令 | `npm run deploy` |
 
 3. Worker 名称应与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
 4. 部署完成后打开 Worker 地址，在配置中心保存域名配置。
 
-Cloudflare 自动选择 Node.js 并安装依赖。Wrangler 自动构建面板与 Worker，检查体积后发布；完整测试由本地和 GitHub CI 执行，不进入线上发布文件。
+Cloudflare 自动选择 Node.js 并安装依赖。统一部署入口自动构建面板与 Worker，检查体积后发布；完整测试由本地和 GitHub CI 执行，不进入线上发布文件。
 
 一键部署生成的仓库以 `app/` 为根目录，根目录设置留空；完整仓库的根目录填写 `app`。
 
-**复用已有 KV：**在目标 Worker 的 **Bindings → Add binding → KV namespace** 中添加绑定，变量名设置为 `IP_DATA`，并选择已有命名空间。Wrangler 继承的是目标 Worker 的既有绑定，不会仅按命名空间名称自动关联数据。
+**KV 资源：**部署入口自动初始化 `IP_DATA`；创建遇到同名冲突时复用已有命名空间，已有明确绑定保持不变。
 
 </details>
 
@@ -56,12 +56,10 @@ Cloudflare 自动选择 Node.js 并安装依赖。Wrangler 自动构建面板与
 ```sh
 npm ci
 npx wrangler login
-npx wrangler deploy
+npm run deploy
 ```
 
-原生部署命令自动构建并检查产物，`npm run deploy` 为等价入口。在仓库根目录执行时使用 `npx wrangler deploy --cwd app`。
-
-未指定 KV ID 且目标 Worker 没有 `IP_DATA` 绑定时，Wrangler 尝试创建命名空间。复用已有命名空间应先完成上述 KV 绑定；更新同名 Worker 时保留原绑定。实际 Namespace ID 仅在受控部署环境配置，不提交到公共仓库。
+部署使用 `npm run deploy`；在仓库根目录执行时使用 `npm --prefix app run deploy`。
 
 </details>
 
@@ -69,11 +67,9 @@ npx wrangler deploy
 <summary><strong>已有实例迁移 / 更新</strong></summary>
 
 1. 保留原 Worker、域名、Secrets 和 `IP_DATA` 对应的 KV 命名空间。
-2. 确认目标 Worker 已将原 KV 绑定为 `IP_DATA`；Worker 名称、部署账号和环境应与原实例一致。
-3. 使用完整仓库时，将构建根目录设为 `app`，构建命令留空，部署命令设为 `npx wrangler deploy`。已有独立构建步骤也可使用，未变化的有效产物会被复用。
+2. Worker 名称、部署账号和环境应与原实例一致，已有 `IP_DATA` 绑定或明确资源 ID 保持不变。
+3. 使用完整仓库时，将构建根目录设为 `app`，构建命令留空，部署命令设为 `npm run deploy`。未变化的有效产物会被复用。
 4. 更新前备份 KV 并保留可回退版本；更新后确认配置、IP 池和域名绑定，再执行维护。
-
-**KV 错误 `10014`：**表示准备创建的命名空间名称已存在。应检查并选择原命名空间完成绑定，而非删除原 KV 或清空数据。仅存在同名命名空间不等于目标 Worker 已绑定它。
 
 代码回退不会恢复已变更的 KV 或 DNS。
 

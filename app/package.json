@@ -19,7 +19,7 @@
     "test:contract": "vitest run test/unit/api-contract.test.ts",
     "test:unit": "vitest run --exclude test/unit/api-contract.test.ts",
     "check": "npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/deploy.mjs",
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs",
@@ -44,7 +44,7 @@
   "cloudflare": {
     "bindings": {
       "IP_DATA": {
-        "description": "运行配置、IP 池与域名绑定的存储。复用现有命名空间时，应先在目标 Worker 中添加名为 IP_DATA 的 KV 绑定；仅同名不会自动关联。"
+        "description": "运行配置、IP 池与域名绑定的存储。npm run deploy 在未配置原绑定时先尝试创建；仅在同名 KV 冲突时复用唯一匹配的命名空间。"
       }
     }
   }
