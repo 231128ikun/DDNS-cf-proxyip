@@ -28,7 +28,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.02-11.24';
+export const APP_VERSION = '2026.11.02-11.36';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -43,7 +43,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
       const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
       const kv = env.IP_DATA;
-      const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
+      const maintenanceSource = kv ? new KvMaintenanceSource(kv, resolved.config) : null;
       const maintenance = kv && maintenanceSource
         ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
@@ -96,7 +96,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
         return;
       }
 
-      const source = new KvMaintenanceSource(env.IP_DATA);
+      const source = new KvMaintenanceSource(env.IP_DATA, resolved.config);
       executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, source).run(false));
     },
   };
@@ -145,7 +145,7 @@ export function createMaintenanceRunner(
   config: AppConfig,
   source?: MaintenanceSource,
 ): MaintenanceRunner {
-  const maintenanceSource = source ?? new KvMaintenanceSource(kv);
+  const maintenanceSource = source ?? new KvMaintenanceSource(kv, config);
   const stats = new KvMaintenanceStatsRepository(kv, new KvPoolCatalog(kv));
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
