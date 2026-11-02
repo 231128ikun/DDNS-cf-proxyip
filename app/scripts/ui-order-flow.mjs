@@ -23,20 +23,20 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
       const baseline = await savedKeys();
       const listNames = () => read(`[...document.querySelectorAll('${list} .pool-order-name strong')].map(item => item.textContent.trim())`);
       const route = kind === 'pools'
-        ? (surface === 'main' ? '/api/save-pool-order' : '/api/pools/order')
-        : (surface === 'main' ? '/api/save-domain-pool-order' : '/api/domain-bindings/order');
+        ? (surface === 'baseline' ? '/api/save-pool-order' : '/api/pools/order')
+        : (surface === 'baseline' ? '/api/save-domain-pool-order' : '/api/domain-bindings/order');
       const writes = () => requests.filter(request => request.surface === surface && request.path === route && ['POST', 'PUT'].includes(request.method));
       const before = writes().length;
       const open = async () => {
         if (kind === 'pools') {
           await click('.action-menu-trigger');
-          if (surface === 'main') await click('[onclick="runPoolMenuAction(\'order\')"]');
+          if (surface === 'baseline') await click('[onclick="runPoolMenuAction(\'order\')"]');
           else {
             const index = await read('[...document.querySelectorAll(".action-menu-item")].findIndex(item => item.textContent.includes("自定义池排序"))');
-            if (index < 0) throw new Error('池菜单缺少 main 的自定义池排序操作');
+            if (index < 0) throw new Error('池菜单缺少基准页面的自定义池排序操作');
             await click(`.action-menu-item:nth-child(${index + 1})`);
           }
-        } else await click(surface === 'main' ? '[onclick*="openDomainPoolOrderDialog()"]' : '#domain-order-trigger');
+        } else await click(surface === 'baseline' ? '[onclick*="openDomainPoolOrderDialog()"]' : '#domain-order-trigger');
         await cdp.until(sessionId, `Boolean(document.querySelector('${list}')?.offsetWidth)`);
         await read('Promise.all(document.querySelector(".pool-order-modal").getAnimations().map(animation => animation.finished)).then(() => true)');
         check(await read(`document.querySelector('.custom-modal-title').textContent.includes('${title}')`), `${title}标题不符`);
@@ -117,7 +117,7 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
   return failures;
 }
 
-/** 长列表与不足两个条目的边界；每轮恢复夹具，避免污染 main 对照。 */
+/** 长列表与不足两个条目的边界；每轮恢复夹具，避免污染 基准对照。 */
 export async function auditOrderEdges(cdp, sessionId, base, requests, fixture, capture) {
   const original = structuredClone(fixture);
   const failures = [];

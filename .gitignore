@@ -1,13 +1,14 @@
-# 本地快照/备份目录，不参与构建与提交
-_snapshot/
-
-# 构建与本地运行产物：面板由 Cloudflare 静态资源分发，Worker 由 Wrangler 从源码打包
+# Local tooling and working files
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/.codex/
+/.agents/
+/_snapshot/
 /_worker.js
 /.wrangler/
-/app/dist/
-/app/.wrangler/
 
-# 本地环境与系统杂项
+# Local environment and operating-system files
 .env
 .dev.vars
 .DS_Store

@@ -5,7 +5,7 @@ import type { MaintenanceSource, MaintenanceSourceData, MaintenanceTargetConfig 
 import { CONFIG_KEY } from './kv-config-repository';
 import { readKvJson, readKvStringRecord } from './kv-json';
 
-/** 维护目标直接来自统一配置 `app_config`，不再维护第二份域名配置。 */
+/** 从 app_config 读取维护目标与域名凭据。 */
 export class KvMaintenanceSource implements MaintenanceSource {
   constructor(private readonly kv: KVNamespace) {}
 

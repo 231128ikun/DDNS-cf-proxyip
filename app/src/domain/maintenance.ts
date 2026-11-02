@@ -58,7 +58,7 @@ export interface MaintenancePlan {
 
 /**
  * 候选排序：能直接补位且延迟更低的排在前面，未知和失效排在后面。
- * 维护按顺序取前 N 个补位，这份排序决定“谁上场”；同分保持池内原有顺序。
+ * 维护按顺序取前 N 个补位；同分保持池内顺序。
  */
 export function orderCandidatesForAddition(
   candidates: readonly CandidateMaintenanceItem[],

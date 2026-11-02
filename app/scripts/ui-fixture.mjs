@@ -5,12 +5,12 @@ import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import { pathToFileURL } from 'node:url';
 
-// main 的最后一套页面作为固定验收基准。只读取 Git 历史，不保存第二套源码。
-export const UI_REFERENCE_REF = '81a41bd014c9d7ee2ec0cd50e9d43fff58c2b8f5';
+// 固定提交提供无障碍回归基准；验收需要该提交的 Git 历史。
+export const UI_BASELINE_REF = '81a41bd014c9d7ee2ec0cd50e9d43fff58c2b8f5';
 const appRoot = resolve(import.meta.dirname, '..');
 const webRoot = join(appRoot, 'dist', 'web');
 const probeExits = [{ family: 'ipv4', ip: '198.51.100.42', asn: 'AS64500', country: 'US' }];
-const mainProbe = { success: true, colo: 'SJC', time: 12, exits: probeExits.map((exit) => ({ ...exit, stack: exit.family })) };
+const baselineProbe = { success: true, colo: 'SJC', time: 12, exits: probeExits.map((exit) => ({ ...exit, stack: exit.family })) };
 
 export function createUiFixture() {
   const zones = [{ name: '测试权限', label: '测试权限', baseDomain: 'example.com', zoneId: 'fixture-zone', apiKey: 'fixture-token' }];
@@ -52,7 +52,7 @@ export async function waitForUiRequest(requests, start, path, method, status) {
   throw new Error(`${method} ${path} 尚未完成`);
 }
 
-export function renderReference(config, ref = UI_REFERENCE_REF, login = false) {
+export function renderReference(config, ref = UI_BASELINE_REF, login = false) {
   let source;
   try {
     source = execFileSync('git', ['show', `${ref}:_worker.js`], { cwd: appRoot, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -67,7 +67,7 @@ export function renderReference(config, ref = UI_REFERENCE_REF, login = false) {
 }
 
 /** 本地验收：配置与绑定读写使用同次构建的 Worker 和内存 KV，外部操作使用替身。 */
-export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF, empty = false } = {}) {
+export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF, empty = false } = {}) {
   if (!existsSync(join(webRoot, 'index.html'))) throw new Error('请先运行 npm run build');
   const fixture = createUiFixture();
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
@@ -124,7 +124,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
       const entry = { path: url.pathname, method: request.method, input, completed: false, status: null,
         startedAt: Date.now(), completedAt: null,
         query: Object.fromEntries(url.searchParams),
-        surface: request.headers.referer?.includes('/reference') ? 'main' : 'current' };
+        surface: request.headers.referer?.includes('/reference') ? 'baseline' : 'current' };
       requests.push(entry);
       response.once('finish', () => { entry.status = response.statusCode; entry.completed = true; entry.completedAt = Date.now(); });
       response.once('close', () => {
@@ -219,7 +219,7 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
         const result = { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
-          : json({ ...mainProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });
+          : json({ ...baselineProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });
         } finally { metrics.active--; }
       }
       if (['/api/add-record', '/api/add-a-record'].includes(url.pathname)) {
@@ -249,9 +249,9 @@ export async function serveUiFixture({ reference = false, ref = UI_REFERENCE_REF
         return json({ ok: true, domain: target.domain, mode: target.mode, records,
           aRecords: target.mode === 'A' ? records.map((record) => ({ ...record, ip: record.content, port: target.port,
             address: record.type === 'AAAA' ? `[${record.content}]:${target.port}` : `${record.content}:${target.port}`,
-            ...mainProbe })) : [],
+            ...baselineProbe })) : [],
           txtRecords: target.mode === 'TXT' ? [{ id: records[0].id, ips: ['203.0.113.10:443', '[2001:db8::10]:8443'].map(ip => ({
-            ip, ...mainProbe })) }] : [] });
+            ip, ...baselineProbe })) }] : [] });
       }
       if (url.pathname === '/api/get-config') return json({ success: true, config });
       if (url.pathname === '/api/get-pool') {

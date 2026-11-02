@@ -161,7 +161,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     return () => controller.abort();
   }, [initialConfig, refreshBindings, refreshConfig, refreshHealth, refreshPools]);
 
-  /** 配置中心仍预取并保留原有重试/草稿生命周期，但不占用首屏请求的启动时机。 */
+  /** 配置中心预取不阻塞首屏请求；重试和草稿状态由页面管理。 */
   useEffect(() => {
     let cancelled = false;
     void import('./components/config-page')

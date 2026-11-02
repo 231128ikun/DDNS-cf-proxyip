@@ -171,10 +171,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  /**
-   * 一键洗库：读池、批量检测、有效项写回、失效项入桶，全部在服务端一次完成。
-   * 面板不再自己拼这几步——main 上「垃圾桶被绕过统一入口直接追加」的 bug 就出在那里。
-   */
+  /** 池清洗由服务端编排；失效项经统一垃圾桶入口写入。 */
   router.post('/api/pools/:key/clean', async (context) => {
     const cleanPool = dependencies.cleanPool;
     if (!cleanPool) return errorResponse('pool storage unavailable', 503);

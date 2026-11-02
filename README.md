@@ -1,11 +1,10 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-
 一个部署在 Cloudflare Workers 上的 ProxyIP 维护工具。它通过**外部 ProxyIP 检测 API** 校验节点可用性，并自动维护 Cloudflare DNS 里的 `A`、`AAAA` 或 `TXT` 记录，让目标域名尽量保持指向可用的 ProxyIP。
 
 项目不依赖自建服务器。`app/` 是唯一源码入口：Worker 处理 `/api/*`，浏览器端由 Cloudflare 静态资源分发，仓库不提交构建产物。
 
-> 本项目依赖 check-proxyip-api，若要自行部署后端代码，见下方参考代码。现在可行的方案是部署[CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)然后将` http://部署的项目地址/check?proxyip= `填入检测api中。（snippets版本可参考[CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)自行修改）
+检测接口可使用 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)。接口地址在配置中心设置，例如 `https://probe.example.com/check?proxyip=`。
 
 ---
 
@@ -14,7 +13,6 @@
 这个项目适合用于维护 Cloudflare Worker / Pages 反代场景中常见的 ProxyIP，例如让多个业务子域名持续指向可用的反代 IP。
 
 ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/231128ikun/CF-Workers-CheckProxyIP/blob/main/README.md#-%E4%BB%80%E4%B9%88%E6%98%AF-proxyip-)
-
 
 ### ✨ 核心特性
 
@@ -29,105 +27,64 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 ---
 
-## 💡 快速部署
+## 💡 部署
 
-> [!TIP]
-> 项目现由“Worker API + 静态面板”组成，但仍是同一个 DDNS Pro、同一次构建和部署。
-> 推荐部署顺序：准备 Node.js 22 -> 确认 Worker 与 KV 绑定 -> 安装依赖并部署 -> 打开面板保存配置。
-> 不再提供“复制单文件到 Worker 编辑器”的部署方式，仓库也不提交 `_worker.js` 或构建产物。
+### 一键部署
 
-### 🔄 已有 Worker 更新与迁移
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
 
-已有部署请继续使用原 Worker 和原数据，不必创建第二套服务：
+按钮使用 [Cloudflare 官方部署流程](https://developers.cloudflare.com/workers/platform/deploy-buttons/)，复制自包含的 `app/` 目录并创建仓库。以下设置已随模板提供：
 
-1. 保留原 Worker 名称 `ddns-cf-proxyip`、访问域名/路由、`IP_DATA` 绑定、Secrets 和其他必要环境配置。
-2. **`IP_DATA` 必须仍指向原 KV Namespace**。不要用新建空库替代；原 `app_config`、IP 池、垃圾桶和域名绑定继续可读，无需清空或转换数据。
-3. 把旧单文件部署改为下面的源码构建方式：Worker 入口是 `app/src/index.ts`，面板资源目录是 `app/dist/web`，以仓库根目录的 `wrangler.toml` 为准。
-4. 若 `main` 已接入 Cloudflare 自动部署，推送或合并前先核实构建设置；未准备好时先暂停自动部署，避免立即覆盖现有服务。
-5. 切换前保留可回退的部署版本和受控 KV 备份。回退代码不会自动回退 KV 数据或已经发生的 DNS 修改。
+- **根目录**：按钮中的子目录 URL 会将 `app/` 设为新仓库根目录。
+- **构建与部署**：平台从 `package.json` 自动识别并预填 `npm run build` 和 `npm run deploy`。
+- **Node.js**：`.node-version` 自动选择 Node.js 22 LTS；CI 使用同一文件。
+- **资源与密钥**：Wrangler 配置声明 KV 和静态资源，向导根据 `.dev.vars.example` 提示填写 `AUTH_KEY`。
 
-### ☁️ Cloudflare 构建设置
+按向导授权账号、设置长随机面板密钥并确认 KV 即可，无需手填上述构建设置。现有 Worker 后台已保存的构建设置不受按钮影响，更新方式见下文。
 
-| 设置项 | 值 |
-| --- | --- |
-| 生产分支 | `main` |
-| Root directory | 仓库根目录（不要同时设置为 `app`） |
-| Build command | `cd app && npm ci` |
-| Deploy command | `cd app && npm run deploy` |
-| Node.js | `22` 或更新版本 |
+一键部署适用于新实例。已有实例应使用下方的更新步骤，保留原 Worker、域名和 KV；不要用新建空库替代现有数据。
 
-- `npm run deploy` 会先执行完整 `npm run check`，其中包含类型检查、接口契约、单测、前端与 Worker 构建、体积门禁和本地部署形态冒烟。任一失败都不会执行发布。
-- Worker 和静态面板由同一个 `wrangler.toml` 一起发布，不需要另建 Pages 项目或上传第二份前端。
-- 构建生成 `app/dist/web/`（实际发布的静态资源）及 `app/dist/release/worker.js`（仅供打包和体积检查）。这些产物不提交 Git，也不作为源码入口。
-- 面板访问密钥、Cloudflare/Telegram Token 和真实资源标识只在部署环境维护，不提交仓库。
+### Cloudflare Git 构建
 
-### ⚙️ Wrangler 本地部署
+`app/` 包含依赖、唯一部署配置 `wrangler.toml`、Worker 和面板。Worker 入口为 `src/index.ts`，静态资源目录为 `dist/web`，二者一起发布，不需要另建 Pages 项目。
 
-<details>
-<summary><code><strong>「 Wrangler 部署文字教程 」</strong></code></summary>
+| 设置项 | 完整仓库 | 一键部署生成的仓库 |
+| --- | --- | --- |
+| Root directory | `app` | 仓库根目录 |
+| Build command | `npm run build` | `npm run build` |
+| Deploy command | `npm run deploy` | `npm run deploy` |
+| Node.js | 由 `app/.node-version` 选择 22 LTS | 由 `.node-version` 选择 22 LTS |
 
-1. 安装 Node.js 22 或更新版本，取得本仓库源码，然后在仓库根目录执行：
+依赖按 `package-lock.json` 安装；若构建环境未自动安装依赖，Build command 使用 `npm ci && npm run build`。Worker 名称应与 `app/wrangler.toml` 的 `name` 一致，默认 `ddns-cf-proxyip`。
 
-   ```powershell
-   cd app
-   npm ci
-   npx wrangler login
-   ```
+`npm run deploy` 会先执行类型检查、契约/单元测试、构建、体积门禁和本地冒烟，再调用 Wrangler 发布。不要将 Deploy command 改为裸 `npx wrangler deploy`：它不会执行本项目的构建和验证。`dist/web` 由构建生成，不提交到仓库。
 
-   后续命令均在 `app/` 目录执行；登录时选择要部署 Worker 的 Cloudflare 账号。
+### Wrangler 本地部署
 
-2. 确认 Worker 与 KV：
-   - 已有部署：保持原 Worker 名称和原 `IP_DATA` 绑定。当前 Wrangler 在部署同名 Worker 时可以继承已有的同名 KV 绑定，发布后仍要核对它是否指向原 Namespace。
-   - 首次部署：创建或选择 KV Namespace；必要时在**本地** `../wrangler.toml` 的占位绑定中填写实际 `id`：
+安装 Node.js 22 LTS（至少 22.12）或 24 LTS，在完整仓库的 `app/` 目录执行；一键部署生成的仓库则直接在根目录执行：
 
-   ```toml
-   [[kv_namespaces]]
-   binding = "IP_DATA"
-   id = "你的_KV_Namespace_ID"
-   ```
+```sh
+npm ci
+npx wrangler login
+npm run deploy
+```
 
-   真实 `id` 仅用于本地或受控构建环境，不要提交回 Git。Wrangler 若在部署时补写资源 ID，同样不要提交这些标识。不能把 `IP_DATA` 仅设为字符串环境变量来替代 KV 绑定。
+- 首次部署时创建或选择 KV Namespace，绑定名为 `IP_DATA`；`AUTH_KEY` 示例见 [app/.dev.vars.example](./app/.dev.vars.example)。
+- 部署同名 Worker 时，当前 Wrangler 可继承已有同名 KV 绑定。需要显式选择 Namespace 时，在本地或受控部署环境的 `wrangler.toml` 中填写实际 `id`，不要提交真实资源标识。
+- 部署后在配置中心填写 Zone ID、Cloudflare Token、管理域名和检测接口。运行配置保存到 `app_config`，优先于环境变量启动默认值。
+- 设置面板密钥后再公开地址。鉴权支持页面输入、Bearer、`X-Auth-Key`、`?key=` 和 HttpOnly Cookie。
+- Cron 已配置为每 3 小时执行一次；配置中心的自动维护开关同时控制是否运行。
 
-3. 部署：
+### 更新已有部署
 
-   ```powershell
-   npm run deploy
-   ```
+1. 保留原 Worker、域名/路由、Secrets 和 `IP_DATA` 指向的原 KV Namespace；原配置、池、垃圾桶及域名绑定无需转换或清空。
+2. 将 Git 构建的 Root directory 改为 `app`，按上表设置构建和部署命令。已有 `main` 自动部署会在推送或合并时触发。
+3. 更新前保留可回退的部署版本和受控 KV 备份；代码回退不会恢复 KV 或已修改的 DNS。
+4. 发布后确认登录、原配置、池和域名绑定正常，再执行维护。
 
-   该命令会自动校验并构建，不必另行生成或复制 `_worker.js`。如果只想先检查、不发布，可执行 `npm run check`；若只需查看构建产物，可执行 `npm run build`。
+若日志显示 `No dependencies detected` 或 `assets.directory ... does not exist`，先检查 Root directory 是否正确，以及构建是否实际执行。仅运行 Wrangler 不会生成面板静态资源。
 
-4. 打开面板并进入 **配置中心**：
-   - 首次部署填写维护域名、Zone ID、CF Key、管理域名、检测 API、Telegram 等配置。
-   - 已有部署先确认原配置、IP 池和域名绑定仍在；不要用空配置覆盖原数据。
-   - 建议设置 `AUTH_KEY` 或填写“面板密钥”后再公开地址。开启鉴权后支持页面输入密钥、`?key=`、Bearer、`X-Auth-Key` 和 HttpOnly Cookie。
-   - 保存写入原 KV 的 `app_config`，优先级高于环境变量启动默认值。
-
-5. 确认定时维护：
-   - `wrangler.toml` 已声明每 3 小时一次的 Cron：
-
-   ```text
-   0 */3 * * *
-   ```
-
-   - 配置中心同时需要开启自动维护；关闭时定时任务会跳过，无需另复制一套 cron 程序。
-
-</details>
-
-### 🚀 Cloudflare Git 集成部署
-
-<details>
-<summary><code><strong>「 Git 集成部署文字教程 」</strong></code></summary>
-
-1. Fork 本仓库或连接自己的仓库，在 Cloudflare Workers 为目标 Worker 关联 Git 构建；已有部署继续使用原 Worker，不另建同名替代服务。
-2. Worker 项目名称与 `wrangler.toml` 的 `name` 保持一致，即 `ddns-cf-proxyip`；生产分支选择 `main`。
-3. 按上方 **Cloudflare 构建设置** 配置仓库根目录、Node.js、Build command 和 Deploy command。不要继续使用旧 `_worker.js` 入口或单文件同步发布命令。
-4. 在目标 Worker 的 **Settings → Bindings** 核对 `IP_DATA`，已有部署必须保留原 Namespace；检查所需 Secrets 和环境变量。仓库的占位绑定不包含真实 Namespace ID，同名已部署 Worker 的现有绑定可由当前 Wrangler 继承。
-5. 触发一次 Git 构建，确认日志中完整校验、构建和发布成功；打开原地址，检查登录、面板、原配置及 IP 池均正常。
-6. 后续推送或合并到生产分支会触发 Cloudflare Git 部署。本仓库的 GitHub Actions 负责质量校验，**不会自动同步上游，也不代替 Cloudflare 的部署任务**；Fork 更新后仍须通过上述构建和部署流程。
-
-> 不使用 Git 集成时，按前面的 Wrangler 本地部署操作即可；两种方式共用同一份源码、配置和构建入口。
-
-</details>
+GitHub Actions 负责质量校验；Cloudflare Workers Builds 负责自动部署。仓库不提供上游自动同步工作流。
 
 ## 🔑 配置说明
 
@@ -144,7 +101,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 同时在域名概览页点击右侧三个点，复制对应`域名`的 **Zone ID**（**区域ID**）。
 
-> API Token 和 Zone ID 是你要维护的域名的 Cloudflare 账号中的。而这个项目可以部署在任意 Cloudflare 账号下。
+> API Token 和 Zone ID 必须属于目标 DNS 所在账号；Worker 可部署在其他 Cloudflare 账号。
 
 </details>
 
@@ -156,7 +113,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 ### 可选环境变量
 
-这些变量只作为初始默认值。上线后更推荐在面板的配置中心维护，保存后写入 KV。
+环境变量用于启动默认值和配置故障回退；配置中心保存到 KV 的值优先。
 
 | 变量名 | 说明 | 默认值 |
 | --- | --- | --- |
@@ -176,7 +133,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 > 公共备用检测 API 不保证长期可用，建议自行部署。批量清洗在首轮检测进行期间，失败项或接口异常项会立即在当前检测槽位内复检，不等待所有首轮项目结束；单项探测和维护仍在同一个检测任务内依次尝试主、备用接口。配置中心显式清空并保存主/备用接口后，该接口会被禁用；旧配置中缺少的字段仍使用环境默认值。
 
-> 批量检测沿用 main 的模型：浏览器按配置的 `CONCURRENT_CHECKS`（默认 32）逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。中断后继续只处理未完成项，放弃则保留已完成的清洗结果。配置与保存仍使用原有 `app_config.settings`。
+> 批量检测由浏览器按配置的 `CONCURRENT_CHECKS`（默认 32）逐个地址请求 Worker，每个请求只探测一个目标；单个目标异常记为未知并继续后续检测。中断后继续只处理未完成项，放弃则保留已完成的清洗结果。配置与保存仍使用原有 `app_config.settings`。
 
 > 服务端“一键洗库”单次最多接受 200 个不同有效地址（普通池与垃圾桶相同）。超限会明确报错，不开始检测，也不修改原池或垃圾桶；可以拆分为较小的池后洗库，或使用面板既有的逐地址批量检测。检测范围内存在接口异常或无法识别的条目时，洗库同样不会写回或入桶。
 
@@ -230,7 +187,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
    - 点击 **执行维护**。
    - Worker 会检测当前 DNS 记录，删除失效或不匹配筛选条件的记录，并从绑定的 IP 池中补充可用 IP。
 
-> 点击从**库中移除**则从库中移除输入框中的数据。比如想清空 ip 库，可以从库中加载所有的 ip 至输入框，点击从库中移除则库中所有的 ip 就都清空了。
+> **从库中移除**仅移除输入框中列出的地址；加载全池后执行该操作会清空该池。
 
 域名探测输入框中可以输入：
 
@@ -250,8 +207,6 @@ txt@example.com      # 读取 TXT 记录里的地址列表并逐个探测
 
 ## 🧩 内部设计说明
 
-下面内容主要用于了解项目内部数据格式、检测接口要求和维护流程。普通部署只需要看前面的快速部署、配置说明和使用说明。
-
 ### 仓库结构
 
 | 路径 | 用途 |
@@ -266,9 +221,22 @@ txt@example.com      # 读取 TXT 记录里的地址列表并逐个探测
 | `app/src/config/` | 环境变量解析与运行时适配器装配 |
 | `app/web/` | 浏览器端 Preact 源码（构建到 `app/dist/web`） |
 | `app/scripts/` | 构建、清理、体积门禁、冒烟与 UI 验收脚本 |
-| `wrangler.toml` | 部署事实源：Worker 入口、静态资源目录、KV 绑定与 Cron |
+| `app/wrangler.toml` | Worker 入口、静态资源目录、KV 绑定与 Cron |
 
 依赖方向固定为 `transport/jobs -> application -> domain + ports <- adapters`：业务规则不依赖 HTTP、KV、`fetch` 或页面。
+
+### 开发与验证
+
+在 `app/` 目录执行：
+
+```sh
+npm ci
+npm run check
+npm run audit:ui:regression
+npm run audit:flows
+```
+
+项目版本由 `app/src/worker.ts` 的 `APP_VERSION` 定义，格式为 `YYYY.MM.DD-HH.mm`；API 与面板共用该标识。私有 npm 包不另设版本。UI 回归以固定历史提交为基准，需要完整 Git 历史和 Chrome/Edge；不属于部署前的 `check`。构建产物、报告、截图和本地工具不提交。
 
 ### 检测 API
 
@@ -362,9 +330,9 @@ Worker 会使用以下 KV key：
 | `domain_pool_order` | 域名池绑定区域中管理域名的显示顺序，JSON 数组；旧数据缺少此键时按配置中的管理域名顺序显示 |
 | `ip_pool_names` | IP 池显示名称，JSON 对象，key 为池 ID，value 为显示名 |
 | `ip_pool_order` | IP 池显示顺序，JSON 数组；旧数据缺少此键时自动按原编号顺序显示 |
-| pool_stats_baseline | 距上次成功通知的各池数量基线，JSON 对象；只在维护通知成功发送后更新 |
+| `pool_stats_baseline` | 距上次成功通知的各池数量基线，JSON 对象；只在维护通知成功发送后更新 |
 
-IP 池的 KV key 不再使用用户输入的名称。新建池时 Worker 自动分配 `ip_pool_###`，用户看到的池名称只保存在 `ip_pool_names` 中。
+新建池自动分配 `ip_pool_###`；显示名称保存在 `ip_pool_names`，不参与 KV key 生成。
 
 检测清洗并入库后，IP 池按四字段保存：
 

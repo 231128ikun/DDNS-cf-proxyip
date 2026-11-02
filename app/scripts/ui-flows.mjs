@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { launchBrowser } from './ui-browser.mjs';
-import { createUiFixture, serveUiFixture, UI_REFERENCE_REF } from './ui-fixture.mjs';
+import { createUiFixture, serveUiFixture, UI_BASELINE_REF } from './ui-fixture.mjs';
 import { auditConfigFlow } from './ui-config-flow.mjs';
 import { auditDashboardFlow, auditTargetStartup } from './ui-dashboard-flow.mjs';
 import { auditOrderFlow, auditOrderEdges } from './ui-order-flow.mjs';
@@ -14,10 +14,10 @@ import { auditAuthGate } from './ui-auth.mjs';
 
 const args = process.argv.slice(2);
 const flag = (key, fallback) => args.includes(`--${key}`) ? args[args.indexOf(`--${key}`) + 1] : fallback;
-const out = resolve(flag('out', '.wrangler/tmp/ui-parity'));
+const out = resolve(flag('out', '.wrangler/tmp/ui-flows'));
 const widths = flag('widths', '375,768,992,1440').split(',').map(Number);
 if (widths.some((width) => !Number.isInteger(width) || width < 280 || width > 3840)) throw new Error('--widths 必须是 280–3840 之间的整数');
-const referenceRef = flag('ref', UI_REFERENCE_REF);
+const referenceRef = flag('ref', UI_BASELINE_REF);
 const currentOnly = args.includes('--current-only');
 const selectors = {
   hero: '.hero', target: '.target-summary', nav: '.top-nav',
@@ -53,8 +53,8 @@ function differences(reference, current, width) {
   const failures = [];
   if (current.overflow) failures.push('页面横向溢出');
   if (JSON.stringify(reference.poolOrder) !== JSON.stringify(current.poolOrder)) failures.push('池选择器没有保留服务端保存的顺序');
-  if (current.statusTables !== reference.statusTables) failures.push(`解析实况有 ${current.statusTables} 个展示表，应共用 main 的 ${reference.statusTables} 个表`);
-  if (current.statusCellDisplay !== reference.statusCellDisplay || current.statusHeadingWidth < 100) failures.push('解析实况未保留 main 的行列表格与可见表头');
+  if (current.statusTables !== reference.statusTables) failures.push(`解析实况有 ${current.statusTables} 个展示表，应共用基准页面的 ${reference.statusTables} 个表`);
+  if (current.statusCellDisplay !== reference.statusCellDisplay || current.statusHeadingWidth < 100) failures.push('解析实况未保留基准页面的行列表格与可见表头');
   if (Math.abs(reference.boxes.overview.height - current.boxes.overview.height) > 40) failures.push(`解析实况卡片高度偏差 ${Math.round(current.boxes.overview.height - reference.boxes.overview.height)}px`);
   if (current.toolbarCenters.length !== 4 || Math.max(...current.toolbarCenters) - Math.min(...current.toolbarCenters) > 2) failures.push('远程加载输入框与操作按钮没有保留在同一行');
   for (const key of ['workbench', 'bindings', 'consoleCard']) {
@@ -70,10 +70,10 @@ function differences(reference, current, width) {
       if (Math.abs(c[key][dimension] - r[key][dimension]) > 2) failures.push(`${key} ${dimension} 偏差超过 2px`);
     }
   }
-  if (c.target.radius !== r.target.radius) failures.push('维护目标卡片圆角与 main 不同');
+  if (c.target.radius !== r.target.radius) failures.push('维护目标卡片圆角与基准页面不同');
   if (width > 768 && Math.abs(c.target.width - r.target.width) > 4) failures.push(`维护目标摘要宽度偏差 ${Math.round(c.target.width - r.target.width)}px`);
-  if (c.nav.radius !== r.nav.radius || c.nav.background !== r.nav.background) failures.push('导航容器没有保留 main 的独立按钮布局');
-  if (Math.abs(c.console.height - r.console.height) > 2) failures.push(`控制台高度 ${c.console.height}px，main 为 ${r.console.height}px`);
+  if (c.nav.radius !== r.nav.radius || c.nav.background !== r.nav.background) failures.push('导航容器没有保留基准页面的独立按钮布局');
+  if (Math.abs(c.console.height - r.console.height) > 2) failures.push(`控制台高度 ${c.console.height}px，基准为 ${r.console.height}px`);
   if (width >= 992 && c.bindings && c.workbench) {
     if (Math.abs(c.bindings.x - c.workbench.x) > 2) failures.push('域名绑定没有留在 IP 管理左栏');
     if (c.bindings.y < c.workbench.y + c.workbench.height) failures.push('域名绑定没有位于 IP 管理下方');
@@ -135,20 +135,20 @@ async function captureBindings(cdp, session, width, failures) {
 }
 
 function writeReport(results, fatal) {
-  const report = { reference: currentOnly ? null : referenceRef, mode: currentOnly ? 'functional' : 'main-comparison', generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
+  const report = { reference: currentOnly ? null : referenceRef, mode: currentOnly ? 'functional' : 'baseline-comparison', generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
     referenceDefects: [...new Set(results.flatMap((result) => result.sessions.flatMap((session) => session.referenceDefects ?? [])))],
     coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
       ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
-        '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '重构版排序的 Escape、焦点约束与归还、固定系统池',
-        '重构版 24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '重构版配置延迟返回时首次检测非 443 端口',
-        '重构版登录卡片、错误密钥、Cookie 登录与地址栏密钥清理',
-        '重构版共享配置失败恢复、保存期间完整锁定、保存后新草稿与目标缓存更新', '重构版删除前项并改名后保持目标行选择与记录查询',
-        '重构版首次配置就绪前检测禁用与配置并发执行', '重构版绑定串行保存、部分映射更新与连续失败时保留确认缓存',
-        '重构版真实 Worker 新建池后保持选择、回读失败保留新池与只读重试',
-        '重构版面板密钥字段，以及批量检测中断后的输入锁定、已完成结果合并和仅未完成项续检',
-        '重构版延迟排序分块与中断弹窗互斥', '重构版排序写入成功、连续回读失败仍保留列表与只读重试；等待 HTTP 请求实际完成及成功'] : [])],
+        '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '当前实现排序的 Escape、焦点约束与归还、固定系统池',
+        '24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '当前实现配置延迟返回时首次检测非 443 端口',
+        '当前实现登录卡片、错误密钥、Cookie 登录与地址栏密钥清理',
+        '当前实现共享配置失败恢复、保存期间完整锁定、保存后新草稿与目标缓存更新', '当前实现删除前项并改名后保持目标行选择与记录查询',
+        '当前实现首次配置就绪前检测禁用与配置并发执行', '当前实现绑定串行保存、部分映射更新与连续失败时保留确认缓存',
+        '当前实现真实 Worker 新建池后保持选择、回读失败保留新池与只读重试',
+        '当前实现面板密钥字段，以及批量检测中断后的输入锁定、已完成结果合并和仅未完成项续检',
+        '当前实现延迟排序分块与中断弹窗互斥', '当前实现排序写入成功、连续回读失败仍保留列表与只读重试；等待 HTTP 请求实际完成及成功'] : [])],
     limits: ['布局断言和人工截图对照不等于整站像素等价', '配置、绑定与池创建读取使用真实 Worker 和内存 KV，探测、DNS 与排序保存使用本地替身；未验证真实部署和 Cloudflare 写入',
-      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', 'UI 鉴权使用本地静态资源与 API 夹具；真实 Cloudflare 静态资源和 Cookie 仍待部署冒烟', '排序弹窗补充 Escape 和焦点约束，未复制 main 缺少键盘约束的行为'],
+      '保留更高的文字对比度、至少 32px 的点击目标以及 unknown 的安全语义', 'UI 鉴权使用本地静态资源与 API 夹具；真实 Cloudflare 静态资源和 Cookie 仍待部署冒烟', '排序弹窗验证 Escape、焦点约束与关闭后焦点恢复'],
     ...(fatal ? { fatal } : {}), results };
   writeFileSync(join(out, 'report.json'), JSON.stringify(report, null, 2));
   const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -159,14 +159,14 @@ function writeReport(results, fatal) {
   const content = results.map((result) => `<section><h2>${result.width}px · ${result.failures.length ? '存在差异' : '已覆盖检查通过'}</h2>
     ${result.failures.length ? `<ul>${result.failures.map((failure) => `<li>${escape(failure)}</li>`).join('')}</ul>` : ''}
     ${Object.entries(names).map(([state, title]) => `<details ${state === 'dashboard' ? 'open' : ''}><summary>${title}</summary><div class="pair">
-      ${result.sessions.map((session) => `<figure><figcaption>${session.name === 'main' ? 'main 基准' : '重构实现'}</figcaption>
+      ${result.sessions.map((session) => `<figure><figcaption>${session.name === 'baseline' ? '基准页面' : '当前实现'}</figcaption>
         ${session.images?.[state] ? `<a href="${escape(session.images[state])}"><img src="${escape(session.images[state])}" alt="${escape(title)} ${session.name} ${result.width}px" loading="lazy"></a>`
-          : state.endsWith('-long') && session.name === 'main' ? '<p>此边界只验证重构实现。</p>' : '<p>未生成；见执行范围或失败原因。</p>'}</figure>`).join('')}</div></details>`).join('')}</section>`).join('');
+          : state.endsWith('-long') && session.name === 'baseline' ? '<p>此边界只验证当前实现。</p>' : '<p>未生成；见执行范围或失败原因。</p>'}</figure>`).join('')}</div></details>`).join('')}</section>`).join('');
   writeFileSync(join(out, 'index.html'), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro main 对照验收'}</title><style>body{margin:24px;font:15px/1.6 system-ui;color:#1d1d1f;background:#f5f5f7}h1{font-size:24px}section{margin:24px 0}details{background:white;margin:12px 0;padding:16px;border-radius:12px}summary{cursor:pointer;font-weight:600}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:12px 0;min-width:0}figcaption{font-weight:600}img{display:block;width:100%;height:auto;border:1px solid #ddd;box-sizing:border-box}code{overflow-wrap:anywhere}@media(max-width:640px){body{margin:12px}.pair{grid-template-columns:1fr}}</style>
-    <h1>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro main 对照验收'}</h1><p>${currentOnly ? "当前实现的功能与响应式验收，不要求与 main 几何或像素一致。" : "基准提交：" + escape(referenceRef)} 点击图片可查看原尺寸。</p>
+    <title>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro 基准对照验收'}</title><style>body{margin:24px;font:15px/1.6 system-ui;color:#1d1d1f;background:#f5f5f7}h1{font-size:24px}section{margin:24px 0}details{background:white;margin:12px 0;padding:16px;border-radius:12px}summary{cursor:pointer;font-weight:600}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:12px 0;min-width:0}figcaption{font-weight:600}img{display:block;width:100%;height:auto;border:1px solid #ddd;box-sizing:border-box}code{overflow-wrap:anywhere}@media(max-width:640px){body{margin:12px}.pair{grid-template-columns:1fr}}</style>
+    <h1>${currentOnly ? 'DDNS Pro 功能验收' : 'DDNS Pro 基准对照验收'}</h1><p>${currentOnly ? "当前实现的功能与响应式验收，不要求与基准页面几何或像素一致。" : "基准提交：" + escape(referenceRef)} 点击图片可查看原尺寸。</p>
     <p>自动检查覆盖关键布局${report.flows ? '和解析、配置保存流程' : ''}；图片保留整页供人工审阅。</p><ul>${report.limits.map((limit) => `<li>${escape(limit)}</li>`).join('')}</ul>
-    ${report.referenceDefects.length ? `<h2>已确认的 main 缺陷</h2><ul>${report.referenceDefects.map((defect) => `<li>${escape(defect)}</li>`).join('')}</ul>` : ''}
+    ${report.referenceDefects.length ? `<h2>已确认的基准页面缺陷</h2><ul>${report.referenceDefects.map((defect) => `<li>${escape(defect)}</li>`).join('')}</ul>` : ''}
     ${fatal ? `<p>${escape(fatal)}</p>` : ''}${content}</html>`);
 }
 
@@ -184,7 +184,7 @@ async function run() {
       const sessions = [];
       const failures = [];
       results.push({ width, failures, sessions });
-      for (const [name, path] of (currentOnly ? [['current', '/']] : [['main', '/reference'], ['current', '/']])) {
+      for (const [name, path] of (currentOnly ? [['current', '/']] : [['baseline', '/reference'], ['current', '/']])) {
         const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
         const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
         await cdp.send('Page.enable', {}, sessionId);
@@ -302,12 +302,12 @@ async function run() {
         await cdp.send('Target.closeTarget', { targetId: session.targetId });
       }
       if (!currentOnly) {
-      if (JSON.stringify(sessions[0].bindings) !== JSON.stringify(sessions[1].bindings)) failures.push('域名池绑定列表、当前选择或可选池与 main 不同');
-      if (sessions[0].config.basicsOpen !== sessions[1].config.basicsOpen) failures.push('基础配置默认展开状态与 main 不同');
-      if (sessions[0].config.configCards !== sessions[1].config.configCards) failures.push('配置卡片数与 main 不同');
-      if (JSON.stringify(sessions[0].config.settingsIds) !== JSON.stringify(sessions[1].config.settingsIds)) failures.push('运行参数字段和顺序与 main 不同');
+      if (JSON.stringify(sessions[0].bindings) !== JSON.stringify(sessions[1].bindings)) failures.push('域名池绑定列表、当前选择或可选池与基准页面不同');
+      if (sessions[0].config.basicsOpen !== sessions[1].config.basicsOpen) failures.push('基础配置默认展开状态与基准页面不同');
+      if (sessions[0].config.configCards !== sessions[1].config.configCards) failures.push('配置卡片数与基准页面不同');
+      if (JSON.stringify(sessions[0].config.settingsIds) !== JSON.stringify(sessions[1].config.settingsIds)) failures.push('运行参数字段和顺序与基准页面不同');
       for (const type of ['zone', 'target']) {
-        if (JSON.stringify(sessions[0].editors[type].editorLabels) !== JSON.stringify(sessions[1].editors[type].editorLabels)) failures.push(`${type} 编辑器字段和顺序与 main 不同`);
+        if (JSON.stringify(sessions[0].editors[type].editorLabels) !== JSON.stringify(sessions[1].editors[type].editorLabels)) failures.push(`${type} 编辑器字段和顺序与基准页面不同`);
       }
       }
       console.log(`${width}px: ${failures.length ? failures.join('；') : '已覆盖的布局与流程通过'}`);

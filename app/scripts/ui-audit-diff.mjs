@@ -3,7 +3,7 @@ export function compareAudit(reference, current) {
     if (!Array.isArray(data?.contrastFailures) || !Array.isArray(data?.smallTargets)
       || data.contrastFailures.some(item => !item.key || !Number.isFinite(item.ratio) || !Number.isFinite(item.required))
       || data.smallTargets.some(item => !item.key || !Number.isFinite(item.w) || !Number.isFinite(item.h))) {
-      throw new Error('Invalid audit data; a live main comparison is required');
+      throw new Error('Invalid audit data; a live baseline comparison is required');
     }
     for (const kind of ['contrastFailures', 'smallTargets']) {
       const keys = data[kind].map(item => item.key);

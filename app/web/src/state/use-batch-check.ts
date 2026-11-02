@@ -9,7 +9,7 @@ import type { RequestState } from './request-state';
 import { mergeBatchProgress, remainingBatch } from './batch-resume';
 import { probeStatusLabel } from '../components/probe-status';
 
-/** 批量检测中途停止时展示的确认信息，与 main 的“检测已中断”弹窗对齐。 */
+/** 批量检测中断时的进度摘要。 */
 interface BatchInterrupt {
   readonly checked: number;
   readonly total: number;
@@ -116,7 +116,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         };
         setBatchProgressState({ completed: items.length, total: items.length });
         setBatch({ status: 'ready', data: combined });
-        // 与 main 的“检测清洗”一致：可用项写成标准格式，未知/无效保留原文，失效项移除。
+        // 可用项写成标准格式，未知/无效项保留原文，失效项移除。
         setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
         batchSource.current = '';
         batchCompleted.current.clear();
