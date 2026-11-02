@@ -1,4 +1,3 @@
-import type { CheckPoolText } from '../application/check-pool';
 import type { CheckTarget, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
@@ -50,7 +49,6 @@ export interface HttpAppDependencies {
   readonly pools?: PoolService;
   /** 一键洗库用例；与维护流程共用同一个垃圾桶写入实现。 */
   readonly cleanPool?: CleanPool;
-  readonly checkPool?: CheckPoolText;
   /** 配置读写入口；未绑定 KV 时为空，接口返回 503。 */
   readonly config?: ConfigGateway;
   /** 服务端远程加载器，前端不允许直接访问第三方地址。 */

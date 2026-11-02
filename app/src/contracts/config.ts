@@ -1,4 +1,4 @@
-import type { ExitFilter, TargetMode } from '../domain/managed-target';
+import { normalizeExitFilter, normalizeList as normalizeTargetList, type ExitFilter, type TargetMode } from '../domain/managed-target';
 import { normalizeAsn, normalizeCountry } from '../domain/pool-entry';
 import { asRecord, parseFail, parseOk, readClampedInteger as integerValue, type ParseResult } from './parse';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSettings, type RuntimeSettings } from './runtime-settings';
@@ -257,7 +257,7 @@ function normalizeTarget(value: unknown, settings: RuntimeSettings): TargetConfi
     zoneIndex: readZoneIndex(record.zoneIndex),
     port,
     minActive: integerValue(record.minActive, settings.DEFAULT_MIN_ACTIVE, 0, MAX_MIN_ACTIVE),
-    exitFilter: normalizeExitFilter(record.exitFilter),
+    exitFilter: normalizeExitFilter(typeof record.exitFilter === 'string' ? record.exitFilter : undefined),
     country: countries.join(','),
     asn: asns.join(','),
     countries,
@@ -272,17 +272,7 @@ function normalizeList(
   normalizer: (item: string | null | undefined) => string | undefined,
 ): readonly string[] {
   const source = Array.isArray(primary) && primary.length > 0 ? primary : fallback;
-  const values = Array.isArray(source) ? source : String(source ?? '').split(/[,;，；\s]+/);
-  return [...new Set(values.map((item) => normalizer(String(item).trim())).filter((item): item is string => Boolean(item)))];
-}
-
-function normalizeExitFilter(value: unknown): ExitFilter {
-  const textValue = String(value ?? '').trim().toLowerCase().replace(/_/g, '-');
-  if (!textValue || ['any', 'all', 'v4/v6', 'v6/v4'].includes(textValue)) return 'any';
-  if (['v4', 'ipv4', 'ipv4-only', 'only-ipv4'].includes(textValue)) return 'v4';
-  if (['v6', 'ipv6', 'ipv6-only', 'only-ipv6'].includes(textValue)) return 'v6';
-  if (['dual', 'dual-stack', 'both'].includes(textValue)) return 'dual';
-  return 'any';
+  return normalizeTargetList(Array.isArray(source) ? source.map(String) : String(source ?? ''), normalizer);
 }
 
 function findDuplicate(zones: readonly ZoneConfig[], targets: readonly TargetConfig[]): string {
