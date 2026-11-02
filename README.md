@@ -8,19 +8,9 @@
 
 ## 部署
 
-### 一键部署
+### 现有仓库迁移 / 更新
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
-
-按 [Cloudflare 向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)授权账号，确认新仓库、Worker 与 KV，并填写一次长随机面板密钥 `AUTH_KEY`。**检测 API 无需填写**，首次启动直接使用内置备用接口；构建命令、Node.js 22 和资源绑定均已提供。
-
-官方按钮用于创建新实例：它会复制 `app/` 到你账号下的新仓库。**已经拥有本仓库，就直接用下方 Git 构建连接它，不需要再点按钮复制仓库。** 已有 Worker 按更新步骤操作，保留原 KV。
-
-**已有实例不要重新创建空 KV**，请按下方更新步骤保留原数据。
-
-### Git 构建
-
-在 Cloudflare Workers Builds 中选择已有的 GitHub 仓库和 `main` 分支：
+**已有本仓库就直接使用，不需要新建仓库。** 在 Cloudflare Workers Builds 中连接已有的 GitHub 仓库和 `main` 分支；已有 Worker 保留原域名、Secrets 和 `IP_DATA` 对应的 KV。
 
 | 设置项 | 完整仓库 | 一键部署生成的仓库 |
 | --- | --- | --- |
@@ -28,9 +18,17 @@
 | 构建命令 | `npm run build` | `npm run build` |
 | 部署命令 | `npm run deploy` | `npm run deploy` |
 
-Node.js 版本由 `.node-version` 选择。若平台未自动安装依赖，构建命令改为 `npm ci && npm run build`。Worker 名称须与 `wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。
+Node.js 版本由 `.node-version` 选择，平台自动安装依赖；不要在构建命令中重复执行 `npm ci`。Worker 名称须与 `wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。
 
-`npm run deploy` 会先执行完整验证，不要替换成裸 `wrangler deploy`。Worker 与静态面板一起发布，不需要另建 Pages 项目。
+完整测试由本地和 GitHub CI 执行；Cloudflare 构建命令生成产物，部署命令只检查体积并发布，不重跑测试或前端构建。Worker 与面板一起发布，不需要另建 Pages 项目。
+
+更新前保留 KV 备份和可回退版本；代码回退不会恢复 KV 或 DNS。日志中的 `Cloning repository` 只是拉取代码到构建机，不是新建 GitHub 仓库。
+
+### 新实例一键部署（会创建仓库）
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
+
+[官方向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)会把 `app/` 复制为你账号下的新仓库，并创建 Worker 和 KV。**面板密码和检测 API 均无需填写**：默认直接进入面板，检测使用内置备用接口。已有实例请使用上方迁移 / 更新方式，不要新建空 KV 替换原数据。
 
 ### 本地部署
 
@@ -39,19 +37,11 @@ Node.js 版本由 `.node-version` 选择。若平台未自动安装依赖，构�
 ```sh
 npm ci
 npx wrangler login
-npx wrangler secret put AUTH_KEY
+npm run build
 npm run deploy
 ```
 
 KV 绑定名固定为 `IP_DATA`。新实例按提示创建；更新同名 Worker 时保留已有绑定。若需在 `wrangler.toml` 显式填写 Namespace ID，仅在本地或受控部署环境设置，不提交真实资源标识。
-
-### 更新已有实例
-
-1. 保留原 Worker、域名/路由、Secrets 和 `IP_DATA` 对应的 KV；无需转换或清空数据。
-2. 按上表检查根目录与构建命令，再通过原 Git 构建或本地部署更新。
-3. 更新前备份 KV 并保留可回退版本；代码回退不会恢复 KV 或 DNS。更新后先确认登录、配置和 IP 池，再执行维护。
-
-若日志提示 `No dependencies detected` 或静态资源目录不存在，检查根目录及构建命令。GitHub Actions 负责验证，Cloudflare Workers Builds 负责部署。
 
 ## 配置
 
@@ -62,7 +52,7 @@ KV 绑定名固定为 `IP_DATA`。新实例按提示创建；更新同名 Worker
 3. **检测接口（可选）**：默认内置接口可直接工作；需要自建时可使用 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)，填写 `https://probe.example.com/check?proxyip=`，也支持 `{proxyip}` 占位符。备用接口可选。
 4. **通知与任务**：按需填写 Telegram 配置、启用通知和自动维护。
 
-**`AUTH_KEY` 是面板登录密码，不是 Cloudflare API Token。** 部署时先设置一次随机密码，登录后可在配置中心修改。不能等公开面板后再设置：为空时任何人都能进入。
+**`AUTH_KEY` 是可选的面板登录密码，不是 Cloudflare API Token。** 不设置时直接进入面板，可随时在配置中心设置、修改或清空；未设置密码时，能访问面板地址的人都能操作。也可在 Cloudflare 的 Worker Secrets 中提前设置。
 
 Cloudflare Token 与 Zone ID 必须对应目标 DNS，Worker 可以部署在另一账号。不要提交密码、个人资源 ID 或数据备份。
 
@@ -73,7 +63,7 @@ Cloudflare Token 与 Zone ID 必须对应目标 DNS，Worker 可以部署在另�
 
 | 变量 | 用途 |
 | --- | --- |
-| `AUTH_KEY` | 面板登录密码，登录后可在配置中心修改 |
+| `AUTH_KEY` | 可选面板密码；留空免登录，可在配置中心修改 |
 | `CF_KEY`、`CF_ZONEID`、`CF_BASE_DOMAIN` | Cloudflare Token、Zone ID、托管域名 |
 | `CHECK_API`、`CHECK_API_BACKUP` | 可选主、备用接口；未设置时使用内置备用接口 |
 | `DOH_API` | DNS 查询接口，默认 `https://cloudflare-dns.com/dns-query` |

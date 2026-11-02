@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { createProbeAdapterFromConfig, loadEnvConfig } from '../../src/config/runtime';
 import { createDefaultConfig, toProbeConfig } from '../../src/contracts/config';
@@ -43,9 +44,9 @@ describe('standalone application layout', () => {
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${createDefaultConfig().checkApiBackup}203.0.113.10%3A443`);
   });
 
-  it('runs complete checks before deployment with the local Wrangler config', () => {
+  it('builds separately and leaves the full test suite to the CI check command', () => {
     const { scripts } = JSON.parse(read('package.json'));
-    expect(scripts.deploy).toBe('npm run check && wrangler deploy');
+    expect(scripts.deploy).toBe('npm run check:size && wrangler deploy');
     expect(scripts.build).toBe('npm run clean && npm run build:worker');
     expect(scripts.check).toBe('npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke');
     expect(JSON.stringify(scripts)).not.toContain('../wrangler.toml');
@@ -61,10 +62,13 @@ describe('standalone application layout', () => {
     expect(lock.packages[''].version).toBeUndefined();
   });
 
-  it('includes license notices and an empty secret declaration for deployment', () => {
+  it('includes license notices without requiring a secret during deployment', () => {
     expect(read('LICENSE')).toContain('MIT License');
     expect(read('LICENSE')).toContain('Copyright (c) 2025 DDNS-cf-proxyip Contributors');
-    expect(read('.dev.vars.example').trim()).toBe('AUTH_KEY=');
+    expect(read('.dev.vars.example')).toContain('# AUTH_KEY=');
+    expect(parseEnv(read('.dev.vars.example'))).toEqual({});
+    expect(read('wrangler.toml')).not.toMatch(/^AUTH_KEY\s*=/m);
+    expect(loadEnvConfig({}).authKey).toBe('');
   });
 
   it('selects a supported Node major from the deployment root', () => {
@@ -73,9 +77,9 @@ describe('standalone application layout', () => {
     expect(manifest.engines.node).toContain('^22.12.0');
   });
 
-  it('describes the declared KV binding and secret in the deployment wizard', () => {
+  it('describes only the required KV binding in the deployment wizard', () => {
     const manifest = JSON.parse(read('package.json'));
-    expect(Object.keys(manifest.cloudflare.bindings).sort()).toEqual(['AUTH_KEY', 'IP_DATA']);
+    expect(Object.keys(manifest.cloudflare.bindings)).toEqual(['IP_DATA']);
     for (const binding of Object.values(manifest.cloudflare.bindings) as Array<{ description: string }>) {
       expect(binding.description.length).toBeGreaterThan(0);
     }
