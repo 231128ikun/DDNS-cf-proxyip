@@ -44,10 +44,15 @@ describe('standalone application layout', () => {
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${createDefaultConfig().checkApiBackup}203.0.113.10%3A443`);
   });
 
-  it('builds separately and leaves the full test suite to the CI check command', () => {
+  it('uses the same build for npm and native Wrangler deployment without running tests in the hook', () => {
     const { scripts } = JSON.parse(read('package.json'));
-    expect(scripts.deploy).toBe('npm run check:size && wrangler deploy');
-    expect(scripts.build).toBe('npm run clean && npm run build:worker');
+    expect(scripts.deploy).toBe('wrangler deploy');
+    expect(scripts.build).toBe('node scripts/build-worker.mjs');
+    expect(scripts.dev).toBe('wrangler dev');
+    const config = read('wrangler.toml');
+    expect(config).toMatch(/^\[build\]\s*\ncommand = "node scripts\/build-worker\.mjs"/m);
+    expect(read('scripts/build-worker.mjs')).toContain("[skipCustomBuild]: '1'");
+    expect(read('scripts/build-worker.mjs')).not.toContain("runNpm('test");
     expect(scripts.check).toBe('npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke');
     expect(JSON.stringify(scripts)).not.toContain('../wrangler.toml');
   });

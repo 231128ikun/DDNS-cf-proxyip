@@ -32,13 +32,13 @@
    | 设置项 | 内容 |
    | --- | --- |
    | 根目录 | `app` |
-   | 构建命令 | `npm run build` |
-   | 部署命令 | `npm run deploy` |
+   | 构建命令 | 留空，由 Wrangler 自动构建 |
+   | 部署命令 | `npx wrangler deploy` |
 
 3. 确认 KV 绑定名为 **`IP_DATA`**，Worker 名称与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。
 4. 部署后打开 Worker 地址，在配置中心保存域名配置。
 
-Cloudflare 自动选择 Node.js 并安装依赖，不要在构建命令里重复执行 `npm ci`。测试由本地和 GitHub CI 执行，线上只发布 Worker 与面板资源。
+Cloudflare 自动选择 Node.js 并安装依赖。部署命令会自动构建面板与 Worker、检查体积，再发布；不需要额外的构建命令。测试仍由本地和 GitHub CI 执行，不会上传到线上。
 
 一键按钮生成的仓库以 `app/` 为根目录，所以根目录留空；完整仓库才填写 `app`。
 
@@ -54,11 +54,10 @@ Cloudflare 自动选择 Node.js 并安装依赖，不要在构建命令里重复
 ```sh
 npm ci
 npx wrangler login
-npm run build
-npm run deploy
+npx wrangler deploy
 ```
 
-首次部署创建或选择 KV，绑定名为 `IP_DATA`；更新同名 Worker 时保留原绑定。
+首次部署创建或选择 KV，绑定名为 `IP_DATA`；更新同名 Worker 时保留原绑定。安装依赖、登录后，只需 `npx wrangler deploy` 即可自动构建并发布；也可用等价的 `npm run deploy`。在仓库根目录运行时使用 `npx wrangler deploy --cwd app`。
 
 </details>
 
@@ -66,7 +65,7 @@ npm run deploy
 <summary><strong>已有实例迁移 / 更新</strong></summary>
 
 1. 保留原 Worker、域名、Secrets 和 `IP_DATA` 对应的 KV，不要用新空库替换原数据。
-2. 使用完整仓库时，把 Cloudflare 构建根目录改为 `app`，构建命令设为 `npm run build`，部署命令设为 `npm run deploy`。
+2. 使用完整仓库时，把 Cloudflare 构建根目录改为 `app`，构建命令留空，部署命令设为 `npx wrangler deploy`。已有 `npm run build` 构建步骤也能工作，产物未变时自动复用，但不必保留该步骤。
 3. 更新前备份 KV 并保留可回退版本；更新后确认原配置、IP 池和域名绑定正常，再执行维护。
 
 日志中的 `Cloning repository` 只是下载代码到构建机，不是在 GitHub 新建仓库。代码回退不会恢复已变更的 KV 或 DNS。
