@@ -1,38 +1,49 @@
-# DDNS Pro
+# DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-部署在 Cloudflare Workers 上的 ProxyIP 管理面板，通过外部检测 API 验证节点，自动维护 Cloudflare DNS，无需自建服务器。
+部署在 Cloudflare Workers 上的 ProxyIP 维护工具，无需自建服务器。通过外部检测接口验证节点，自动维护域名的 `A`、`AAAA` 或 `TXT` 记录。
 
-- **DNS 维护**：支持多个域名、`A/AAAA` 和 `TXT` 记录，按国家、ASN、IPv4/IPv6 筛选并补充可用节点。
-- **IP 池管理**：导入、检测、去重、自定义池、域名绑定和垃圾桶恢复。
-- **定时任务与通知**：每 3 小时维护一次，可在面板关闭；支持 Telegram 报告。
+## ✨ 核心功能
 
-## 部署
+- **多域名维护**：检测当前节点，从绑定的 IP 池补充可用地址。
+- **IP 池管理**：导入、检测、去重、筛选、自定义池与垃圾桶恢复。
+- **出口筛选**：支持国家、ASN、IPv4、IPv6 和双栈条件。
+- **自动任务**：每 3 小时维护一次，可在面板关闭；支持 Telegram 通知。
 
-### 现有仓库迁移 / 更新
+## 🚀 快速部署
 
-**已有本仓库就直接使用，不需要新建仓库。** 在 Cloudflare Workers Builds 中连接已有的 GitHub 仓库和 `main` 分支；已有 Worker 保留原域名、Secrets 和 `IP_DATA` 对应的 KV。
+> **使用顺序：部署 → 配置中心保存域名配置 → 检测并入库 → 绑定 IP 池 → 执行维护。**
+> 面板密码和检测接口都可选。未设置密码时直接进入，检测默认使用内置备用接口。
 
-| 设置项 | 完整仓库 | 一键部署生成的仓库 |
-| --- | --- | --- |
-| 根目录 | `app` | 仓库根目录 |
-| 构建命令 | `npm run build` | `npm run build` |
-| 部署命令 | `npm run deploy` | `npm run deploy` |
+### 已有仓库：直接连接，不新建
 
-Node.js 版本由 `.node-version` 选择，平台自动安装依赖；不要在构建命令中重复执行 `npm ci`。Worker 名称须与 `wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。
+适合已经拥有本仓库，或更新已有 Worker 的情况。
 
-完整测试由本地和 GitHub CI 执行；Cloudflare 构建命令生成产物，部署命令只检查体积并发布，不重跑测试或前端构建。Worker 与面板一起发布，不需要另建 Pages 项目。
+1. 在 Cloudflare **Workers & Pages** 中创建 Worker 或打开已有 Worker，连接你的 GitHub 仓库。
+2. 选择 `main` 分支，设置：
 
-更新前保留 KV 备份和可回退版本；代码回退不会恢复 KV 或 DNS。日志中的 `Cloning repository` 只是拉取代码到构建机，不是新建 GitHub 仓库。
+   | 设置项 | 内容 |
+   | --- | --- |
+   | 根目录 | `app` |
+   | 构建命令 | `npm run build` |
+   | 部署命令 | `npm run deploy` |
 
-### 新实例一键部署（会创建仓库）
+3. 确认 KV 绑定名为 **`IP_DATA`**，Worker 名称与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。
+4. 部署完成后打开 Worker 地址，在面板配置中心保存配置。
+
+**更新已有实例时保留原 Worker、域名、Secrets 和 KV，不要用新空库替换原数据。** Cloudflare 日志中的 `Cloning repository` 只是下载代码到构建机，不是在 GitHub 新建仓库。
+
+### 新实例：一键复制模板
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
 
-[官方向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)会把 `app/` 复制为你账号下的新仓库，并创建 Worker 和 KV。**面板密码和检测 API 均无需填写**：默认直接进入面板，检测使用内置备用接口。已有实例请使用上方迁移 / 更新方式，不要新建空 KV 替换原数据。
+按 [Cloudflare 官方向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)授权账号并确认 Worker 与 KV 即可，**无需填写面板密码或检测 API**。
 
-### 本地部署
+这个按钮会在你的账号下创建新仓库，并把 `app/` 作为新仓库根目录，所以生成的仓库不再填写 `app` 根目录。已有仓库请用上面的直接连接方式，无需重复点击按钮。
 
-安装 Node.js 22.12+（22 LTS）或 24 LTS，在完整仓库的 `app/` 目录执行；一键部署生成的仓库则在根目录执行：
+<details>
+<summary>本地命令行部署</summary>
+
+安装 Node.js 22.12+ 或 24 LTS，在完整仓库的 `app/` 目录执行：
 
 ```sh
 npm ci
@@ -41,48 +52,40 @@ npm run build
 npm run deploy
 ```
 
-KV 绑定名固定为 `IP_DATA`。新实例按提示创建；更新同名 Worker 时保留已有绑定。若需在 `wrangler.toml` 显式填写 Namespace ID，仅在本地或受控部署环境设置，不提交真实资源标识。
+</details>
 
-## 配置
+面板和 Worker 同时发布，不需要另建 Pages 项目。Cloudflare 自动安装依赖并构建一次；测试由本地和 GitHub CI 执行，不会上传到线上。
 
-首次登录后，在**配置中心**填写并保存：
+## 🔑 配置中心
 
-1. **Cloudflare 授权**：使用 [API Token](https://dash.cloudflare.com/profile/api-tokens) 的 **Edit zone DNS** 模板，授权需要维护的域名；Zone ID 在该域名概览页获取。
-2. **管理域名**：设置前缀、记录类型、端口、最小活跃数和出口筛选条件。
-3. **检测接口（可选）**：默认内置接口可直接工作；需要自建时可使用 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)，填写 `https://probe.example.com/check?proxyip=`，也支持 `{proxyip}` 占位符。备用接口可选。
-4. **通知与任务**：按需填写 Telegram 配置、启用通知和自动维护。
+第一次打开面板，先完成以下配置：
 
-**`AUTH_KEY` 是可选的面板登录密码，不是 Cloudflare API Token。** 不设置时直接进入面板，可随时在配置中心设置、修改或清空；未设置密码时，能访问面板地址的人都能操作。也可在 Cloudflare 的 Worker Secrets 中提前设置。
-
-Cloudflare Token 与 Zone ID 必须对应目标 DNS，Worker 可以部署在另一账号。不要提交密码、个人资源 ID 或数据备份。
-
-配置保存到 KV 的 `app_config`，优先于环境变量；环境变量仅用于启动默认值和配置故障回退。
+1. **维护域名配置**：填写托管域名、Zone ID 和 Cloudflare API Token。
+2. **管理域名**：添加需要维护的子域名，选择 `A/AAAA` 或 `TXT`，设置端口、最小活跃数与出口筛选。
+3. **可选设置**：面板密码、Telegram 通知、自建检测接口和自动维护开关。
 
 <details>
-<summary>环境变量（通常直接在面板配置即可）</summary>
+<summary>Cloudflare Token 与 Zone ID 获取方式</summary>
 
-| 变量 | 用途 |
-| --- | --- |
-| `AUTH_KEY` | 可选面板密码；留空免登录，可在配置中心修改 |
-| `CF_KEY`、`CF_ZONEID`、`CF_BASE_DOMAIN` | Cloudflare Token、Zone ID、托管域名 |
-| `CHECK_API`、`CHECK_API_BACKUP` | 可选主、备用接口；未设置时使用内置备用接口 |
-| `DOH_API` | DNS 查询接口，默认 `https://cloudflare-dns.com/dns-query` |
-| `CONCURRENT_CHECKS` | 检测并发数，默认 32，范围 1–128 |
-| `CHECK_TIMEOUT`、`REMOTE_LOAD_TIMEOUT`、`DOH_TIMEOUT` | 检测、远程加载与 DNS 查询超时，单位毫秒 |
-| `TG_TOKEN`、`TG_ID` | Telegram Bot Token、Chat ID |
-| `TG_ENABLED`、`SCHEDULED_ENABLED` | 通知与定时维护开关，默认 `true` |
-
-在面板显式清空并保存检测接口会禁用该接口；旧配置缺失字段时沿用启动默认值。公共检测服务不保证长期可用，建议自行部署。
+- 在 [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) 使用 **Edit zone DNS** 模板，授权需要维护的域名。
+- 在该域名的概览页复制 **Zone ID（区域 ID）**。
+- Token 与 Zone ID 必须对应目标 DNS；Worker 可以部署在另一账号。
 
 </details>
 
-## 使用
+**面板密码是可选的 `AUTH_KEY`，不是 Cloudflare Token。** 可以在配置中心设置、修改或清空；未设置时，能打开面板地址的人都能操作。
 
-1. **导入**：粘贴地址、Excel 的 IP/端口两列，或加载远程 TXT 链接。
-2. **检测并入库**：选择 IP 池，检测后保存；批量检测中断可继续，放弃时保留已完成结果。
-3. **绑定并维护**：将管理域名绑定到池，点击“执行维护”；后续由定时任务检测并补充节点。
+检测默认使用内置接口。自建接口可参考 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)，地址支持 `https://probe.example.com/check?proxyip=` 或 `{proxyip}` 占位符。只配一个接口时也可检测和复检；配置两个时依次使用主、备用接口。
 
-IP 池支持纯地址和带元数据的格式；IPv6 带端口须使用方括号：
+配置保存到 KV 的 `app_config`。环境变量仅作启动默认值，面板保存的配置优先；密钥和真实资源 ID 不要提交 GitHub。
+
+## 🧭 面板使用
+
+1. **导入地址**：粘贴 IP 列表、Excel 的 IP/端口两列，或加载远程 TXT 链接。
+2. **检测并入库**：选择 IP 池，点击“检测”，再点击“入库”。检测中断后可以继续。
+3. **绑定并维护**：展开“域名池绑定”选择对应池，点击“执行全部维护”；之后可由定时任务自动维护。
+
+支持纯地址和带元数据、备注的格式：
 
 ```text
 192.0.2.10:443
@@ -90,18 +93,17 @@ IP 池支持纯地址和带元数据的格式；IPv6 带端口须使用方括号
 192.0.2.20:443,AS64500,JP,v4 # 可选备注
 ```
 
-标准格式为 `ip:port,asn,country,stack`，未知字段用 `null`，`stack` 为 `v4`、`v6` 或 `v4/v6`。旧的两字段、三字段与备注格式仍可读取。
+IPv6 带端口必须加方括号。标准池格式为 `ip:port,asn,country,stack`，`stack` 为 `v4`、`v6` 或 `v4/v6`，未知字段用 `null`；旧池格式仍可读取。
 
-域名探测支持 `example.com`（解析 A/AAAA 后检测）、`txt@example.com`（读取 TXT 地址列表）和 `example.com:8080`（直接检测该目标）。
+“解析实况”会读取并检测当前 DNS 地址，也可输入 `example.com`、`txt@example.com` 或 `example.com:8080` 进行探测。
 
-### 操作边界
+### 操作提醒
 
-- 检测可用时立即返回；失败或接口异常会复检。只有一个接口时复用同一接口，配置两个时依次使用主接口和备用接口。复检仍异常时保留为 `unknown`。
-- **探针异常不是节点失效**：超时、HTTP、TLS/证书错误、坏 JSON 等记为 `unknown`，不据此删除 DNS 或移入垃圾桶。只有可信探针明确判定不可用时才视为失效。
-- 出口国家、ASN 或栈不匹配的节点可从目标 DNS 移除，但不当作死节点入桶。`A/AAAA` 保存地址，`TXT` 在单条记录内保存地址列表。
-- “从库中移除”会删除输入框列出的地址；先加载全池再执行会清空该池。
-- 服务端“一键洗库”单次最多 200 个不同有效地址。超限、存在接口异常或无法识别的条目时不写回、不入桶；大池可用面板逐地址批量检测。
-- 手动维护、IP 变动、库存不足或 Cloudflare 配置错误可触发 Telegram 报告。
+- **未知不等于失效**：超时、HTTP、TLS 或接口响应异常不据此删除 DNS 或入桶；查看结果中的原因后重试。
+- 出口筛选不匹配可从目标 DNS 移除，但不当作死节点入桶。
+- “从库中移除”删除输入框列出的地址；先加载全池再执行会清空该池。
+- 服务端“一键洗库”单次最多 200 个不同有效地址；大池可用面板逐地址批量检测。
+- 更新前备份 KV；代码回退不会恢复已变更的 KV 或 DNS。公共检测服务不保证长期可用。
 
 ## 参考与许可
 
