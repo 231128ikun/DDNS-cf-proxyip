@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { MaintainManagedTarget } from '../../src/application/maintain-managed-target';
 import { normalizeManagedTarget, type ManagedTarget } from '../../src/domain/managed-target';
@@ -316,6 +316,37 @@ function externalMaintenance(type: 'A' | 'AAAA' | 'TXT', payload: unknown) {
   return { target, dns, pools, initial, service };
 }
 
+describe('maintenance pool write safety', () => {
+  const types = ['A', 'AAAA', 'TXT'] as const;
+
+  it.each(types)('retains the original pool when trash insertion fails for %s', async (type) => {
+    const { target, pools, initial, service } = externalMaintenance(type, { success: false, message: 'node failed' });
+    const save = vi.spyOn(pools, 'save');
+    vi.spyOn(pools, 'addToTrash').mockRejectedValueOnce(new Error('trash write failed'));
+
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+
+    expect(report.errors).toEqual(['写入垃圾桶失败']);
+    expect(report.plan.poolChanged).toBe(true);
+    expect(pools.value()).toBe(initial);
+    expect(pools.trash).toEqual([]);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each(types)('retains a trash copy before a failed original-pool write for %s', async (type) => {
+    const { target, pools, initial, service } = externalMaintenance(type, { success: false, message: 'node failed' });
+    const save = vi.spyOn(pools, 'save').mockRejectedValueOnce(new Error('pool write failed'));
+    const addToTrash = vi.spyOn(pools, 'addToTrash');
+
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+
+    expect(report.errors).toEqual(['保存 IP 池失败']);
+    expect(pools.value()).toBe(initial);
+    expect(pools.trash).toEqual([{ entryLine: initial, reason: '维护失效', poolKey: 'ip_pool_default' }]);
+    expect(addToTrash.mock.invocationCallOrder[0]!).toBeLessThan(save.mock.invocationCallOrder[0]!);
+  });
+});
+
 describe('external probe to maintenance safety', () => {
   const types = ['A', 'AAAA', 'TXT'] as const;
   const errors = [
@@ -325,6 +356,9 @@ describe('external probe to maintenance safety', () => {
     { success: false, reason: 'Network connection lost.' },
     { success: false, message: 'node failed', error: 'Network connection lost.' },
     { success: false, probeResults: { ipv4: { ok: false, error: 'Network connection lost.' } } },
+    { success: false, message: 'TLS handshake failed' },
+    { success: false, message: 'certificate has expired' },
+    { success: false, message: 'HTTP 500' },
   ];
 
   it.each(errors.flatMap(payload => types.map(type => ({ type, payload }))))('preserves $type DNS and pool on error $payload', async ({ type, payload }) => {

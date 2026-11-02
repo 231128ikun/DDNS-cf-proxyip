@@ -133,7 +133,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
     if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(infrastructureError)) {
       return unknown(target, 'TIMEOUT', '探针连接超时（节点状态未知）', { endpoint, latencyMs });
     }
-    const http = infrastructureError.match(/\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i);
+    const http = infrastructureError.match(PROBE_HTTP_ERROR_PATTERN);
     if (http) return unknown(target, 'HTTP_ERROR', `探针上游 HTTP ${http[1]}（节点状态未知）`, { endpoint, latencyMs });
     return unknown(target, 'PROBE_API_ERROR', trimMessage(infrastructureError) ?? '检测接口异常', { endpoint, latencyMs });
   }
@@ -327,8 +327,13 @@ function readProbeInfrastructureError(record: JsonRecord): string | undefined {
 const PROBE_INFRASTRUCTURE_ERROR_PATTERN =
   /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|unexpected status:\s*[45]\d{2}|request cancel(?:l)?ed|operation aborted/i;
 
+const PROBE_HTTP_ERROR_PATTERN = /\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i;
+const PROBE_TLS_ERROR_PATTERN = /(?:tls|ssl).{0,80}(?:fail|error|alert)|handshake.{0,80}(?:fail|error)|certificate.{0,80}(?:expired|invalid|fail|error|verify)|(?:err_(?:ssl|tls|cert)|ssl_error|cert_has_expired|unable_to_verify_leaf_signature|depth_zero_self_signed_cert)|(?:self[ -]signed|unable to verify).*certificate/i;
+
 function isProbeInfrastructureMessage(value: string): boolean {
-  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value);
+  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value)
+    || PROBE_HTTP_ERROR_PATTERN.test(value)
+    || PROBE_TLS_ERROR_PATTERN.test(value);
 }
 
 function readMessage(record: JsonRecord): string | undefined {

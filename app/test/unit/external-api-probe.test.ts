@@ -18,6 +18,12 @@ describe('ExternalApiProbeAdapter', () => {
     ['probe request timed out', 'TIMEOUT', '探针连接超时（节点状态未知）'],
     ['unexpected status: 502 body: <html><h1>502 Bad Gateway</h1></html>', 'HTTP_ERROR', '探针上游 HTTP 502（节点状态未知）'],
     ['upstream returned 503 Service Unavailable', 'HTTP_ERROR', '探针上游 HTTP 503（节点状态未知）'],
+    ['HTTP 500', 'HTTP_ERROR', '探针上游 HTTP 500（节点状态未知）'],
+    ['HTTP status: 403', 'HTTP_ERROR', '探针上游 HTTP 403（节点状态未知）'],
+    ['TLS handshake failed', 'PROBE_API_ERROR', 'TLS handshake failed'],
+    ['certificate has expired', 'PROBE_API_ERROR', 'certificate has expired'],
+    ['ERR_SSL_PROTOCOL_ERROR', 'PROBE_API_ERROR', 'ERR_SSL_PROTOCOL_ERROR'],
+    ['unable to verify the first certificate', 'PROBE_API_ERROR', 'unable to verify the first certificate'],
   ])('classifies reported infrastructure errors without exposing response bodies: %s', async (message, code, expected) => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
       timeoutMs: 15000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
@@ -287,6 +293,10 @@ describe('external probe safety regressions', () => {
   it.each([
     { success: false, apiError: true },
     { success: false, detail: 'Network connection lost.' },
+    { success: false, message: 'TLS handshake failed' },
+    { success: false, message: 'certificate has expired' },
+    { success: false, error: { message: 'HTTP 500' } },
+    { success: false, probes: { ipv4: { error: { cause: 'ERR_SSL_PROTOCOL_ERROR' } } } },
   ])('uses the backup after a reported API/infrastructure error: %j', async (payload) => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse(payload))

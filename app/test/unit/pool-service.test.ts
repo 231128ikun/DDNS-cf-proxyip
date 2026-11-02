@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PoolInputError, PoolService } from '../../src/application/pool-service';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
 import { MemoryPoolCatalog } from '../helpers/memory-pool-catalog';
@@ -104,6 +104,71 @@ describe('PoolService', () => {
     await new PoolService(catalog).restoreTrash(['203.0.113.11:443'], true);
 
     expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('203.0.113.11:443,null,null,null');
+  });
+
+  it('writes every restore destination before removing entries from trash', async () => {
+    const catalog = new MemoryPoolCatalog({
+      ip_pool_001: '',
+      ip_pool_002: '',
+      [TRASH_POOL_KEY]: [
+        '203.0.113.10:443,AS64500,JP,v4 # dead 来自 ip_pool_001',
+        '[2001:db8::10]:8443,AS64501,US,v6 # dead 来自 ip_pool_002',
+      ].join('\n'),
+    });
+    const write = vi.spyOn(catalog, 'write');
+
+    await new PoolService(catalog).restoreTrash(['203.0.113.10:443', '[2001:db8::10]:8443'], true);
+
+    expect(write.mock.calls.map(([key]) => key)).toEqual(['ip_pool_001', 'ip_pool_002', TRASH_POOL_KEY]);
+    expect(catalog.data.get('ip_pool_001')).toBe('203.0.113.10:443,AS64500,JP,v4');
+    expect(catalog.data.get('ip_pool_002')).toBe('[2001:db8::10]:8443,AS64501,US,v6');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe('');
+  });
+
+  it('retains trash after a later destination write fails and safely retries without duplicates', async () => {
+    const content = [
+      '203.0.113.10:443,AS64500,JP,v4 # dead 来自 ip_pool_001',
+      '[2001:db8::10]:8443,AS64501,US,v6 # dead 来自 ip_pool_002',
+    ].join('\n');
+    const catalog = new MemoryPoolCatalog({ ip_pool_001: '', ip_pool_002: '', [TRASH_POOL_KEY]: content });
+    const write = vi.spyOn(catalog, 'write').mockImplementation(async (key, value) => {
+      if (key === 'ip_pool_002') throw new Error('destination write failed');
+      catalog.data.set(key, value);
+    });
+    const service = new PoolService(catalog);
+    const addresses = ['203.0.113.10:443', '[2001:db8::10]:8443'];
+
+    await expect(service.restoreTrash(addresses, true)).rejects.toThrow('destination write failed');
+
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe(content);
+    expect(catalog.data.get('ip_pool_001')).toBe('203.0.113.10:443,AS64500,JP,v4');
+    expect(catalog.data.get('ip_pool_002')).toBe('');
+    expect(write.mock.calls.map(([key]) => key)).toEqual(['ip_pool_001', 'ip_pool_002']);
+
+    write.mockRestore();
+    await expect(service.restoreTrash(addresses, true)).resolves.toMatchObject({ restored: 1 });
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe('');
+    expect(catalog.data.get('ip_pool_001')).toBe('203.0.113.10:443,AS64500,JP,v4');
+    expect(catalog.data.get('ip_pool_002')).toBe('[2001:db8::10]:8443,AS64501,US,v6');
+  });
+
+  it('retains a destination copy when trash cleanup fails and safely retries cleanup', async () => {
+    const content = '203.0.113.10:443,AS64500,JP,v4 # dead 来自 ip_pool_001';
+    const catalog = new MemoryPoolCatalog({ ip_pool_001: '', [TRASH_POOL_KEY]: content });
+    const write = vi.spyOn(catalog, 'write').mockImplementation(async (key, value) => {
+      if (key === TRASH_POOL_KEY) throw new Error('trash cleanup failed');
+      catalog.data.set(key, value);
+    });
+    const service = new PoolService(catalog);
+
+    await expect(service.restoreTrash(['203.0.113.10:443'], true)).rejects.toThrow('trash cleanup failed');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe(content);
+    expect(catalog.data.get('ip_pool_001')).toBe('203.0.113.10:443,AS64500,JP,v4');
+
+    write.mockRestore();
+    await expect(service.restoreTrash(['203.0.113.10:443'], true)).resolves.toMatchObject({ restored: 0 });
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe('');
+    expect(catalog.data.get('ip_pool_001')).toBe('203.0.113.10:443,AS64500,JP,v4');
   });
 
   it('rejects invalid keys, oversized content and empty appends', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { KvPoolRepository } from '../../src/adapters/storage/kv-pool-repository';
 import { CheckPoolText } from '../../src/application/check-pool';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CleanPool } from '../../src/application/clean-pool';
@@ -83,6 +84,61 @@ describe('一键洗库', () => {
     expect(candidates[0]?.entryLine).toContain('dead.example:443');
     expect(candidates[0]?.reason).toBe('洗库失效');
     expect(candidates[0]?.poolKey).toBe(DEFAULT_POOL_KEY);
+  });
+
+  it('入桶失败时保留原池且不启动替换写入', async () => {
+    const content = 'dead.example:443,AS64500,JP,v4 # 用户备注';
+    const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: content });
+    const { cleanPool, trash } = createCleaner(catalog);
+    const write = vi.spyOn(catalog, 'write');
+    vi.spyOn(trash, 'addToTrash').mockRejectedValueOnce(new Error('trash write failed'));
+
+    await expect(cleanPool.execute(DEFAULT_POOL_KEY)).rejects.toThrow('trash write failed');
+
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
+    expect(write).not.toHaveBeenCalled();
+    expect(trash.batches).toEqual([]);
+  });
+
+  it('原池替换失败时已留入桶副本，重试仍经过统一去重入口', async () => {
+    const content = 'dead.example:443,AS64500,JP,v4 # 用户备注';
+    const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: content });
+    const kv = {
+      get: async (key: string) => catalog.data.get(key) ?? null,
+      put: async (key: string, value: string) => { catalog.data.set(key, value); },
+    } as unknown as KVNamespace;
+    const trash = new KvPoolRepository(kv, { maxTrashSize: 1, now: () => new Date('2026-01-01T00:00:00Z') });
+    const cleanPool = new CleanPool({
+      pools: new PoolService(catalog), catalog, trash,
+      checkPool: new CheckPoolText(new CheckProxy(new AddressingProbeAdapter()), 1),
+    });
+    const write = vi.spyOn(catalog, 'write').mockRejectedValueOnce(new Error('pool write failed'));
+
+    await expect(cleanPool.execute(DEFAULT_POOL_KEY)).rejects.toThrow('pool write failed');
+
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
+    const savedTrash = catalog.data.get(TRASH_POOL_KEY);
+    expect(savedTrash).toContain('dead.example:443,AS64500,JP,v4 # 洗库失效');
+    expect(savedTrash).toContain(`来自 ${DEFAULT_POOL_KEY}`);
+
+    write.mockRestore();
+    await expect(cleanPool.execute(DEFAULT_POOL_KEY)).resolves.toMatchObject({ kept: 0, trashed: 1, skipped: false });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe(savedTrash);
+  });
+
+  it('垃圾桶全失效时成功返回零恢复，不写入任何池', async () => {
+    const content = 'dead.example:443,AS64500,JP,v4 # 维护失效 来自 ip_pool_001';
+    const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: content });
+    const { cleanPool, trash } = createCleaner(catalog);
+    const write = vi.spyOn(catalog, 'write');
+
+    await expect(cleanPool.execute(TRASH_POOL_KEY)).resolves.toEqual({
+      ok: true, poolKey: TRASH_POOL_KEY, checked: 1, kept: 0, trashed: 0, unknown: 0, skipped: false,
+    });
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe(content);
+    expect(write).not.toHaveBeenCalled();
+    expect(trash.batches).toEqual([]);
   });
 
   it('空池直接报错，不触发检测', async () => {

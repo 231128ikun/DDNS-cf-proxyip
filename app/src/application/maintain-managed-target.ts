@@ -84,21 +84,24 @@ export class MaintainManagedTarget {
     const errors: string[] = [];
     const dnsResult = await this.applyDnsChanges(command, plan, errors);
 
-    if (plan.poolChanged) {
-      try {
-        await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
-      } catch {
-        errors.push('保存 IP 池失败');
-      }
-    }
-
+    let trashSaved = plan.trash.length === 0;
     if (plan.trash.length > 0) {
       try {
         await this.dependencies.pools.addToTrash(
           plan.trash.map((item) => ({ ...item, poolKey: command.poolKey })),
         );
+        trashSaved = true;
       } catch {
         errors.push('写入垃圾桶失败');
+      }
+    }
+
+    // 入桶失败时保留原池；保存失败时已入桶的副本仍可恢复。
+    if (plan.poolChanged && trashSaved) {
+      try {
+        await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
+      } catch {
+        errors.push('保存 IP 池失败');
       }
     }
 

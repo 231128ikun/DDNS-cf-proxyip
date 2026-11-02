@@ -39,16 +39,19 @@ export class CleanPool {
     const dead = report.items.filter((item) => item.result.status === 'dead');
 
     if (poolKey === TRASH_POOL_KEY) {
-      const restored = await this.dependencies.pools.restoreTrash(alive.map((item) => item.address), true);
+      const restored = alive.length > 0
+        ? await this.dependencies.pools.restoreTrash(alive.map((item) => item.address), true)
+        : { restored: 0 };
       return { ok: true, poolKey, checked: report.total, kept: restored.restored, trashed: 0, unknown: 0, skipped: false };
     }
 
-    await this.dependencies.pools.save(poolKey, alive.map((item) => formatPoolEntry(item.entry)).join('\n'), 'replace');
+    // 入桶成功后才能移除原池条目，写入失败宁可保留副本。
     if (dead.length > 0) {
       await this.dependencies.trash.addToTrash(
         dead.map((item) => ({ entryLine: formatPoolEntry(item.entry), reason: '洗库失效', poolKey })),
       );
     }
+    await this.dependencies.pools.save(poolKey, alive.map((item) => formatPoolEntry(item.entry)).join('\n'), 'replace');
 
     return { ok: true, poolKey, checked: report.total, kept: alive.length, trashed: dead.length, unknown: 0, skipped: false };
   }
