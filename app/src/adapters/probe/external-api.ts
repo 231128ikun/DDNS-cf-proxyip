@@ -51,18 +51,20 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
   }
 
   async probe(target: ProxyTarget, context: ProbeContext = {}): Promise<ProbeResult> {
-    const attempts: ProbeResult[] = [];
+    const endpoints = this.endpoints.length === 1 && this.fallbackToNext
+      ? [this.endpoints[0]!, this.endpoints[0]!]
+      : this.endpoints;
+    let result: ProbeResult | undefined;
 
-    for (const endpoint of this.endpoints) {
-      const result = await this.probeEndpoint(target, endpoint, context);
-      attempts.push(result);
-      if (result.status === 'alive') return result;
-      if (context.signal?.aborted) return result;
-      // 备用接口只接手主接口无法得出结论的情况。可信探针明确判死后应直接采用该结论。
-      if (result.status !== 'unknown' || !this.fallbackToNext) return result;
+    for (const endpoint of endpoints) {
+      if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
+      result = await this.probeEndpoint(target, endpoint, context);
+      if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
+      if (result.status === 'alive' || !this.fallbackToNext) return result;
     }
 
-    return attempts.at(-1) ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
+    // 最后一次异常不能被此前的失效结论覆盖。
+    return result ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
   }
 
   private async probeEndpoint(target: ProxyTarget, endpoint: ExternalApiProbeEndpoint, context: ProbeContext): Promise<ProbeResult> {

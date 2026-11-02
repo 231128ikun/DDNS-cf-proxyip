@@ -208,7 +208,7 @@ describe('ExternalApiProbeAdapter', () => {
     expect(result.message).toContain('TCP Loop detected');
   });
 
-  it('does not fall back after a trusted endpoint reports the node dead', async () => {
+  it('rechecks a failed node on the backup before adopting a dead result', async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ success: false, message: 'connection refused' }))
@@ -224,9 +224,9 @@ describe('ExternalApiProbeAdapter', () => {
     });
 
     const result = await adapter.probe(target);
-    expect(result.status).toBe('dead');
-    expect(result.endpoint).toBe('primary');
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('alive');
+    expect(result.endpoint).toBe('backup');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -245,6 +245,70 @@ describe('ExternalApiProbeAdapter', () => {
     const result = await adapter.probe(target);
     expect(result.status).toBe('unknown');
     expect(result.code).toBe('PROBE_API_ERROR');
+  });
+});
+
+describe('probe rechecks', () => {
+  const cases = [
+    { label: 'healthy', payloads: [{ success: true }], status: 'alive', attempts: 1 },
+    { label: 'recovered', payloads: [{ success: false }, { success: true }], status: 'alive', attempts: 2 },
+    { label: 'confirmed failure', payloads: [{ success: false }, { success: false }], status: 'dead', attempts: 2 },
+    { label: 'failed recheck', payloads: [{ success: false }, { success: false, message: 'TLS handshake failed' }], status: 'unknown', attempts: 2 },
+    { label: 'recovered API error', payloads: [{ success: false, message: 'HTTP 500' }, { success: true }], status: 'alive', attempts: 2 },
+  ];
+
+  it.each(cases)('reuses a single endpoint for $label', async ({ payloads, status, attempts }) => {
+    let index = 0;
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => jsonResponse(payloads[index++] ?? payloads.at(-1)));
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'backup', urlTemplate: 'https://only.example/?proxyip=' }],
+      timeoutMs: 1_000, fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await adapter.probe(target)).toMatchObject({ status, endpoint: 'backup' });
+    expect(fetchImpl).toHaveBeenCalledTimes(attempts);
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual(Array(attempts).fill('https://only.example/?proxyip=203.0.113.10%3A8443'));
+  });
+
+  it.each(cases)('uses primary then backup for $label', async ({ payloads, status, attempts }) => {
+    let index = 0;
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => jsonResponse(payloads[index++] ?? payloads.at(-1)));
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [
+      { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
+      { name: 'backup', urlTemplate: 'https://backup.example/?proxyip=' },
+    ], timeoutMs: 1_000, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status, endpoint: attempts === 1 ? 'primary' : 'backup' });
+    expect(fetchImpl).toHaveBeenCalledTimes(attempts);
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://primary.example/?proxyip=203.0.113.10%3A8443',
+      ...(attempts === 2 ? ['https://backup.example/?proxyip=203.0.113.10%3A8443'] : []),
+    ]);
+  });
+
+  it('does not recheck when fallback is explicitly disabled', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ success: false }));
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' }],
+      timeoutMs: 1_000, fallbackToNext: false, fetchImpl: fetchImpl as typeof fetch });
+    expect((await adapter.probe(target)).status).toBe('dead');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a request when the caller has already cancelled', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = vi.fn(async () => jsonResponse({ success: false }));
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' }],
+      timeoutMs: 1_000, fetchImpl: fetchImpl as typeof fetch });
+    expect(await adapter.probe(target, { signal: controller.signal })).toMatchObject({ status: 'unknown', code: 'CANCELLED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('does not recheck or report dead after the caller cancels the first request', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => { controller.abort(); return jsonResponse({ success: false }); });
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' }],
+      timeoutMs: 1_000, fetchImpl: fetchImpl as typeof fetch });
+    expect(await adapter.probe(target, { signal: controller.signal })).toMatchObject({ status: 'unknown', code: 'CANCELLED' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
