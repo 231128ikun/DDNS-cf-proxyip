@@ -1,20 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CheckTarget } from '../../src/application/check-target';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { TargetStatus } from '../../src/application/target-status';
 import { alive } from '../../src/domain/probe-result';
 import type { DnsRecord } from '../../src/ports/dns-repository';
+import type { ProbeAdapter } from '../../src/ports/probe';
 import { createHttpApp } from '../../src/transport/http';
 import { ApiClient } from '../../web/src/api/client';
+import { probeStatusLabel } from '../../web/src/components/probe-status';
 import { loadTargetStatus, MAX_CURRENT_STATUS_PROBES } from '../../web/src/state/target-status';
 
-function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string) {
+function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string, probeAdapter?: ProbeAdapter) {
   const writes = vi.fn();
   const requests: { path: string; method: string; address?: string }[] = [];
   let active = 0;
   let peak = 0;
-  const checkProxy = new CheckProxy({
+  const checkProxy = new CheckProxy(probeAdapter ?? {
     name: 'fixture',
     probe: async (target) => alive(target, { colo: 'SJC', latencyMs: 12, exitFamily: 'dual', exits: [
       { family: 'ipv4', ip: '198.51.100.42', asn: '64500', country: 'US' },
@@ -50,6 +53,54 @@ function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddre
 }
 
 describe('current DNS display through ApiClient and Worker routes', () => {
+  it('preserves complete upstream decisions and metadata through the real status chain', async () => {
+    const records: DnsRecord[] = ['188.166.171.1', '203.0.113.11', '203.0.113.12'].map((content, index) => ({
+      id: String(index), type: 'A', name: 'edge.example.com', content,
+    }));
+    const probeFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const candidate = new URL(String(input)).searchParams.get('candidate')!;
+      const success = candidate === '188.166.171.1:2053';
+      const error = success ? null : candidate === '203.0.113.12:2053' ? 'TLS handshake failed' : 'connection refused';
+      return Response.json({
+        candidate, success, proxyIP: candidate.split(':')[0], portRemote: 2053,
+        inferred_stack: success ? 'dual_stack' : 'unknown', supports_ipv4: success, supports_ipv6: success, dual_stack: success,
+        responseTime: success ? 1107 : null, elapsed_ms: success ? 1110 : 1, colo: 'LHR',
+        timeStamp: '2026-11-02T06:52:27.657Z', message: error,
+        probe_results: {
+          ipv4: { candidate, connect_ms: success ? 12 : null, tls_ms: success ? 24 : null,
+            http_ms: success ? 88 : null, status_code: success ? 200 : null, ok: success, error,
+            exit: success ? { ip: '198.51.100.42', ipType: 'ipv4', asn: 'AS64500', country: 'JP', asOrganization: 'Example Network' } : null },
+          ipv6: { candidate, connect_ms: success ? 270 : null, tls_ms: success ? 278 : null,
+            http_ms: success ? 559 : null, status_code: success ? 200 : null, ok: success, error,
+            exit: success ? { ip: '2a03:b0c0:1:e0:0:1:38db:b001', ipType: 'ipv6', colo: 'LHR', asn: 14061, country: 'GB', asOrganization: 'DigitalOcean' } : null },
+        },
+      });
+    });
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: probeFetch as typeof fetch,
+    });
+    const { client, requests, writes } = setup(records, 'A', undefined, adapter);
+    const progress = vi.fn();
+    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    expect(view.records).toEqual(records);
+    expect(view.probes).toMatchObject([
+      { address: '188.166.171.1:2053', status: 'alive', colo: 'LHR', exitFamily: 'dual', exitIp: '198.51.100.42', exits: [
+        { family: 'ipv4', ip: '198.51.100.42', asn: '64500', country: 'JP', organization: 'Example Network' },
+        { family: 'ipv6', ip: '2a03:b0c0:1:e0:0:1:38db:b001', asn: '14061', country: 'GB', organization: 'DigitalOcean' },
+      ] },
+      { address: '203.0.113.11:2053', status: 'dead', message: 'connection refused' },
+      { address: '203.0.113.12:2053', status: 'unknown', code: 'PROBE_API_ERROR', message: 'TLS handshake failed' },
+    ]);
+    expect(view.probes[0]!.latencyMs).toEqual(expect.any(Number));
+    expect(view.probes.map(item => probeStatusLabel(item.status, item.code))).toEqual(['可用', '失效', '未知']);
+    expect(progress).toHaveBeenCalledTimes(4);
+    expect(progress.mock.calls.at(-1)![0].probes).toHaveLength(3);
+    expect(requests.filter(request => request.address).map(request => request.address)).toEqual(records.map(record => `${record.content}:2053`));
+    expect(probeFetch).toHaveBeenCalledTimes(5);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
   it('publishes DNS records while a slow probe is still pending', async () => {
     const records: DnsRecord[] = [{ id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' }];
     const { client } = setup(records);

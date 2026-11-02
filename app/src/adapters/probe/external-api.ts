@@ -317,11 +317,20 @@ function pickExitFamily(record: JsonRecord, exitIp: string | undefined, exits: r
 }
 
 function readProbeInfrastructureError(record: JsonRecord): string | undefined {
-  // 展示文案可选第一项，但安全判定必须检查所有独立证据与所有接口别名。
-  for (const key of ['message', 'errorMessage', 'detail', 'reason', 'error', 'probe_results', 'probeResults', 'probes']) {
-    const value = record[key];
-    const evidence = typeof value === 'string' ? value : value && typeof value === 'object' ? JSON.stringify(value) : undefined;
-    if (evidence && isProbeInfrastructureMessage(evidence)) return evidence;
+  const messageKeys = ['message', 'errorMessage', 'detail', 'reason', 'error'];
+  // 检查所有错误别名及嵌套消息，只匹配实际字符串，不把计时字段、空 error 或出口元数据当作错误。
+  for (const key of [...messageKeys, 'probe_results', 'probeResults', 'probes']) {
+    const pending = [{ value: record[key], isMessage: messageKeys.includes(key) }];
+    while (pending.length) {
+      const { value, isMessage } = pending.pop()!;
+      if (typeof value === 'string') {
+        if (isMessage && isProbeInfrastructureMessage(value)) return value;
+      } else if (value && typeof value === 'object') {
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+          pending.push({ value: nestedValue, isMessage: isMessage || messageKeys.includes(nestedKey) });
+        }
+      }
+    }
   }
   return undefined;
 }
