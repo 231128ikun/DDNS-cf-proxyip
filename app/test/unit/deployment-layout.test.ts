@@ -1,5 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createProbeAdapterFromConfig, loadEnvConfig } from '../../src/config/runtime';
+import { createDefaultConfig, toProbeConfig } from '../../src/contracts/config';
+import { parseProxyTarget } from '../../src/domain/proxy-target';
 import { APP_VERSION } from '../../src/worker';
 
 const appRoot = new URL('../../', import.meta.url);
@@ -16,6 +19,28 @@ describe('standalone application layout', () => {
     expect(existsSync(new URL(entry!, appRoot))).toBe(true);
     expect(config).toContain('binding = "IP_DATA"');
     expect(config).toContain('run_worker_first = ["/api/*"]');
+  });
+
+  it('does not declare optional settings as installer inputs or override built-in defaults', () => {
+    const config = read('wrangler.toml');
+    expect(config).not.toMatch(/^\[vars\]/m);
+    expect(config).not.toMatch(/^CHECK_API(?:_BACKUP)?\s*=/m);
+    expect(config).not.toMatch(/^CHECK_TIMEOUT\s*=/m);
+    expect(toProbeConfig(loadEnvConfig({})).endpoints).toEqual([
+      { name: 'backup', urlTemplate: createDefaultConfig().checkApiBackup },
+    ]);
+  });
+
+  it('runs detection and rechecks using the built-in endpoint without installer API values', async () => {
+    let attempts = 0;
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify({ success: ++attempts > 1 })));
+    const adapter = createProbeAdapterFromConfig(toProbeConfig(loadEnvConfig({})), { fetchImpl: fetchImpl as typeof fetch });
+    const target = parseProxyTarget('203.0.113.10:443');
+    if (!target) throw new Error('invalid test target');
+    expect(await adapter.probe(target)).toMatchObject({ status: 'alive', endpoint: 'backup' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(fetchImpl.mock.calls[1]?.[0]);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${createDefaultConfig().checkApiBackup}203.0.113.10%3A443`);
   });
 
   it('runs complete checks before deployment with the local Wrangler config', () => {

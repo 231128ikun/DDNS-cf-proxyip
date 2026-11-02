@@ -1,16 +1,5 @@
 #!/usr/bin/env node
-/**
- * 部署形态冒烟检查：启动本地 Worker，验证「静态资源 + /api/*」的分工没有被改坏。
- *
- *   1) `/` 由 Cloudflare 静态资源返回 HTML；
- *   2) `/api/health` 由 Worker 返回 JSON 与版本号；
- *   3) 缺失的静态资源必须 404，不能被兜底成 200 HTML；
- *   4) 单目标检测路由由 Worker 正常返回；
- *   5) 未知 API 路由返回 JSON 404。
- *
- * 用法：node scripts/smoke.mjs [--port 8799]
- * 需要先 `npm run build`（要读 app/dist/web 与 app/src）。
- */
+/** 部署形态冒烟检查；先 npm run build，再 node scripts/smoke.mjs [--port 8799]。 */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,7 +19,9 @@ const indexHtml = join(appRoot, 'dist', 'web', 'index.html');
 if (!existsSync(wrangler)) throw new Error('未安装 wrangler：先执行 npm ci');
 if (!existsSync(indexHtml)) throw new Error('app/dist/web/index.html 缺失：先执行 npm run build');
 
-const child = spawn(process.execPath, [wrangler, 'dev', '--config', 'wrangler.toml', '--port', String(port), '--local'], {
+// 冒烟只验证本地部署形态，不调用公共检测服务。
+const child = spawn(process.execPath, [wrangler, 'dev', '--config', 'wrangler.toml', '--port', String(port), '--local',
+  '--var', 'CHECK_API:', '--var', 'CHECK_API_BACKUP:'], {
   cwd: appRoot,
   stdio: 'ignore',
   env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },

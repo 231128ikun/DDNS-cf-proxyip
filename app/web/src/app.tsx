@@ -95,7 +95,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     activeLookup.current?.abort();
   }, []);
 
-  // 四个首屏只读资源形状完全一致，用同一个 hook 收口，页面只留下各自的刷新入口。
   const [health, refreshHealth] = useResource((signal) => client.health(signal));
   const [pools, refreshPools, patchPools] = useResource((signal) => client.pools(signal), true);
   const [config, refreshConfig, acceptConfig] = useResource((signal) => client.config(signal), true, initialConfig);
@@ -192,7 +191,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     appendConsoleLog('✅ 已加载池配置', 'success');
   }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices, webCheckConcurrency]);
 
-  /** 池级写操作的统一收口：忙碌标记 + 提示 + 刷新列表只实现一次。 */
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
     setPoolBusy(key);
     try {
@@ -472,10 +470,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     });
   };
 
-  /**
-   * 一键洗库：检测与淘汰都在服务端完成，垃圾桶只经过统一入口，
-   * 面板不再自己拼「读池 → 检测 → 写回 → 入桶」这几步。
-   */
   const handleCleanPool = (): void => {
     void runPoolAction('clean-pool', async () => {
       const report = await client.cleanPool(poolKey);

@@ -28,10 +28,7 @@ export interface MaintainManagedTargetCommand {
   readonly poolKey: string;
 }
 
-/**
- * 候选探测窗口：按需数量放大探索倍数，避免“第一个可用就收工”，
- * 同时给全失效的池兜住子请求预算——早期实现会一直探测到池底。
- */
+/** 扩大候选窗口以比较延迟，同时限制全失效池的子请求开销。 */
 const CANDIDATE_EXPLORE_FACTOR = 2;
 const CANDIDATE_EXPLORE_EXTRA = 1;
 const MAX_CANDIDATE_PROBES = 12;
@@ -87,21 +84,24 @@ export class MaintainManagedTarget {
     const errors: string[] = [];
     const dnsResult = await this.applyDnsChanges(command, plan, errors);
 
-    if (plan.poolChanged) {
-      try {
-        await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
-      } catch {
-        errors.push('保存 IP 池失败');
-      }
-    }
-
+    let trashSaved = plan.trash.length === 0;
     if (plan.trash.length > 0) {
       try {
         await this.dependencies.pools.addToTrash(
           plan.trash.map((item) => ({ ...item, poolKey: command.poolKey })),
         );
+        trashSaved = true;
       } catch {
         errors.push('写入垃圾桶失败');
+      }
+    }
+
+    // 入桶失败时保留原池；保存失败时已入桶的副本仍可恢复。
+    if (plan.poolChanged && trashSaved) {
+      try {
+        await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
+      } catch {
+        errors.push('保存 IP 池失败');
       }
     }
 

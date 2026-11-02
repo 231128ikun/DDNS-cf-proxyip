@@ -28,7 +28,6 @@ export class PoolInputError extends Error {
   }
 }
 
-/** IP 池管理用例：只做输入校验与规范化，真正的存取交给 PoolCatalog。 */
 export class PoolService {
   constructor(private readonly catalog: PoolCatalog) {}
 
@@ -154,10 +153,11 @@ export class PoolService {
       restoredByPool[targetPool] = (restoredByPool[targetPool] ?? 0) + 1;
     }
 
-    if (trashChanged) await this.catalog.write(TRASH_POOL_KEY, serializeEntries(lineEntriesToEntries(trash)));
+    // 先保留目标池副本；任一写入失败时，垃圾桶仍可用于安全重试。
     for (const [poolKey, entries] of targetPools) {
       if ((restoredByPool[poolKey] ?? 0) > 0) await this.catalog.write(poolKey, serializeEntries(entries));
     }
+    if (trashChanged) await this.catalog.write(TRASH_POOL_KEY, serializeEntries(lineEntriesToEntries(trash)));
     return { ok: true, restored, restoredByPool };
   }
 

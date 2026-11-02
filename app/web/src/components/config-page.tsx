@@ -304,8 +304,8 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
           </div>
 
           <div class="config-grid mb-3">
-            <TextField id="cfg-check-api" label="检测 API" help="主检测接口，支持 {proxyip} 占位符。" span={2} value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
-            <TextField id="cfg-check-api-backup" label="备用检测 API" help="主接口异常时尝试备用接口，可留空。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
+            <TextField id="cfg-check-api" label="检测 API" help="可留空使用备用接口；支持 {proxyip} 占位符。" span={2} value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
+            <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；只配一个接口时复用该接口。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
             <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空则关闭前端鉴权。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 TG 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
@@ -514,10 +514,6 @@ function ConfigEditorActions({ disabled, onCancel, onSave }: {
   );
 }
 
-/**
- * 普通文本框：配置中心几十个输入框形状完全一样，
- * 标签、说明、输入框与事件绑定只实现一次，页面只描述差异部分。
- */
 function TextField({
   id,
   label,
@@ -649,7 +645,6 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
     projectUrl: config.projectUrl,
     zoneId: config.zoneId,
     tgId: config.tgId,
-    // 字段清单只有 SETTINGS_FIELDS 一份，这里按它派生，避免再维护第二份键名表。
     settings: Object.fromEntries(SETTINGS_FIELDS.map(([key]) => [key, String(config.settings[key])])) as ConfigForm['settings'],
     scheduledEnabled: config.scheduledEnabled,
     tgEnabled: config.tgEnabled,

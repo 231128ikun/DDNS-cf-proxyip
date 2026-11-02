@@ -9,7 +9,6 @@ export interface TelegramNotifierOptions {
   readonly fetchImpl?: typeof fetch;
 }
 
-/** Telegram Bot API adapter：只负责发送文本，通知条件与文案由 job / 消息模块决定。 */
 export class TelegramNotifier implements Notifier {
   private readonly enabled: boolean;
   private readonly token: string;

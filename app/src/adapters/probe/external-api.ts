@@ -51,18 +51,20 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
   }
 
   async probe(target: ProxyTarget, context: ProbeContext = {}): Promise<ProbeResult> {
-    const attempts: ProbeResult[] = [];
+    const endpoints = this.endpoints.length === 1 && this.fallbackToNext
+      ? [this.endpoints[0]!, this.endpoints[0]!]
+      : this.endpoints;
+    let result: ProbeResult | undefined;
 
-    for (const endpoint of this.endpoints) {
-      const result = await this.probeEndpoint(target, endpoint, context);
-      attempts.push(result);
-      if (result.status === 'alive') return result;
-      if (context.signal?.aborted) return result;
-      // 备用接口只接手主接口无法得出结论的情况。可信探针明确判死后应直接采用该结论。
-      if (result.status !== 'unknown' || !this.fallbackToNext) return result;
+    for (const endpoint of endpoints) {
+      if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
+      result = await this.probeEndpoint(target, endpoint, context);
+      if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
+      if (result.status === 'alive' || !this.fallbackToNext) return result;
     }
 
-    return attempts.at(-1) ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
+    // 最后一次异常不能被此前的失效结论覆盖。
+    return result ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
   }
 
   private async probeEndpoint(target: ProxyTarget, endpoint: ExternalApiProbeEndpoint, context: ProbeContext): Promise<ProbeResult> {
@@ -133,7 +135,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
     if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(infrastructureError)) {
       return unknown(target, 'TIMEOUT', '探针连接超时（节点状态未知）', { endpoint, latencyMs });
     }
-    const http = infrastructureError.match(/\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i);
+    const http = infrastructureError.match(PROBE_HTTP_ERROR_PATTERN);
     if (http) return unknown(target, 'HTTP_ERROR', `探针上游 HTTP ${http[1]}（节点状态未知）`, { endpoint, latencyMs });
     return unknown(target, 'PROBE_API_ERROR', trimMessage(infrastructureError) ?? '检测接口异常', { endpoint, latencyMs });
   }
@@ -327,8 +329,13 @@ function readProbeInfrastructureError(record: JsonRecord): string | undefined {
 const PROBE_INFRASTRUCTURE_ERROR_PATTERN =
   /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|unexpected status:\s*[45]\d{2}|request cancel(?:l)?ed|operation aborted/i;
 
+const PROBE_HTTP_ERROR_PATTERN = /\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i;
+const PROBE_TLS_ERROR_PATTERN = /(?:tls|ssl).{0,80}(?:fail|error|alert)|handshake.{0,80}(?:fail|error)|certificate.{0,80}(?:expired|invalid|fail|error|verify)|(?:err_(?:ssl|tls|cert)|ssl_error|cert_has_expired|unable_to_verify_leaf_signature|depth_zero_self_signed_cert)|(?:self[ -]signed|unable to verify).*certificate/i;
+
 function isProbeInfrastructureMessage(value: string): boolean {
-  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value);
+  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value)
+    || PROBE_HTTP_ERROR_PATTERN.test(value)
+    || PROBE_TLS_ERROR_PATTERN.test(value);
 }
 
 function readMessage(record: JsonRecord): string | undefined {

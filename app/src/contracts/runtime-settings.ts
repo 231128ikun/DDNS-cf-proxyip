@@ -27,7 +27,6 @@ export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   MAX_TRASH_SIZE: 1_000,
 };
 
-/** 配置读取、浏览器与后台检测共用相同的默认值和边界，不再额外压低并发。 */
 export function parseRuntimeSetting(key: keyof RuntimeSettings, value: unknown): number {
   const { min, max } = SETTINGS_LIMITS[key];
   return readClampedInteger(value, DEFAULT_RUNTIME_SETTINGS[key], min, max);

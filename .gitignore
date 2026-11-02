@@ -1,4 +1,4 @@
-# Local tooling and working files
+# Local tools
 /AGENTS.md
 /CLAUDE.md
 /.claude/
@@ -6,11 +6,27 @@
 /.agents/
 /_snapshot/
 /_worker.js
-/.wrangler/
 
-# Local environment and operating-system files
+# Generated files
+node_modules/
+dist/
+.wrangler/
+.vite/
+coverage/
+*.map
+*.tsbuildinfo
+
+# Secrets (keep empty examples)
 .env
+.env.*
+!.env.example
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Logs and editor files
+*.log
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
-*.log

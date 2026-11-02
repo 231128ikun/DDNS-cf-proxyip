@@ -41,7 +41,7 @@ export function countPoolFilterMatches(text: string, filter: PoolFilter): number
   return splitPoolLines(text).filter((line) => matchesPoolFilter(line, filter)).length;
 }
 
-/** 去重保留后出现的条目，与既有 Map.set 覆盖顺序保持一致。 */
+/** 重复地址保留后出现的条目，位置仍按首次出现排序。 */
 export function dedupePoolText(text: string): string {
   const entries = new Map<string, string>();
   for (const line of parsePoolText(text)) {
