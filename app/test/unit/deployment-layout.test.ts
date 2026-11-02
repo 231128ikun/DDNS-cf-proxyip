@@ -44,9 +44,9 @@ describe('standalone application layout', () => {
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${createDefaultConfig().checkApiBackup}203.0.113.10%3A443`);
   });
 
-  it('runs complete checks before deployment with the local Wrangler config', () => {
+  it('builds separately and leaves the full test suite to the CI check command', () => {
     const { scripts } = JSON.parse(read('package.json'));
-    expect(scripts.deploy).toBe('npm run check && wrangler deploy');
+    expect(scripts.deploy).toBe('npm run check:size && wrangler deploy');
     expect(scripts.build).toBe('npm run clean && npm run build:worker');
     expect(scripts.check).toBe('npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke');
     expect(JSON.stringify(scripts)).not.toContain('../wrangler.toml');

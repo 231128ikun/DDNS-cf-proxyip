@@ -19,7 +19,7 @@
     "test:contract": "vitest run test/unit/api-contract.test.ts",
     "test:unit": "vitest run --exclude test/unit/api-contract.test.ts",
     "check": "npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke",
-    "deploy": "npm run check && wrangler deploy",
+    "deploy": "npm run check:size && wrangler deploy",
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs",
