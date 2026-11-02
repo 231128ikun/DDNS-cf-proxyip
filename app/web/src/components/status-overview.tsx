@@ -29,7 +29,7 @@ export function StatusOverview({ check, current, selectedKey, targetPort, lookup
   const [addValue, setAddValue] = useState('');
   const [adding, setAdding] = useState(false);
   return (
-    <section class="card p-3 probe-overview-card" aria-labelledby="status-overview-title">
+    <section class="card p-4 probe-overview-card" aria-labelledby="status-overview-title">
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <h2 id="status-overview-title" class="card-title m-0 fw-bold"><Icon name="antenna" /> 解析实况</h2>
         <form class="d-flex gap-2 align-items-center flex-grow-1 ddns-lookup-form" onSubmit={onLookup}>
@@ -121,8 +121,11 @@ function StatusRow({ address, result, onCopyAddress, action }: {
   return <tr>
     <td class="status-address"><AddressPill address={address} onCopy={onCopyAddress} /></td>
     <td><span class="colo-badge">{result?.colo ?? '-'}</span></td>
-    <td><span class="latency-badge">{result?.latencyMs === undefined ? '未知' : `${result.latencyMs}ms`}</span></td>
-    <td><span class={`status-badge ${result?.status === 'alive' ? 'ok' : result?.status === 'dead' ? 'bad' : 'warn'}`} title={result?.message ?? result?.code}>{result ? probeStatusLabel(result.status, result.code) : '未检测'}</span></td>
+    <td><span class="latency-badge">{result?.latencyMs === undefined ? '—' : `${result.latencyMs}ms`}</span></td>
+    <td class="status-decision">
+      <span class={`status-badge ${result?.status === 'alive' ? 'ok' : result?.status === 'dead' ? 'bad' : 'warn'}`} title={result?.message ?? result?.code}>{result ? probeStatusLabel(result.status, result.code) : '未检测'}</span>
+      {result?.status === 'unknown' && (result.message || result.code) && <small class="status-reason">{result.message ?? result.code}</small>}
+    </td>
     <td class="status-exit-cell">{result ? <ProbeExits result={result} onCopy={onCopyAddress} /> : '-'}</td>
     <td>{action}</td>
   </tr>;

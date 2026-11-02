@@ -146,10 +146,9 @@ export function DashboardPage({
       />
 
 
-      <div class="row dashboard-core-row">
-        <div class="col-lg-7">
-          <div class="card p-4 mb-3 dashboard-card">
-            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      <div class="dashboard-core-row">
+          <div class="card p-4 dashboard-card dashboard-pool-card">
+            <div class="dashboard-card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
               <div>
                 <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
               </div>
@@ -317,12 +316,11 @@ export function DashboardPage({
               )}
             </div>
           </div>
-          <DomainBindingsCard bindings={bindings} pools={pools} busy={bindingBusy} targetKeys={targetKeys} actions={actions} />
-        </div>
 
-        <div class="col-lg-5">
           <div class="card p-4 dashboard-card dashboard-console-card">
-            <h2 class="card-title mb-3 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
+            <div class="dashboard-card-header">
+              <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
+            </div>
             <Console logs={consoleLogs} />
               <div
                 class="progress console-progress mb-3"
@@ -345,8 +343,8 @@ export function DashboardPage({
             </button>
             <MaintenanceSummary state={maintenance} />
           </div>
-        </div>
       </div>
+      <DomainBindingsCard bindings={bindings} pools={pools} busy={bindingBusy} targetKeys={targetKeys} actions={actions} />
     </div>
   );
 }
