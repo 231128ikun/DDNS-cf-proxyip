@@ -12,7 +12,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
 
-按 [Cloudflare 向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)授权账号，确认新仓库、Worker 与 KV，并填写一次长随机面板密钥 `AUTH_KEY`。**检测 API 无需填写**，首次启动直接使用内置备用接口；构建命令、Node.js 22 和资源绑定均已提供。
+按 [Cloudflare 向导](https://developers.cloudflare.com/workers/platform/deploy-buttons/)授权账号并确认新仓库、Worker 与 KV。**面板密码和检测 API 均无需填写**，首次启动直接进入面板，检测使用内置备用接口；构建命令、Node.js 22 和资源绑定均已提供。
 
 官方按钮用于创建新实例：它会复制 `app/` 到你账号下的新仓库。**已经拥有本仓库，就直接用下方 Git 构建连接它，不需要再点按钮复制仓库。** 已有 Worker 按更新步骤操作，保留原 KV。
 
@@ -39,7 +39,6 @@ Node.js 版本由 `.node-version` 选择。若平台未自动安装依赖，构�
 ```sh
 npm ci
 npx wrangler login
-npx wrangler secret put AUTH_KEY
 npm run deploy
 ```
 
@@ -62,7 +61,7 @@ KV 绑定名固定为 `IP_DATA`。新实例按提示创建；更新同名 Worker
 3. **检测接口（可选）**：默认内置接口可直接工作；需要自建时可使用 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)，填写 `https://probe.example.com/check?proxyip=`，也支持 `{proxyip}` 占位符。备用接口可选。
 4. **通知与任务**：按需填写 Telegram 配置、启用通知和自动维护。
 
-**`AUTH_KEY` 是面板登录密码，不是 Cloudflare API Token。** 部署时先设置一次随机密码，登录后可在配置中心修改。不能等公开面板后再设置：为空时任何人都能进入。
+**`AUTH_KEY` 是可选的面板登录密码，不是 Cloudflare API Token。** 不设置时直接进入面板，可随时在配置中心设置、修改或清空；未设置密码时，能访问面板地址的人都能操作。也可在 Cloudflare 的 Worker Secrets 中提前设置。
 
 Cloudflare Token 与 Zone ID 必须对应目标 DNS，Worker 可以部署在另一账号。不要提交密码、个人资源 ID 或数据备份。
 
@@ -73,7 +72,7 @@ Cloudflare Token 与 Zone ID 必须对应目标 DNS，Worker 可以部署在另�
 
 | 变量 | 用途 |
 | --- | --- |
-| `AUTH_KEY` | 面板登录密码，登录后可在配置中心修改 |
+| `AUTH_KEY` | 可选面板密码；留空免登录，可在配置中心修改 |
 | `CF_KEY`、`CF_ZONEID`、`CF_BASE_DOMAIN` | Cloudflare Token、Zone ID、托管域名 |
 | `CHECK_API`、`CHECK_API_BACKUP` | 可选主、备用接口；未设置时使用内置备用接口 |
 | `DOH_API` | DNS 查询接口，默认 `https://cloudflare-dns.com/dns-query` |

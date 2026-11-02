@@ -161,6 +161,35 @@ describe('发布 Worker 装配', () => {
     }
   });
 
+  it('allows password-free setup, then enables, changes and clears the password through the panel API', async () => {
+    const store = new Map<string, string>();
+    const kv = {
+      get: async (key: string) => store.get(key) ?? null,
+      put: async (key: string, value: string) => { store.set(key, value); },
+    } as unknown as KVNamespace;
+    const runtimeEnv: RuntimeEnv = { IP_DATA: kv };
+    const status = () => request('/api/auth/status', undefined, runtimeEnv).then(response => response.json());
+    const savePassword = (authKey: string, currentKey?: string) => request('/api/config', {
+      method: 'PUT', headers: { 'content-type': 'application/json', ...(currentKey ? { 'X-Auth-Key': currentKey } : {}) },
+      body: JSON.stringify({ authKey }),
+    }, runtimeEnv);
+
+    expect(await status()).toEqual({ ok: true, enabled: false, authenticated: true });
+    expect((await request('/api/config', undefined, runtimeEnv)).status).toBe(200);
+    expect((await savePassword('fixture-first')).status).toBe(200);
+    expect(await status()).toEqual({ ok: true, enabled: true, authenticated: false });
+    expect((await request('/api/config', undefined, runtimeEnv)).status).toBe(401);
+
+    expect((await savePassword('fixture-second', 'fixture-first')).status).toBe(200);
+    expect((await request('/api/health', { headers: { 'X-Auth-Key': 'fixture-first' } }, runtimeEnv)).status).toBe(401);
+    expect((await request('/api/health', { headers: { 'X-Auth-Key': 'fixture-second' } }, runtimeEnv)).status).toBe(200);
+
+    expect((await savePassword('', 'fixture-second')).status).toBe(200);
+    expect(await status()).toEqual({ ok: true, enabled: false, authenticated: true });
+    expect((await request('/api/config', undefined, runtimeEnv)).status).toBe(200);
+    expect([...store.keys()]).toEqual(['app_config']);
+  });
+
   it('reports the saved panel key requirement and rejects protected APIs', async () => {
     const kv = { get: async (key: string) => key === 'app_config'
       ? JSON.stringify({ authKey: 'fixture-panel-key' }) : null } as unknown as KVNamespace;
