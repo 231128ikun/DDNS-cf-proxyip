@@ -22,7 +22,6 @@ export type IconName =
   | 'trash'
   | 'wrench';
 
-/** 图标名称与显示字符的统一映射。 */
 const ICONS: Record<IconName, string> = {
   activity: '⚡',
   antenna: '📡',

@@ -28,10 +28,7 @@ export interface MaintainManagedTargetCommand {
   readonly poolKey: string;
 }
 
-/**
- * 候选探测窗口：按需数量放大探索倍数，避免“第一个可用就收工”，
- * 同时给全失效的池兜住子请求预算——早期实现会一直探测到池底。
- */
+/** 扩大候选窗口以比较延迟，同时限制全失效池的子请求开销。 */
 const CANDIDATE_EXPLORE_FACTOR = 2;
 const CANDIDATE_EXPLORE_EXTRA = 1;
 const MAX_CANDIDATE_PROBES = 12;

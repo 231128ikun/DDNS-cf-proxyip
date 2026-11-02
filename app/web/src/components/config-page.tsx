@@ -514,10 +514,6 @@ function ConfigEditorActions({ disabled, onCancel, onSave }: {
   );
 }
 
-/**
- * 普通文本框：配置中心几十个输入框形状完全一样，
- * 标签、说明、输入框与事件绑定只实现一次，页面只描述差异部分。
- */
 function TextField({
   id,
   label,
@@ -649,7 +645,6 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
     projectUrl: config.projectUrl,
     zoneId: config.zoneId,
     tgId: config.tgId,
-    // 字段清单只有 SETTINGS_FIELDS 一份，这里按它派生，避免再维护第二份键名表。
     settings: Object.fromEntries(SETTINGS_FIELDS.map(([key]) => [key, String(config.settings[key])])) as ConfigForm['settings'],
     scheduledEnabled: config.scheduledEnabled,
     tgEnabled: config.tgEnabled,

@@ -12,7 +12,7 @@ import { RecordBadge } from './record-badge';
 import { StatusOverview } from './status-overview';
 import { ResourceFeedback } from './resource-feedback';
 
-/** IP 池写操作的忙碌标记：比起给每个按钮单独维护 loading 状态更省代码。 */
+/** 当前忙碌的池写操作。 */
 export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
 export type ConsoleTone = 'info' | 'success' | 'warning' | 'error';
 
@@ -28,7 +28,6 @@ export interface PoolCheckProgressState {
   readonly total: number;
 }
 
-/** 所有交互回调集中成一个对象，避免 props 列表随功能增长而失控。 */
 export interface DashboardActions {
   readonly lookupSubmit: (event: Event) => void;
   readonly refresh: () => void;
@@ -352,9 +351,6 @@ export function DashboardPage({
   );
 }
 
-/**
- * 池操作共用一张菜单，次级动作保留文字名称。
- */
 function PoolActionMenu({
   busy,
   inTrash,
@@ -385,13 +381,12 @@ function PoolActionMenu({
     };
   }, [open]);
 
-  // 菜单项执行后立刻收起，避免停留在"已关掉的菜单"上。
   const run = (action: () => void): void => {
     setOpen(false);
     action();
   };
 
-  // 菜单项共用一张表：图标、文案、当前是否禁用、是否危险、执行动作。
+  // 元组：图标、文案、禁用、危险、动作。
   const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
     ['plus', '新建池', false, false, actions.createPool],
     ['pencil', '重命名当前池', inTrash, false, actions.renamePool],
@@ -557,7 +552,6 @@ function DomainBindingsCard({
   );
 }
 
-/** 复用领域层的筛选解析与匹配，前端不再维护第二套语法。 */
 function filterPreviewText(ipText: string, filterText: string): string {
   if (!filterText.trim()) return '输入条件后会显示匹配数量。';
   const filter = parsePoolFilter(filterText);

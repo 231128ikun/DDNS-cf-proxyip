@@ -1,15 +1,9 @@
 #!/usr/bin/env node
 /**
- * UI 验收审计：响应式布局 + 对比度 + 点击目标 + 语义/可访问性 + 检测流程 + 截图。
- *
- * 用法：
- *   npm run build && npm run audit:ui
- * 默认启动只接收模拟数据的本地服务器；--base 可检查已启动的本地页面。
- *
- * 可选参数：--base / --out / --chrome / --compare-baseline
- * --compare-baseline 保留严格报告，但只容许基准页面中同一内容、同等或更轻的问题。
- * 脚本会自行启动 headless Chrome，用户数据目录放在系统临时目录，绝不写进仓库。
- * 只依赖 Node 内置能力（Node >= 22 提供全局 WebSocket），不引入任何依赖。
+ * 运行：npm run build && npm run audit:ui（Node >= 22）。
+ * 默认使用本地模拟数据；--base 可检查已启动的本地页面。
+ * 参数：--base / --out / --chrome / --compare-baseline。
+ * 基准对照仅容许同一内容、同等或更轻的问题；Chrome 数据目录位于系统临时目录。
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { launchBrowser } from "./ui-browser.mjs";
@@ -105,8 +99,7 @@ const auditProbe = () => {
       .filter(Boolean)
       .join(" ")
       .trim();
-  //基准页面的 emoji 位于文本节点，当前页面使用 aria-hidden 的图标 span。
-  // 彩色 emoji 的可见颜色不等于 CSS color，不按普通文字计算对比度。
+  // 基准的文本 emoji 与当前图标 span 忽略表示差异；彩色 emoji 不按 CSS color 计算对比度。
   const textKey = (text) => text.normalize('NFKC').replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').replace(/\s+/g, '');
   const issueKey = (el, text) => {
     const region = el.closest('#page-dashboard, #page-config, .hero, .top-nav, footer');

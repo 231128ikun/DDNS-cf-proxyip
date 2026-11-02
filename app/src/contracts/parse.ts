@@ -1,9 +1,4 @@
-/**
- * 极简边界解析工具。
- *
- * 只服务于本项目的 KV 与 HTTP 边界校验，替代 schema 库以控制 Worker 包体积和冷启动开销。
- * 约定：解析失败只返回一条可读的英文 message，由调用方决定映射成什么错误文案。
- */
+/** 手写校验以控制 Worker 体积；失败返回一条英文 message，由调用方映射展示文案。 */
 
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }

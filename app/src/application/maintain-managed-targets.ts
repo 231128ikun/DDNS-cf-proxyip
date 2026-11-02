@@ -6,7 +6,6 @@ import type { MaintenanceSourceData, MaintenanceTargetConfig } from '../ports/ma
 import type { MaintenancePoolStats } from '../ports/maintenance-stats';
 import type { MaintainManagedTargetCommand, MaintenanceReport } from './maintain-managed-target';
 
-/** 批量维护只依赖单目标用例，测试可注入桩，不需要接触 KV 或 Cloudflare。 */
 export interface TargetMaintainer {
   execute(command: MaintainManagedTargetCommand): Promise<MaintenanceReport>;
 }
@@ -77,7 +76,7 @@ export function shouldNotifyMaintenance(run: MaintenanceRunReport, isManual: boo
     || run.poolStats.changed;
 }
 
-/** 目标是“用 Zone 凭据”还是“回退顶层凭据”的唯一规则来源，状态查询同样复用。 */
+/** 区域缺少的凭据字段分别回退到顶层配置。 */
 export function resolveZone(zones: readonly DnsZone[], config: MaintenanceTargetConfig, fallback: DnsZone): DnsZone {
   const indexed = config.zoneIndex === null ? undefined : zones[config.zoneIndex];
   return {

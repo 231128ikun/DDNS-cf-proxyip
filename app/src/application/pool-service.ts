@@ -28,7 +28,6 @@ export class PoolInputError extends Error {
   }
 }
 
-/** IP 池管理用例：只做输入校验与规范化，真正的存取交给 PoolCatalog。 */
 export class PoolService {
   constructor(private readonly catalog: PoolCatalog) {}
 

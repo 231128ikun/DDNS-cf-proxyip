@@ -102,7 +102,6 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
-  /** 一键洗库：读池、批量检测、有效项写回、失效项入桶全部在服务端一次完成。 */
   async cleanPool(key: string, signal?: AbortSignal): Promise<CleanPoolResponse> {
     return await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', undefined, signal);
   }
@@ -145,7 +144,6 @@ export class ApiClient {
     return await this.request<RemoteLoadResponse>('/api/remote-load', 'POST', { url }, signal);
   }
 
-  /** 域名池绑定与手动维护：白名单与执行编排都在服务端，可只提交改动的映射。 */
   async domainBindings(signal?: AbortSignal): Promise<DomainBindingsResponse> {
     return await this.request<DomainBindingsResponse>('/api/domain-bindings', 'GET', undefined, signal);
   }
@@ -162,7 +160,6 @@ export class ApiClient {
     return await this.request<OkResponse>('/api/domain-bindings/order', 'PUT', { order }, signal);
   }
 
-  /** 手动维护与 cron 共用同一个服务端 runner，前端只负责触发并展示结果。 */
   async runMaintenance(signal?: AbortSignal): Promise<MaintenanceRunResponse> {
     return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);
   }

@@ -42,7 +42,6 @@ import { addAuthCookie, checkRequestAuth, handleAuthRoute, unauthorizedResponse 
 import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 
 export interface HttpAppDependencies {
-  /** 探测入口：内部负责域名解析与逐地址探测。 */
   readonly checkTarget: CheckTarget;
   readonly version: string;
   readonly authKey?: string;
@@ -71,7 +70,6 @@ export interface MaintenanceRunner {
   run(isManual: boolean): Promise<MaintenanceJobResult>;
 }
 
-/** 结构化的配置读写契约，`ConfigService` 天然满足，测试里可以直接给桩对象。 */
 export interface ConfigGateway {
   resolve(): Promise<ResolvedConfig>;
   save(config: AppConfig): Promise<void>;
@@ -274,10 +272,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     return jsonResponse(toMaintenanceResponse(run));
   });
 
-  /**
-   * “解析实况”当前域名记录：只读查询 Cloudflare DNS。
-   * 页面随后复用单目标探测接口；新增/删除走下面的目标记录用例。
-   */
+  /** 只读查询 DNS；检测与写入使用各自的接口。 */
   router.get('/api/current-status', async (context) => {
     const targetStatus = dependencies.targetStatus;
     if (!targetStatus) return errorResponse('target status unavailable', 503);
@@ -288,7 +283,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  /** 手动添加一条记录到选中的维护目标；与定时维护共用同一个 DNS 写入实现。 */
   router.post('/api/add-record', async (context) => {
     const targetRecords = dependencies.targetRecords;
     if (!targetRecords) return errorResponse('target records unavailable', 503);
@@ -413,7 +407,6 @@ function toConfigResponse(resolved: ResolvedConfig): ConfigResponse {
   };
 }
 
-/** 远程加载失败按语义映射状态码，前端不必解析错误文案。 */
 function remoteLoadStatus(reason: RemoteLoadFailure): number {
   if (reason === 'invalid-url' || reason === 'blocked-host') return 400;
   if (reason === 'too-large') return 413;

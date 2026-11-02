@@ -203,7 +203,7 @@ body {
         .btn .ui-icon, .nav-tab .ui-icon { margin: 0; }
         .hero h1 > .ui-icon, .card-title > .ui-icon { margin-right: 0; }
         table { border-collapse: collapse; }
-        /* ── Bootstrap replacement: Grid ── */
+        /* Grid */
         .container { width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 0 var(--space-5); }
         body:has(.auth-gate) { padding-bottom: 0; }
         .auth-gate { min-height: 100vh; max-width: none; padding: var(--space-9); display: grid; place-items: center; -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto; }
@@ -229,7 +229,7 @@ body {
         @media (min-width: 992px) {
             .col-lg-5, .col-lg-7 { flex: 0 0 50%; max-width: 50%; }
         }
-        /* ── Bootstrap replacement: Forms ── */
+        /* Forms */
         .form-control, .form-select { display: block; width: 100%; font-size: var(--font-size-md); line-height: 1.5; color: var(--color-button-dark); background-clip: padding-box; appearance: none; }
         .form-control-sm { font-size: var(--font-size-sm); padding: var(--space-1) var(--space-3); }
         .form-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .75rem center; background-size: 16px 12px; padding-right: 2.25rem; }
@@ -240,7 +240,7 @@ body {
         .input-group > .form-control { flex: 1; width: 1%; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
         .input-group > .btn { position: relative; z-index: 2; flex: 0 0 auto; border-top-left-radius: 0; border-bottom-left-radius: 0; }
         .input-group-sm > .form-control, .input-group-sm > .btn { min-height: 0; padding: var(--space-1) var(--space-3); font-size: var(--font-size-sm); }
-        /* ── Bootstrap replacement: Buttons ── */
+        /* Buttons */
         .btn { display: inline-block; text-align: center; vertical-align: middle; padding: var(--space-4) var(--space-8); cursor: pointer; user-select: none; line-height: 1.5; font-size: var(--font-size-md); font-weight: 600; background: transparent; border: 0; border-radius: var(--radius-lg); color: inherit; text-decoration: none; }
         .btn-sm { min-height: var(--control-height-sm); font-size: var(--font-size-sm); }
         .btn-primary { background: var(--color-primary-strong); color: var(--color-inverse); }
@@ -256,15 +256,15 @@ body {
         .btn-outline-success:hover { background: var(--color-success); color: var(--color-inverse); }
         .btn-outline-danger { background: transparent; color: var(--color-danger); }
         .btn-outline-danger:hover { background: var(--color-danger); color: var(--color-inverse); }
-        /* ── Bootstrap replacement: Tables ── */
+        /* Tables */
         .table { width: 100%; margin-bottom: var(--space-7); vertical-align: top; border-color: var(--color-border); }
         .table > :not(caption) > * > * { padding: var(--space-3); }
         .table-sm > :not(caption) > * > * { padding: var(--space-1); }
         .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        /* ── Bootstrap replacement: Badge / Progress ── */
+        /* Progress */
         .progress { display: flex; height: 1rem; overflow: hidden; font-size: .75rem; background-color: var(--color-border); border-radius: var(--radius-sm); }
         .progress-bar { display: flex; flex-direction: column; justify-content: center; overflow: hidden; color: var(--color-inverse); text-align: center; white-space: nowrap; transition: width .6s ease; }
-        /* ── Bootstrap replacement: Utilities - Spacing ── */
+        /* Spacing utilities */
         .m-0 { margin: 0 !important; }
         .mb-0 { margin-bottom: 0 !important; }
         .mb-2 { margin-bottom: var(--space-3) !important; }
@@ -275,7 +275,7 @@ body {
         .p-4 { padding: var(--space-9) !important; }
         .py-3 { padding-top: var(--space-7) !important; padding-bottom: var(--space-7) !important; }
         .py-4 { padding-top: var(--space-9) !important; padding-bottom: var(--space-9) !important; }
-        /* ── Bootstrap replacement: Utilities - Flex ── */
+        /* Layout and text utilities */
         .d-flex { display: flex !important; }
         .flex-wrap { flex-wrap: wrap !important; }
         .flex-grow-1 { flex-grow: 1 !important; }
@@ -288,7 +288,7 @@ body {
         .text-warning { color: var(--color-warning) !important; }
         .fw-bold { font-weight: 700 !important; }
         .small, small { font-size: .875em; }
-        /* ── Bootstrap replacement: Utilities - Size ── */
+        /* Size utilities */
         .w-100 { width: 100% !important; }
 .card-title {
   margin-top: 0;
@@ -538,7 +538,6 @@ body {
 .form-control-sm, .form-select-sm {
   min-height: var(--control-height-compact);
 }
-        /* 固定高度滚动区域 */
         .scroll-box {
             max-height: 200px;
             overflow-y: auto;
@@ -762,7 +761,6 @@ body {
             flex: 0 1 var(--pool-selector-width);
             border-radius: var(--radius-md);
         }
-        /* 池操作收成一个"文字 + 小图标"的菜单：图标不再单独成排，可读性靠文字承担。 */
         .action-menu {
             position: relative;
             flex: 0 0 auto;
@@ -1107,7 +1105,6 @@ body {
             font-size: 13px;
             color: var(--color-nav);
         }
-        /* 页面里不再写孤立内联尺寸，统一由这些语义类承接。 */
         .status-display {
             max-height: 320px;
         }
@@ -1119,7 +1116,6 @@ body {
             font-family: 'SF Mono', monospace;
             font-size: var(--font-size-xs);
         }
-        /* 探针配置只剩"外部复检"一块，自成一组，不再是一整片平铺表单。 */
         .config-details {
             overflow: hidden;
         }
@@ -1214,7 +1210,6 @@ body {
         }
         .toast.success { background: var(--color-success-strong); }
         .toast.error { background: var(--color-danger-strong); }
-        /* 排序与批量中断弹窗共用视觉语义。 */
         .custom-modal-overlay {
             position: fixed;
             inset: 0;
@@ -1417,7 +1412,6 @@ body {
             }
         }
 
-        /* 桌面工作区共享同一网格行高度，控制台日志占用剩余空间并在内部滚动。 */
         .dashboard-core-row .dashboard-card {
             display: flex;
             flex-direction: column;
@@ -1453,7 +1447,6 @@ body {
                 min-height: 580px;
             }
         }
-        /* 响应式优化 */
         @media (max-width: 768px) {
             .card {
                 border-radius: var(--radius-xl);
@@ -1480,7 +1473,6 @@ body {
             .primary-actions .btn-outline-secondary {
                 grid-column: 1 / -1;
             }
-            /* 筛选工具栏移动端适配 */
             .filter-toolbar {
                 display: block !important;
             }
@@ -1513,7 +1505,6 @@ body {
             }
         }
 
-        /* ── DDNS Pro front-end ── */
         .ddns-lookup-form {
             max-width: 500px;
         }

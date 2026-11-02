@@ -5,7 +5,6 @@ import type { MaintenanceSource, MaintenanceSourceData, MaintenanceTargetConfig 
 import { CONFIG_KEY } from './kv-config-repository';
 import { readKvJson, readKvStringRecord } from './kv-json';
 
-/** 从 app_config 读取维护目标与域名凭据。 */
 export class KvMaintenanceSource implements MaintenanceSource {
   constructor(private readonly kv: KVNamespace) {}
 
@@ -27,7 +26,7 @@ export class KvMaintenanceSource implements MaintenanceSource {
   }
 }
 
-/** 与旧版 `normalizeZoneConfig` 保持同样的空条目丢弃规则。 */
+/** 仅全空区域条目被丢弃；含域名但缺凭据的条目仍保留。 */
 function normalizeZone(value: unknown): DnsZone | null {
   const record = asRecord(value);
   if (!record) return null;

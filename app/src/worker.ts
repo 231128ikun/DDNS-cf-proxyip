@@ -28,15 +28,11 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.02-08.24';
+export const APP_VERSION = '2026.11.02-10.36';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
-/**
- * Worker 入口装配：配置、探针、存储、维护 runner 只有这一份组装顺序，
- * `fetch` 与 `scheduled` 共用它，禁止在构建入口再复制一份。
- */
 export function createWorker(): ExportedHandler<RuntimeEnv> {
   const handler: ExportedHandler<RuntimeEnv> = {
     async fetch(request, env, executionContext): Promise<Response> {
@@ -46,7 +42,6 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
 
       const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
-      // 同一份 KV 存储实例既服务维护 runner，也服务域名绑定读写，避免两套读取顺序。
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv) : null;
       const maintenance = kv && maintenanceSource
@@ -89,10 +84,6 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
       return createHttpApp(dependencies).fetch(request, env, executionContext);
     },
 
-    /**
-     * 定时维护：缺少 KV 绑定或没开启定时维护时直接跳过。
-     * 手动维护复用同一个 runner，保证两条路径的装配与行为完全一致。
-     */
     async scheduled(_controller, env, executionContext): Promise<void> {
       if (!env.IP_DATA) {
         console.error('跳过定时维护：请先绑定名为 IP_DATA 的 KV Namespace');
@@ -113,10 +104,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
   return handler;
 }
 
-/**
- * 池相关依赖只在绑定 KV 时装配：洗库与维护共用同一个垃圾桶仓库，
- * 「垃圾桶只有一个写入入口」在装配层也成立。
- */
+/** 洗库与维护共用垃圾桶仓库，统一去重、截断和注释格式。 */
 function createPoolDependencies(
   kv: KVNamespace,
   checkPool: CheckPoolText,
@@ -139,10 +127,6 @@ function createPoolDependencies(
   };
 }
 
-/**
- * 入口与 cron 共用同一套配置装配：少一份重复的读取顺序，
- * 也保证“面板看到的配置”和“定时维护用的配置”永远一致。
- */
 export function createConfigService(env: RuntimeEnv, projectUrl?: string): ConfigService {
   return new ConfigService({
     envConfig: loadEnvConfig(env),

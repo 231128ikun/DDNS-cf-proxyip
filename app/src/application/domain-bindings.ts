@@ -12,7 +12,6 @@ export class DomainBindingsInputError extends Error {
   }
 }
 
-/** 域名池绑定的读取与整体保存；维护执行仍由 MaintenanceSource 解析同一份映射。 */
 export class DomainBindings {
   constructor(
     private readonly source: MaintenanceSource,
