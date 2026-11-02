@@ -45,7 +45,7 @@
   "cloudflare": {
     "bindings": {
       "AUTH_KEY": {
-        "description": "面板访问密钥。设置长随机字符串；该值用于登录，不是 Cloudflare API Token。"
+        "description": "面板登录密码（不是 Cloudflare API Token）。请使用随机密码，部署后可在面板配置中心修改。"
       },
       "IP_DATA": {
         "description": "保存配置、IP 池和域名绑定。新实例可创建 KV；更新已有实例时必须保留原 Namespace。"
