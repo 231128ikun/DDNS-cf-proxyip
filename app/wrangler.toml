@@ -13,7 +13,7 @@ binding = "ASSETS"
 not_found_handling = "none"
 run_worker_first = ["/api/*"]
 
-# Inherit the existing binding or provision a namespace on initial deployment.
+# Reuse the target Worker's IP_DATA binding; otherwise provision a namespace.
 [[kv_namespaces]]
 binding = "IP_DATA"
 

@@ -44,7 +44,7 @@
   "cloudflare": {
     "bindings": {
       "IP_DATA": {
-        "description": "保存配置、IP 池和域名绑定。新实例可创建 KV；更新已有实例时必须保留原 Namespace。"
+        "description": "运行配置、IP 池与域名绑定的存储。复用现有命名空间时，应先在目标 Worker 中添加名为 IP_DATA 的 KV 绑定；仅同名不会自动关联。"
       }
     }
   }
