@@ -33,7 +33,14 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
 
-按钮使用 [Cloudflare 官方部署流程](https://developers.cloudflare.com/workers/platform/deploy-buttons/)，复制自包含的 `app/` 目录，创建仓库并配置 Workers Builds。按向导授权账号、设置面板密钥 `AUTH_KEY` 并确认 KV 资源。构建和部署命令分别为 `npm run build`、`npm run deploy`。
+按钮使用 [Cloudflare 官方部署流程](https://developers.cloudflare.com/workers/platform/deploy-buttons/)，复制自包含的 `app/` 目录并创建仓库。以下设置已随模板提供：
+
+- **根目录**：按钮中的子目录 URL 会将 `app/` 设为新仓库根目录。
+- **构建与部署**：平台从 `package.json` 自动识别并预填 `npm run build` 和 `npm run deploy`。
+- **Node.js**：`.node-version` 自动选择 Node.js 22 LTS；CI 使用同一文件。
+- **资源与密钥**：Wrangler 配置声明 KV 和静态资源，向导根据 `.dev.vars.example` 提示填写 `AUTH_KEY`。
+
+按向导授权账号、设置长随机面板密钥并确认 KV 即可，无需手填上述构建设置。现有 Worker 后台已保存的构建设置不受按钮影响，更新方式见下文。
 
 一键部署适用于新实例。已有实例应使用下方的更新步骤，保留原 Worker、域名和 KV；不要用新建空库替代现有数据。
 
@@ -46,7 +53,7 @@ ProxyIP 的背景说明可参考：[什么是 ProxyIP?](https://github.com/23112
 | Root directory | `app` | 仓库根目录 |
 | Build command | `npm run build` | `npm run build` |
 | Deploy command | `npm run deploy` | `npm run deploy` |
-| Node.js | `22.12+`（22 LTS）或 24 LTS | `22.12+`（22 LTS）或 24 LTS |
+| Node.js | 由 `app/.node-version` 选择 22 LTS | 由 `.node-version` 选择 22 LTS |
 
 依赖按 `package-lock.json` 安装；若构建环境未自动安装依赖，Build command 使用 `npm ci && npm run build`。Worker 名称应与 `app/wrangler.toml` 的 `name` 一致，默认 `ddns-cf-proxyip`。
 

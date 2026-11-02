@@ -41,5 +41,15 @@
     "vite": "^7.3.7",
     "vitest": "^5.0.5",
     "wrangler": "^4.156.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "AUTH_KEY": {
+        "description": "面板访问密钥。设置长随机字符串；该值用于登录，不是 Cloudflare API Token。"
+      },
+      "IP_DATA": {
+        "description": "保存配置、IP 池和域名绑定。新实例可创建 KV；更新已有实例时必须保留原 Namespace。"
+      }
+    }
   }
 }

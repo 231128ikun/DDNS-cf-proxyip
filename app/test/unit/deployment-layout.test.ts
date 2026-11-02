@@ -41,4 +41,18 @@ describe('standalone application layout', () => {
     expect(read('LICENSE')).toContain('Copyright (c) 2025 DDNS-cf-proxyip Contributors');
     expect(read('.dev.vars.example').trim()).toBe('AUTH_KEY=');
   });
+
+  it('selects a supported Node major from the deployment root', () => {
+    expect(read('.node-version').trim()).toBe('22');
+    const manifest = JSON.parse(read('package.json'));
+    expect(manifest.engines.node).toContain('^22.12.0');
+  });
+
+  it('describes the declared KV binding and secret in the deployment wizard', () => {
+    const manifest = JSON.parse(read('package.json'));
+    expect(Object.keys(manifest.cloudflare.bindings).sort()).toEqual(['AUTH_KEY', 'IP_DATA']);
+    for (const binding of Object.values(manifest.cloudflare.bindings) as Array<{ description: string }>) {
+      expect(binding.description.length).toBeGreaterThan(0);
+    }
+  });
 });
