@@ -33,6 +33,6 @@ export class KvPoolRepository implements PoolRepository {
     const plan = planTrashAppend(await this.load(this.trashKey), entries, {
       timestamp: formatBeijingTimestamp(this.now()), maxSize: this.maxTrashSize,
     });
-    await this.kv.put(this.trashKey, plan.content);
+    if (plan.changed) await this.kv.put(this.trashKey, plan.content);
   }
 }

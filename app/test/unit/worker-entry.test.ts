@@ -44,7 +44,7 @@ describe('发布 Worker 装配', () => {
     await client.savePool('ip_pool_default', address + ',null,null,null', 'append');
     expect((await client.readPool('ip_pool_default')).content.trim()).toBe(expected);
     expect((await client.config()).config.settings.DOH_TIMEOUT).toBe(9000);
-    expect(new Set(writes)).toEqual(new Set(['app_config', 'ip_pool_default']));
+    expect(new Set(writes)).toEqual(new Set(expected === legacy ? ['app_config'] : ['app_config', 'ip_pool_default']));
     expect([...store.keys()]).toEqual([...before.keys()]);
     expect(store.get('domain_pool_mapping')).toBe(before.get('domain_pool_mapping'));
     expect(store.get('ip_pool_names')).toBe(before.get('ip_pool_names'));

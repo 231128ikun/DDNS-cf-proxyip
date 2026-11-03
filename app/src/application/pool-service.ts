@@ -42,6 +42,7 @@ export class PoolService {
     if (key === TRASH_POOL_KEY) throw new PoolInputError('垃圾桶只能由维护和洗库流程写入');
     const mode = parseSaveMode(modeValue);
     const incoming = readPoolSnapshot(normalizeContent(content));
+    if (incoming.invalid.some(line => !line.startsWith('#'))) throw new PoolInputError('包含无法识别的条目，原池未修改');
     if (mode === 'append' && incoming.entries.size === 0) throw new PoolInputError('没有有效 IP');
     const plan = planPoolSave(key, readPoolSnapshot(await this.catalog.read(key)), incoming, mode);
     await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
@@ -82,7 +83,8 @@ export class PoolService {
   }
 
   async clearTrash(): Promise<void> {
-    await this.catalog.write(TRASH_POOL_KEY, '');
+    await executePoolWrites([{ poolKey: TRASH_POOL_KEY, before: await this.catalog.read(TRASH_POOL_KEY), after: '' }],
+      (key, text) => this.catalog.write(key, text));
   }
 
   async restoreTrash(

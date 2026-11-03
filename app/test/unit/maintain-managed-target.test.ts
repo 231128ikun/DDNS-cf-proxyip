@@ -417,3 +417,12 @@ it.each(['A', 'AAAA', 'TXT'] as const)('维护 %s 时将复检后仍超时的地
   else expect(dns.deleted).toEqual(['timeout']);
   expect(fetchImpl).toHaveBeenCalledTimes(3);
 });
+
+it.each(['A', 'AAAA', 'TXT'] as const)('does not delete the sole %s DNS source when archiving it fails', async type => {
+  const { target, dns, pools, service } = externalMaintenance(type, { success: false });
+  vi.spyOn(pools, 'addToTrash').mockRejectedValueOnce(new Error('archive failure'));
+  const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(dns.deleted).toEqual([]);
+  expect(dns.upserted).toEqual([]);
+  expect(report).toMatchObject({ dnsUpdated: false, deleted: 0, added: 0, errors: ['写入垃圾桶失败'] });
+});

@@ -11,6 +11,7 @@ export class PoolWriteError extends Error {
 export async function executePoolWrites(writes: readonly PoolContentWrite[], write: (key: string, content: string) => Promise<void>): Promise<void> {
   const completed: string[] = [];
   for (const step of writes) {
+    if (step.before === step.after) continue;
     try { await write(step.poolKey, step.after); }
     catch (error) { throw new PoolWriteError(step.poolKey, [...completed], error); }
     completed.push(step.poolKey);

@@ -380,7 +380,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           dedupeButton.click();
           await new Promise((resolve) => setTimeout(resolve, 100));
-          if (input.value !== "203.0.113.10:443") failures.push("去重后输入框内容不正确");
+          if (input.value !== "203.0.113.10:443,null,null,null") failures.push("去重后输入框内容不正确");
         }
         return { failures };
       })()`,

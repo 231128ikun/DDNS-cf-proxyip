@@ -41,9 +41,9 @@ describe('pool filter', () => {
     expect(matchesPoolFilter(line, filter('JP'))).toBe(false);
   });
 
-  it('treats an empty stack as dual-stack', () => {
-    expect(matchesPoolFilter('203.0.113.10:443,AS64500,US', filter('stack:v4/v6'))).toBe(true);
-    expect(matchesPoolFilter('203.0.113.10:443,AS64500,US', filter('exit:dual'))).toBe(true);
+  it('does not treat an unknown stack as confirmed dual-stack', () => {
+    expect(matchesPoolFilter('203.0.113.10:443,AS64500,US', filter('stack:v4/v6'))).toBe(false);
+    expect(matchesPoolFilter('203.0.113.10:443,AS64500,US', filter('exit:dual'))).toBe(false);
   });
 
   it('uses pipe as OR between groups', () => {
@@ -71,7 +71,7 @@ describe('pool filter', () => {
 
     expect(dedupePoolText(text)).toBe([
       '203.0.113.10:443,AS64501,KR,v6 # later',
-      '[2001:db8::1]:443 # same ipv6',
+      '[2001:db8::1]:443,null,null,null # same ipv6',
     ].join('\n'));
   });
 
@@ -83,4 +83,15 @@ describe('pool filter', () => {
       '203.0.113.11:8443,AS64501,KR,v4',
     ].join('\n'));
   });
+});
+
+it('rejects an invalid OR group, an empty condition, or an empty OR branch as a whole', () => {
+  for (const query of ['port:abc | country:US', 'country:US | port:0', 'port:', 'country:US |', '| country:US']) {
+    expect(parsePoolFilter(query), query).toBeNull();
+  }
+});
+
+it('retains earlier valid metadata when deduplicating a later incomplete entry', () => {
+  expect(dedupePoolText('203.0.113.10:443,AS64500,JP,v4 # old\n203.0.113.10:443,null,null,null # new'))
+    .toBe('203.0.113.10:443,AS64500,JP,v4 # new');
 });

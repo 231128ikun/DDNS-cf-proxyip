@@ -181,3 +181,35 @@ describe('PoolService', () => {
     await expect(service.save(DEFAULT_POOL_KEY, '   ', 'append')).rejects.toThrow('没有有效 IP');
   });
 });
+
+it('merges complementary duplicate input metadata and rejects malformed rows without any write', async () => {
+  const catalog = new MemoryPoolCatalog();
+  const service = new PoolService(catalog);
+  await service.save(DEFAULT_POOL_KEY, '203.0.113.10:443,AS64500,JP,v4 # first\n203.0.113.10:443,null,null,null # new', 'append');
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('203.0.113.10:443,AS64500,JP,v4 # new');
+  const write = vi.spyOn(catalog, 'write');
+  await expect(service.save(DEFAULT_POOL_KEY, '203.0.113.11:443\n203.0.113.999:443', 'replace')).rejects.toBeInstanceOf(PoolInputError);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it('retains existing unrecognized lines and comment positions on append and remove', async () => {
+  const initial = '# heading\n203.0.113.10:443,AS64500,JP,v4 # known\n203.0.113.999:443';
+  const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: initial });
+  const service = new PoolService(catalog);
+  await service.save(DEFAULT_POOL_KEY, '203.0.113.11:443', 'append');
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(initial + '\n203.0.113.11:443,null,null,null');
+  await service.save(DEFAULT_POOL_KEY, '203.0.113.11:443', 'remove');
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(initial);
+});
+
+it('restoring an existing address fills missing metadata without overwriting newer fields and writes before trash cleanup', async () => {
+  const catalog = new MemoryPoolCatalog({
+    [DEFAULT_POOL_KEY]: '203.0.113.10:443,null,US,v6 # current note',
+    [TRASH_POOL_KEY]: '203.0.113.10:443,AS64500,JP,v4 # dead 来自 ip_pool_default\n203.0.113.999:443',
+  });
+  const write = vi.spyOn(catalog, 'write');
+  expect(await new PoolService(catalog).restoreTrash(['203.0.113.10:443'])).toMatchObject({ restored: 0 });
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('203.0.113.10:443,AS64500,US,v6 # current note');
+  expect(catalog.data.get(TRASH_POOL_KEY)).toBe('203.0.113.999:443');
+  expect(write.mock.calls.map(call => call[0])).toEqual([DEFAULT_POOL_KEY, TRASH_POOL_KEY]);
+});

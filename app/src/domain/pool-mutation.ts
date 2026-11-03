@@ -35,7 +35,7 @@ export function planPoolSave(poolKey: string, before: PoolSnapshot, incoming: Po
     else if (formatPoolEntry(previous) !== formatPoolEntry(entry)) changes.push({ key, kind: 'update', before: previous, after: entry });
   }
   for (const [key, entry] of existing) if (!next.has(key)) changes.push({ key, kind: 'remove', before: entry });
-  const content = serializePoolEntries(next);
+  const content = serializePoolEntries(next, mode === 'replace' ? incoming : before);
   return {
     write: { poolKey, before: before.text, after: content } satisfies PoolContentWrite,
     changed: content !== before.text,
@@ -61,16 +61,23 @@ export function planPoolRestore(trash: PoolSnapshot, destinations: ReadonlyMap<s
     trashChanged = true;
     let entries = targets.get(poolKey);
     if (!entries) { entries = snapshotEntries(destination); targets.set(poolKey, entries); }
-    if (entries.has(key)) continue;
+    const current = entries.get(key);
+    if (current) {
+      // 旧垃圾桶只能补齐缺失字段，不能覆盖目标池更新的元数据或用户备注。
+      entries.set(key, mergePoolEntry({ ...item.entry, comment: '' }, current));
+      continue;
+    }
     entries.set(key, { ...item.entry, comment: '' });
     restored++;
     restoredByPool[poolKey] = (restoredByPool[poolKey] ?? 0) + 1;
   }
   const writes: PoolContentWrite[] = [];
   for (const [poolKey, entries] of targets) {
-    if ((restoredByPool[poolKey] ?? 0) > 0) writes.push({ poolKey, before: destinations.get(poolKey)!.text, after: serializePoolEntries(entries) });
+    const before = destinations.get(poolKey)!.text;
+    const after = serializePoolEntries(entries, destinations.get(poolKey));
+    if (after !== before) writes.push({ poolKey, before, after });
   }
-  if (trashChanged) writes.push({ poolKey: TRASH_POOL_KEY, before: trash.text, after: serializePoolEntries(remaining) });
+  if (trashChanged) writes.push({ poolKey: TRASH_POOL_KEY, before: trash.text, after: serializePoolEntries(remaining, trash) });
   return { writes, summary: { restored, restoredByPool } };
 }
 

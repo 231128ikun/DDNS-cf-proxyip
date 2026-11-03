@@ -74,3 +74,14 @@ describe('ordered writes and trash policy', () => {
     expect(planTrashAppend(plan.content, [candidate], { timestamp: 'later', maxSize: 1 }).changed).toBe(false);
   });
 });
+
+it('merges duplicate identity metadata without mutating user notes or conflating missing stack with dual', () => {
+  const snapshot = readPoolSnapshot(`${address},AS64500,JP,v4 # first\n${address},null,null,null # later`);
+  expect(snapshot.entries.get(address)?.entry).toMatchObject({ asn: 'AS64500', country: 'JP', stack: 'v4', comment: '# later' });
+});
+
+it('skips unchanged writes rather than consuming KV write capacity', async () => {
+  const write = vi.fn(async () => undefined);
+  await executePoolWrites([{ poolKey: DEFAULT_POOL_KEY, before: address, after: address }], write);
+  expect(write).not.toHaveBeenCalled();
+});

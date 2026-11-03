@@ -1,3 +1,4 @@
+import { readPoolSnapshot } from '../domain/pool-snapshot';
 import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import { dnsRecordTypeForHost, formatProxyAuthority } from '../domain/proxy-target';
 import { parseTxtAddresses } from '../domain/txt-record';
@@ -14,7 +15,7 @@ import {
   type CurrentMaintenanceItem,
   type MaintenancePlan,
 } from '../domain/maintenance';
-import { canonicalAddressKey, parsePoolText, type PoolEntry } from '../domain/pool-entry';
+import { canonicalAddressKey, type PoolEntry } from '../domain/pool-entry';
 import { parseProxyTarget } from '../domain/proxy-target';
 import { mapWithConcurrency } from '../util/concurrency';
 import { isProbeErrorResult, unknown, type ProbeResult } from '../domain/probe-result';
@@ -82,7 +83,6 @@ export class MaintainManagedTarget {
     const probeErrors = current.filter((item) => isProbeErrorResult(item.result)).length
       + probedCandidates.filter((item) => isProbeErrorResult(item.result)).length;
     const errors: string[] = [];
-    const dnsResult = await this.applyDnsChanges(command, plan, errors);
 
     let trashSaved = plan.trash.length === 0;
     if (plan.trash.length > 0) {
@@ -96,7 +96,9 @@ export class MaintainManagedTarget {
       }
     }
 
-    // 入桶失败时保留原池；保存失败时已入桶的副本仍可恢复。
+    const dnsResult = trashSaved ? await this.applyDnsChanges(command, plan, errors)
+      : { deleted: 0, added: 0, updated: false };
+    // 入桶失败时保留 DNS 与原池；保存失败时已入桶的副本仍可恢复。
     if (plan.poolChanged && trashSaved) {
       try {
         await this.dependencies.pools.save(command.poolKey, plan.nextPoolText);
@@ -276,9 +278,7 @@ async function probeSafely(
 }
 
 function parsePoolEntries(text: string) {
-  return parsePoolText(text)
-    .map((line) => line.entry)
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  return [...readPoolSnapshot(text).entries.values()].map(item => item.entry);
 }
 
 function sameValues(left: readonly string[], right: readonly string[]): boolean {
