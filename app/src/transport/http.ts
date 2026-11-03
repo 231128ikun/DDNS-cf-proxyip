@@ -191,6 +191,18 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
+  /** 只读变更预览复用保存用例的校验和纯计划，不启动探针或写入。 */
+  router.post('/api/pools/:key/preview', async (context) => {
+    const pools = dependencies.pools;
+    if (!pools) return errorResponse('pool storage unavailable', 503);
+    const body = await readJsonBody(context.request);
+    if (!body.ok) return errorResponse('invalid json', 400);
+    return await mapApplicationInputError(async () => {
+      const input = body.value as SavePoolRequest | null;
+      return jsonResponse(await pools.preview(context.params.key, input?.content, input?.mode));
+    });
+  });
+
   router.put('/api/pools/:key', async (context) => {
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
@@ -200,7 +212,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     return await mapApplicationInputError(async () => {
       const input = body.value as SavePoolRequest | null;
-      const result = await pools.save(context.params.key, input?.content, input?.mode);
+      const result = await pools.save(context.params.key, input?.content, input?.mode, input?.returnReceipt);
       const response: PoolSaveResponse = result;
       return jsonResponse(response);
     });

@@ -8,6 +8,7 @@ import type {
   PoolContentResponse,
   PoolSaveMode,
   PoolSaveResponse,
+  PoolPreviewResponse,
   PoolsResponse,
   RestoreTrashResponse,
 } from '../../../src/contracts/pool';
@@ -90,8 +91,13 @@ export class ApiClient {
     content: string,
     mode: PoolSaveMode = 'replace',
     signal?: AbortSignal,
+    returnReceipt = false,
   ): Promise<PoolSaveResponse> {
-    return await this.request<PoolSaveResponse>(poolPath(key), 'PUT', { content, mode }, signal);
+    return await this.request<PoolSaveResponse>(poolPath(key), 'PUT', { content, mode, ...(returnReceipt ? { returnReceipt: true } : {}) }, signal);
+  }
+
+  async previewPool(key: string, content: string, mode: PoolSaveMode = 'append', signal?: AbortSignal): Promise<PoolPreviewResponse> {
+    return await this.request<PoolPreviewResponse>(poolPath(key) + '/preview', 'POST', { content, mode }, signal);
   }
 
   async createPool(displayName: string, signal?: AbortSignal): Promise<CreatePoolResponse> {

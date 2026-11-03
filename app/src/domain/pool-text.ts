@@ -1,18 +1,9 @@
-import { formatPoolEntry, parsePoolText } from './pool-entry';
-import { parseProxyTarget } from './proxy-target';
+import { parsePoolText } from './pool-entry';
+import { readPoolSnapshot, serializePoolEntries, snapshotEntries } from './pool-snapshot';
 
-/** 重复地址保留最后一次出现的条目。 */
+/** 规范化与去重共用池快照的有效元数据合并规则。 */
 export function cleanPoolText(text: string): string {
-  const entries = new Map<string, string>();
-
-  for (const line of parsePoolText(String(text ?? ''))) {
-    if (!line.entry) continue;
-    const target = parseProxyTarget(line.entry.address, 443);
-    if (!target) continue;
-    entries.set(target.key, formatPoolEntry({ ...line.entry, address: target.authority }));
-  }
-
-  return [...entries.values()].join('\n');
+  return serializePoolEntries(snapshotEntries(readPoolSnapshot(String(text ?? ''))));
 }
 export function countPoolTextLines(text: string): number {
   return parsePoolText(text).filter((line) => line.entry !== null).length;

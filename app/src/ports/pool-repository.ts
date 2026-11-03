@@ -1,8 +1,5 @@
-export interface TrashCandidate {
-  readonly entryLine: string;
-  readonly reason: string;
-  readonly poolKey?: string;
-}
+import type { TrashCandidate } from '../domain/trash';
+export type { TrashCandidate } from '../domain/trash';
 
 export interface PoolRepository {
   load(poolKey: string): Promise<string>;

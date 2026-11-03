@@ -1,5 +1,6 @@
 import { parsePoolEntry, parsePoolText, normalizePoolStack, type PoolStack } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
+import { cleanPoolText } from './pool-text';
 
 export interface PortFilterRange {
   readonly start: number;
@@ -22,7 +23,8 @@ export function parsePoolFilter(query: string): PoolFilter | null {
   const groups: PoolFilterCriterion[] = [];
   for (const rawGroup of String(query ?? '').split('|')) {
     const criterion = parseFilterGroup(rawGroup);
-    if (criterion) groups.push(criterion);
+    if (!criterion) return null;
+    groups.push(criterion);
   }
   return groups.length ? groups : null;
 }
@@ -41,17 +43,9 @@ export function countPoolFilterMatches(text: string, filter: PoolFilter): number
   return splitPoolLines(text).filter((line) => matchesPoolFilter(line, filter)).length;
 }
 
-/** 重复地址保留后出现的条目，位置仍按首次出现排序。 */
+/** 重复地址合并有效元数据，备注按显式新值更新；顺序保持首次出现。 */
 export function dedupePoolText(text: string): string {
-  const entries = new Map<string, string>();
-  for (const line of parsePoolText(text)) {
-    const entry = line.entry;
-    if (!entry) continue;
-    const target = parseProxyTarget(entry.address, 443);
-    if (!target) continue;
-    entries.set(target.key, line.raw);
-  }
-  return [...entries.values()].join('\n');
+  return cleanPoolText(text);
 }
 
 function parseFilterGroup(group: string): PoolFilterCriterion | null {
@@ -72,7 +66,7 @@ function parseFilterGroup(group: string): PoolFilterCriterion | null {
     }
     const key = match[1]!.toLowerCase();
     const values = match[2]!.split(',').map((value) => value.trim()).filter(Boolean);
-    if (!values.length) continue;
+    if (!values.length) return null;
 
     if (key === 'port') {
       const parsed = parsePortValues(values);
@@ -128,8 +122,8 @@ function matchesCriterion(line: string, criterion: PoolFilterCriterion): boolean
   if (criterion.asns.length && !criterion.asns.some((value) => asns.includes(value))) return false;
 
   if (criterion.stacks.length) {
-    const stack: PoolStack = entry?.stack ?? 'v4/v6';
-    if (!criterion.stacks.includes(stack)) return false;
+    const stack: PoolStack | null = entry?.stack ?? null;
+    if (!stack || !criterion.stacks.includes(stack)) return false;
   }
 
   if (criterion.text.length) {

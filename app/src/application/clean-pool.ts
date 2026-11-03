@@ -1,5 +1,5 @@
 import { TRASH_POOL_KEY, type CleanPoolResponse } from '../contracts/pool';
-import { formatPoolEntry } from '../domain/pool-entry';
+import { planPoolCleaning } from '../domain/pool-mutation';
 import type { PoolCatalog } from '../ports/pool-catalog';
 import type { PoolRepository } from '../ports/pool-repository';
 import type { ProbeContext } from '../ports/probe';
@@ -30,29 +30,17 @@ export class CleanPool {
     if (!content.trim()) throw new PoolInputError('池为空，无需洗库');
 
     const report = await this.dependencies.checkPool.execute(content, context);
-    const unknown = report.unknown + report.invalid.length;
-    if (unknown > 0) {
-      return { ok: true, poolKey, checked: report.total, kept: 0, trashed: 0, unknown, skipped: true };
-    }
-
-    const alive = report.items.filter((item) => item.result.status === 'alive');
-    const dead = report.items.filter((item) => item.result.status === 'dead');
-
+    const plan = planPoolCleaning(poolKey, report);
+    if (plan.summary.skipped) return { ok: true, poolKey, ...plan.summary };
     if (poolKey === TRASH_POOL_KEY) {
-      const restored = alive.length > 0
-        ? await this.dependencies.pools.restoreTrash(alive.map((item) => item.address), true)
+      const restored = plan.restoreAddresses.length
+        ? await this.dependencies.pools.restoreTrash(plan.restoreAddresses, true)
         : { restored: 0 };
-      return { ok: true, poolKey, checked: report.total, kept: restored.restored, trashed: 0, unknown: 0, skipped: false };
+      return { ok: true, poolKey, ...plan.summary, kept: restored.restored };
     }
-
     // 入桶成功后才能移除原池条目，写入失败宁可保留副本。
-    if (dead.length > 0) {
-      await this.dependencies.trash.addToTrash(
-        dead.map((item) => ({ entryLine: formatPoolEntry(item.entry), reason: '洗库失效', poolKey })),
-      );
-    }
-    await this.dependencies.pools.save(poolKey, alive.map((item) => formatPoolEntry(item.entry)).join('\n'), 'replace');
-
-    return { ok: true, poolKey, checked: report.total, kept: alive.length, trashed: dead.length, unknown: 0, skipped: false };
+    if (plan.trash.length) await this.dependencies.trash.addToTrash(plan.trash);
+    await this.dependencies.pools.save(poolKey, plan.nextText, 'replace');
+    return { ok: true, poolKey, ...plan.summary };
   }
 }
