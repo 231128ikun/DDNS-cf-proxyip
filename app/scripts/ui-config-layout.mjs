@@ -42,6 +42,17 @@ try {
         if (innerWidth >= 992 && basics.height > 800) issues.push('basic settings exceed a compact desktop panel');
         if (innerWidth >= 992 && basics.top > 200) issues.push('header pushes settings below the first screen');
         const reference = document.querySelector('#cfg-doh').getBoundingClientRect();
+        const target = document.querySelector('.target-summary');
+        if (target.getBoundingClientRect().height < 64 || parseFloat(getComputedStyle(document.querySelector('.target-summary-domain')).fontSize) < 16) issues.push('target chooser lacks visual prominence');
+        if (document.querySelector('#zone-config-title').textContent.trim() !== '域名权限配置') issues.push('permissions heading does not match the domain task');
+        if (document.querySelector('#target-config-title').textContent.trim() !== '维护域名管理') issues.push('maintained domain heading does not match the domain task');
+        if (document.querySelectorAll('.config-options input[type="checkbox"]').length !== 2) issues.push('advanced options include removed credential actions');
+        if (document.querySelectorAll('#target-config-title').length !== 1 || document.querySelectorAll('#target-edit-panel').length !== 1) issues.push('domain settings entry is duplicated');
+        if (document.querySelectorAll('#page-config .config-mini-card .domain-binding-select').length !== 2) issues.push('pool binding is not integrated with maintained domains');
+        if (document.querySelector('#page-dashboard .domain-binding-card')) issues.push('dashboard still has a second binding panel');
+        const columns = getComputedStyle(document.querySelector('#maintained-domains .config-card-grid')).gridTemplateColumns.split(' ').length;
+        if (innerWidth >= 992 && columns < 2) issues.push('desktop domains are not grouped in cards');
+        if (innerWidth < 600 && columns !== 1) issues.push('phone domain cards do not use a single column');
         if (document.querySelector('.field button, .secret-state')) issues.push('routine fields contain auxiliary actions or badges');
         if (document.querySelector('.config-details .switch-slider')) issues.push('routine settings contain decorative switches');
         for (const id of ['cfg-auth-key', 'cfg-tg-token']) {
@@ -58,38 +69,68 @@ try {
         return issues;
       })()`);
       failures.push(...issues.map(issue => `${state}: ${issue}`));
-      if (configured) {
-        await cdp.click(sessionId, '.config-options > summary');
-        const action = '#cfg-clear-tgToken';
-        const clickAction = async () => {
-          await cdp.click(sessionId, action);
-          await read('new Promise(resolve => requestAnimationFrame(resolve))');
-        };
-        const writes = () => server.requests.filter(item => item.path === '/api/config' && item.method === 'PUT').length;
-        const before = writes();
-        await clickAction();
-        assert(await read('document.querySelector("#cfg-tg-token").disabled'), `${state}: clear did not disable input`);
-        await clickAction();
-        assert(await read('!document.querySelector("#cfg-tg-token").disabled'), `${state}: cancel did not restore input`);
-        assert.equal(writes(), before, `${state}: clear/cancel wrote configuration before save`);
-        await cdp.click(sessionId, '.config-options > summary');
-      }
       await read('window.scrollTo({ top: 0, behavior: "instant" })');
       const { cssContentSize: size } = await cdp.send('Page.getLayoutMetrics', {}, sessionId);
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
         clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } }, sessionId);
       writeFileSync(join(out, `${state}.png`), Buffer.from(shot.data, 'base64'));
       if (configured && width === 1440) {
-        await cdp.click(sessionId, '.config-options > summary');
-        await cdp.click(sessionId, '#cfg-clear-tgToken');
-        assert.equal(server.fixture.config.tgToken, 'fixture-telegram-token', 'Selecting clear persisted before Save');
+        await cdp.click(sessionId, '#maintained-domains .domain-binding-actions button:first-child');
+        await cdp.until(sessionId, 'Boolean(document.querySelector("#target-edit-panel.active")?.offsetWidth)');
+        await cdp.click(sessionId, '#target-edit-panel .config-edit-actions button:last-child');
+        await cdp.until(sessionId, 'document.querySelectorAll("#maintained-domains .config-mini-card").length === 3');
+        assert(await read('[...document.querySelectorAll("#maintained-domains .domain-binding-select")].at(-1).disabled'), 'Unsaved domain can write a pool binding');
+        assert.equal(server.fixture.config.targets.length, 2, 'Saving a card draft wrote configuration before Save');
+        await cdp.click(sessionId, '#btn-cancel-config');
+        await cdp.until(sessionId, 'document.querySelectorAll("#maintained-domains .config-mini-card").length === 2');
+        await cdp.click(sessionId, '#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
+        await read('document.querySelector("#zone-domain-0").value = "example.net"; document.querySelector("#zone-domain-0").dispatchEvent(new Event("input", { bubbles: true }))');
+        await cdp.click(sessionId, '#zone-edit-panel .config-edit-actions button:last-child');
+        await read('new Promise(resolve => requestAnimationFrame(resolve))');
+        assert(await read('[...document.querySelectorAll("#maintained-domains .domain-binding-select")].every(select => select.disabled)'), 'Changing a permission base domain left old-key pool bindings enabled');
+        assert(await read('document.querySelector("#maintained-domains .domain-binding-name").textContent === "edge.example.net"'), 'Cards do not show the effective domain after a permission edit');
+        await cdp.click(sessionId, '#btn-cancel-config');
+        await cdp.until(sessionId, '!document.querySelector("#btn-cancel-config")?.offsetWidth');
+        await read('document.querySelector("#cfg-check-timeout").value = "16000"; document.querySelector("#cfg-check-timeout").dispatchEvent(new Event("input", { bubbles: true }))');
         await cdp.click(sessionId, '#btn-save-config');
         await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
-        assert.equal(server.fixture.config.tgToken, '', 'Explicit Save did not clear the selected credential');
-        assert.equal(server.fixture.config.authKey, 'fixture-panel-key', 'Clearing Telegram changed the untouched panel key');
+        assert.equal(server.fixture.config.tgToken, 'fixture-telegram-token', 'Saving blank Telegram input changed its stored credential');
+        assert.equal(server.fixture.config.authKey, 'fixture-panel-key', 'Saving blank panel input changed its stored credential');
       }
       console.log(`${state}: ${issues.length ? issues.join('; ') : 'PASS'}`);
     }
+  }
+  for (const width of [375, 1440]) {
+    Object.assign(server.fixture, createUiFixture());
+    const zone = server.fixture.config.zones[0];
+    server.fixture.config.zones.push(...Array.from({ length: 18 }, (_, index) => ({ ...zone,
+      name: `权限 ${index + 2}`, label: `权限 ${index + 2}`, baseDomain: `zone${index}.example.test`, zoneId: `fixture-zone-${index + 2}` })));
+    const baseTarget = server.fixture.config.targets[0];
+    server.fixture.config.targets = Array.from({ length: 18 }, (_, index) => {
+      const prefix = index === 17 ? `${'long-'.repeat(12)}last` : `node-${index}`;
+      return { ...baseTarget, prefix, domain: `${prefix}.example.com` };
+    });
+    server.fixture.bindings.items = server.fixture.config.targets.map(target => ({ key: `${target.domain}|A`,
+      domain: target.domain, mode: 'A', poolKey: 'ip_pool_default', poolName: '默认池', enabled: true }));
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
+    await cdp.send('Page.navigate', { url: server.base }, sessionId);
+    await cdp.until(sessionId, 'Boolean(document.querySelector("#tab-config")?.offsetWidth)');
+    await cdp.click(sessionId, '#tab-config');
+    await cdp.until(sessionId, 'document.querySelectorAll("#maintained-domains .config-mini-card").length === 18');
+    const metrics = await read(`(() => {
+      const grids = [...document.querySelectorAll('.config-card-grid')];
+      return { overflow: document.documentElement.scrollWidth > innerWidth,
+        grids: grids.map(grid => ({ height: grid.clientHeight, content: grid.scrollHeight })) };
+    })()`);
+    assert.equal(metrics.overflow, false, `Long domain overflow at ${width}px`);
+    for (const grid of metrics.grids) {
+      if (width >= 992) assert(grid.content > grid.height && grid.height <= 520, 'Desktop domain lists do not cap and scroll');
+      else assert(grid.content <= grid.height + 1, 'Phone domain lists create a nested scrolling window');
+    }
+    await cdp.click(sessionId, '[data-target-index="17"] .actions button:first-of-type');
+    await cdp.until(sessionId, 'Boolean(document.querySelector("#target-prefix-17")?.offsetWidth)');
+    assert.equal(await read('document.querySelector("#target-prefix-17").value'), server.fixture.config.targets[17].prefix, 'Scrolled card edited a different domain');
+    console.log(`many-domains-${width}: PASS (19 permissions, 18 targets, long names and scrolled editing)`);
   }
   assert.deepEqual(failures, [], 'Credential layout regression');
 } finally {

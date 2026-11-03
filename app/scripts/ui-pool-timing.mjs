@@ -25,7 +25,7 @@ export async function auditPoolTiming(cdp, sessionId, base, requests, fixture, c
     await cdp.until(sessionId, 'document.querySelector("#pool-selector")?.options.length === 4');
   };
   const bindings = async () => {
-    await click('.domain-binding-header');
+    await click('.nav-tab[data-page="config"]');
     await cdp.until(sessionId, 'Boolean(document.querySelector(".domain-binding-select")?.offsetWidth)');
   };
   const configPage = async () => {
@@ -38,7 +38,6 @@ export async function auditPoolTiming(cdp, sessionId, base, requests, fixture, c
     await click('#btn-save-config');
     await waitForUiRequest(requests, start, '/api/config', 'PUT', 200);
     await waitForUiRequest(requests, start, '/api/domain-bindings', 'GET', 500);
-    await click('.nav-tab[data-page="dashboard"]');
     await cdp.until(sessionId, 'Boolean(document.querySelector("#retry-bindings")?.offsetWidth)');
     await bindings();
     return start;
@@ -134,7 +133,7 @@ export async function auditPoolTiming(cdp, sessionId, base, requests, fixture, c
       await click('#page-config > :has(> #target-edit-panel) .config-mini-card:nth-child(2) .actions button:last-child');
       await saveWithFailedBindings();
       const stale = '.domain-binding-select[aria-label="proxy.example.com 绑定的 IP 池"]';
-      assert(await read(`document.querySelector(${JSON.stringify(stale)})?.matches(':disabled')`),
+      assert(await read(`!document.querySelector(${JSON.stringify(stale)}) || document.querySelector(${JSON.stringify(stale)}).matches(':disabled')`),
         '删除目标后的旧绑定行仍可操作，Worker 会忽略失效 key 而页面误报保存成功');
       const start = requests.length;
       await click('#retry-bindings');

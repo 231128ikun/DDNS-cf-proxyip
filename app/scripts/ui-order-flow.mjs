@@ -12,6 +12,10 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
   };
   try {
     for (const kind of ['bindings', 'pools']) {
+      if (surface === 'current') {
+        await click(kind === 'bindings' ? '.nav-tab[data-page="config"]' : '.nav-tab[data-page="dashboard"]');
+        await cdp.until(sessionId, kind === 'bindings' ? 'Boolean(document.querySelector("#domain-order-trigger")?.offsetWidth)' : 'Boolean(document.querySelector("#pool-action-trigger")?.offsetWidth)');
+      }
       const prefix = kind === 'pools' ? 'pool-order' : 'domain-pool-order';
       const list = `#${prefix}-list`;
       const title = kind === 'pools' ? '自定义池排序' : '自定义绑定池排序';
@@ -19,7 +23,7 @@ export async function auditOrderFlow(cdp, sessionId, surface, requests, fixture,
       const names = items.map(item => kind === 'pools' ? item.name : item.domain);
       const savedKeys = () => read(kind === 'pools'
         ? '[...document.querySelector("#pool-selector").options].map(item => item.value)'
-        : '[...document.querySelectorAll(".domain-binding-card tbody .domain-binding-name")].map(item => item.textContent.trim())');
+        : '[...document.querySelectorAll(".domain-binding-card .domain-binding-name")].map(item => item.textContent.trim())');
       const baseline = await savedKeys();
       const listNames = () => read(`[...document.querySelectorAll('${list} .pool-order-name strong')].map(item => item.textContent.trim())`);
       const route = kind === 'pools'
@@ -132,6 +136,8 @@ export async function auditOrderEdges(cdp, sessionId, base, requests, fixture, c
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .address-pill").length === 2');
   };
   const open = async kind => {
+    await click(kind === 'bindings' ? '.nav-tab[data-page="config"]' : '.nav-tab[data-page="dashboard"]');
+    await cdp.until(sessionId, kind === 'bindings' ? 'Boolean(document.querySelector("#domain-order-trigger")?.offsetWidth)' : 'Boolean(document.querySelector("#pool-action-trigger")?.offsetWidth)');
     if (kind === 'pools') {
       await click('#pool-action-trigger');
       const index = await read('[...document.querySelectorAll(".action-menu-item")].findIndex(item => item.textContent.includes("自定义池排序"))');

@@ -12,12 +12,16 @@ import {
   type ZoneConfig,
 } from '../../../src/contracts/config';
 import type { ExitFilter, TargetMode } from '../../../src/domain/managed-target';
+import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
+import { DEFAULT_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
+import { sortByKeyOrder } from '../../../src/util/key-order';
 import { bindingKey } from '../../../src/domain/domain-binding';
 import { ApiClient } from '../api/client';
 import { errorMessage } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
 import { ResourceFeedback } from './resource-feedback';
+import { poolOptions } from '../state/pool-options';
 
 interface ConfigPageProps {
   readonly client: ApiClient;
@@ -25,6 +29,12 @@ interface ConfigPageProps {
   readonly config: RequestState<ConfigResponse>;
   readonly onReload: (signal?: AbortSignal) => Promise<boolean>;
   readonly onSaved: (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>) => void;
+  readonly pools: RequestState<PoolsResponse>;
+  readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly bindingBusy: boolean;
+  readonly onBindPool: (key: string, poolKey: string) => void;
+  readonly onReloadBindings: () => void;
+  readonly onOpenBindingOrder: () => void;
 }
 
 interface ZoneDraft extends ZoneConfig {
@@ -63,10 +73,8 @@ interface ConfigForm {
 
 type SecretKey = 'authKey' | 'tgToken';
 type SecretDrafts = Readonly<Record<SecretKey, string>>;
-type SecretClearing = Readonly<Record<SecretKey, boolean>>;
 
 const EMPTY_DRAFTS: SecretDrafts = { authKey: '', tgToken: '' };
-const NO_CLEARING: SecretClearing = { authKey: false, tgToken: false };
 const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   authKey: '面板密钥',
   tgToken: 'TG Bot Token',
@@ -76,18 +84,18 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
   ['CHECK_TIMEOUT', '检测超时(ms)', '单接口请求超时；复检后仍超时按失效处理，洗库和维护时入桶。', 'cfg-check-timeout'],
   ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
   ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
-  ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增管理域名默认值。', 'cfg-default-min-active'],
+  ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增维护域名默认值。', 'cfg-default-min-active'],
   ['MAX_TRASH_SIZE', '垃圾桶上限', '超过后保留最新条目。', 'cfg-max-trash-size'],
 ];
 
-export function ConfigPage({ client, notify, config: load, onReload, onSaved }: ConfigPageProps) {
+export function ConfigPage({ client, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
+  onBindPool, onReloadBindings, onOpenBindingOrder }: ConfigPageProps) {
   const applied = useRef<ConfigResponse | null>(null);
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
   const [baseline, setBaseline] = useState('');
   const [form, setForm] = useState<ConfigForm | null>(null);
   const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, authKey: false, tgToken: false });
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
-  const [clearing, setClearing] = useState<SecretClearing>(NO_CLEARING);
   const [saving, setSaving] = useState(false);
   const [editingZone, setEditingZone] = useState<ZoneEditor | null>(null);
   const [editingTarget, setEditingTarget] = useState<TargetEditor | null>(null);
@@ -97,10 +105,9 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
     applied.current = response;
     setForm(nextForm);
     // 基线跟着刚落库的响应走：保存或重载之后"未保存改动"必须重新归零。
-    setBaseline(snapshot(nextForm, EMPTY_DRAFTS, NO_CLEARING));
+    setBaseline(snapshot(nextForm, EMPTY_DRAFTS));
     setSecrets(response.config.secrets);
     setDrafts(EMPTY_DRAFTS);
-    setClearing(NO_CLEARING);
     setEditingZone(null);
     setEditingTarget(null);
   }, []);
@@ -193,7 +200,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
   const addTarget = (): void => {
     if (!form) return;
     if (form.zones.length === 0) {
-      notify('请先添加权限配置，再创建管理域名', 'error');
+      notify('请先添加权限配置，再创建维护域名', 'error');
       return;
     }
     if (form.targets.length >= MAX_TARGETS) return;
@@ -215,7 +222,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
     if (!validated.ok) { notify(validated.message, 'error'); return; }
     patch({ targets });
     setEditingTarget(null);
-    notify('管理域名已保存到页面，点击“保存到 KV”后生效');
+    notify('维护域名已保存到页面，点击“保存到 KV”后生效');
   };
 
   const removeTarget = (index: number): void => {
@@ -226,18 +233,18 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
   const dirty = useMemo(() => {
     if (!form) return false;
     try {
-      return snapshot(form, drafts, clearing) !== baseline;
+      return snapshot(form, drafts) !== baseline;
     } catch {
       // 数字框正在输入半截时无法构成合法请求，此时一律按"有改动"处理。
       return true;
     }
-  }, [baseline, clearing, drafts, form]);
+  }, [baseline, drafts, form]);
 
   const handleSave = (): void => {
     if (!form) return;
     let update: ConfigUpdateRequest;
     try {
-      update = buildUpdate(form, drafts, clearing);
+      update = buildUpdate(form, drafts);
       const validated = parseAppConfig(update);
       if (!validated.ok) throw new Error(validated.message);
     } catch (error) {
@@ -274,6 +281,8 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
   const targetZone = activeTarget?.zoneIndex === null || activeTarget?.zoneIndex === undefined
     ? null
     : form.zones[activeTarget.zoneIndex] ?? null;
+  const orderedTargets = sortByKeyOrder(form.targets.map((target, index) => ({ target: { ...target, ...normalizeTargetDraft(target, form.zones) }, index,
+    key: target.sourceKey ?? bindingKey(target) })), bindings.status === 'ready' ? bindings.data.items.map(item => item.key) : []);
 
   return (
     <fieldset id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config" disabled={saving} aria-busy={saving}>
@@ -296,8 +305,8 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
             <TextField id="cfg-check-api" label="检测 API" help="留空使用备用接口；支持 {proxyip} 占位符。" value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
             <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；单接口时复用原接口。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
-            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
-            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
+            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
+            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
           </div>
           <section class="config-group" aria-labelledby="config-runtime-title">
@@ -313,9 +322,6 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
             <div class="config-options-list">
               <label><input id="cfg-scheduled-enabled" type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} /> 自动维护</label>
               <label><input id="cfg-tg-enabled" type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} /> Telegram 通知</label>
-              {(['authKey', 'tgToken'] as const).map((key) => secrets[key] && (
-                <label class="text-danger" key={key}><input id={`cfg-clear-${key}`} type="checkbox" checked={clearing[key]} onChange={(event) => { const checked = event.currentTarget.checked; setClearing((current) => ({ ...current, [key]: checked })); }} /> 清除{SECRET_LABELS[key]}（保存后生效）</label>
-              ))}
             </div>
           </details>
         </div>
@@ -323,7 +329,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
 
       <section class="card p-4 mb-3" aria-labelledby="zone-config-title">
         <div class="config-section-heading">
-          <h2 id="zone-config-title" class="card-title m-0 fw-bold"><Icon name="globe" /> 维护的域名配置</h2>
+          <h2 id="zone-config-title" class="card-title m-0 fw-bold"><Icon name="globe" /> 域名权限配置</h2>
           <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.zones.length >= MAX_ZONES} onClick={addZone}>
             <Icon name="plus" /> 添加权限配置
           </button>
@@ -337,7 +343,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
             >
               <button class="config-card-open" type="button" aria-expanded={editingZone?.index === index} aria-controls="zone-edit-panel" onClick={() => editZone(index)}>
                 <h3>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</h3>
-                <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>
+                {(zone.label || zone.name) !== zone.baseDomain && <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>}
                 <div class="meta">
                   <span>Zone: {zone.zoneId ? '已填写' : '未填写'}</span>
                   <span>CF Key: {zone.hasApiKey || zone.apiKey ? '已填写' : '未填写'}</span>
@@ -368,27 +374,33 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
         </div>
       </section>
 
-      <section class="card p-4 mb-3" aria-labelledby="target-config-title">
+      <section id="maintained-domains" class="card p-4 mb-3 domain-binding-card" aria-labelledby="target-config-title">
         <div class="config-section-heading">
-          <h2 id="target-config-title" class="card-title m-0 fw-bold"><Icon name="compass" /> 管理域名</h2>
-          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
-            <Icon name="plus" /> 添加管理域名
-          </button>
+          <h2 id="target-config-title" class="card-title m-0 fw-bold"><Icon name="compass" /> 维护域名管理</h2>
+          <div class="domain-binding-actions">
+            <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
+              <Icon name="plus" /> 添加维护域名
+            </button>
+            <button class="btn btn-sm btn-outline-secondary domain-binding-refresh" type="button" aria-label="刷新域名池绑定" title="刷新 IP 池绑定" disabled={bindingBusy} onClick={onReloadBindings}><Icon name="refresh" /></button>
+            <button id="domain-order-trigger" class="btn btn-sm btn-outline-secondary" type="button" aria-label="调整维护域名顺序" aria-haspopup="dialog" title={dirty ? '保存域名改动后可调整顺序' : '调整维护域名顺序'} disabled={dirty || bindingBusy || bindings.status !== 'ready'} onClick={onOpenBindingOrder}><Icon name="sort" /></button>
+          </div>
         </div>
+        <ResourceFeedback state={bindings} id="retry-bindings" onRetry={onReloadBindings} />
+        <ResourceFeedback state={pools} id="retry-config-pools" onRetry={onReloadBindings} />
         <div class="config-card-grid">
-          {form.targets.length === 0 && <div class="config-empty-state">暂无管理域名，点击“添加管理域名”创建。</div>}
-          {form.targets.map((target, index) => (
+          {form.targets.length === 0 && <div class="config-empty-state">暂无维护域名，点击“添加维护域名”创建。</div>}
+          {orderedTargets.map(({ target, index }) => (
             <article
               class="config-mini-card"
+              data-target-index={index}
               key={index}
             >
               <button class="config-card-open" type="button" aria-expanded={editingTarget?.index === index} aria-controls="target-edit-panel" onClick={() => editTarget(index)}>
-                <h3>{targetDisplayDomain(target)}</h3>
+                <h3 class="domain-binding-name">{targetDisplayDomain(target)}</h3>
                 <div class="meta">
                   <span>{target.mode === 'TXT' ? 'TXT' : `A/AAAA · ${target.port}`}</span>
                   <span>{exitFilterLabel(target.exitFilter)}</span>
                   <span>{zoneDisplayName(form.zones, target.zoneIndex)}</span>
-                  <span>{target.enabled ? '维护开启' : '维护关闭'}</span>
                 </div>
                 <div class="meta">
                   <span>活跃数 {target.minActive}</span>
@@ -396,6 +408,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
                   {target.asn && <span>ASN {target.asn}</span>}
                 </div>
               </button>
+              <TargetPoolField target={target} bindings={bindings} pools={pools} busy={bindingBusy} onBind={onBindPool} />
               <div class="actions">
                 <label class="switch" title="单独控制这个域名是否参与维护">
                   <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
@@ -411,7 +424,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
           {activeTarget && editingTarget !== null && (
             <>
               <div class="config-edit-heading">
-                <h3>{editingTarget.index >= form.targets.length ? '添加' : '编辑'}管理域名</h3>
+                <h3>{editingTarget.index >= form.targets.length ? '添加' : '编辑'}维护域名</h3>
               </div>
               <div class="config-grid">
                 <label class="field">
@@ -463,7 +476,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
                     />
                   </>
                 ) : (
-                  <TextField id={`target-domain-${editingTarget.index}`} label="管理域名" help="填写需要维护的完整域名。" value={activeTarget.domain} placeholder="proxy.example.com" onValue={(value) => patchTargetDraft({ domain: value, baseDomain: '', prefix: '' })} />
+                  <TextField id={`target-domain-${editingTarget.index}`} label="维护域名" help="填写需要维护的完整域名。" value={activeTarget.domain} placeholder="proxy.example.com" onValue={(value) => patchTargetDraft({ domain: value, baseDomain: '', prefix: '' })} />
                 )}
                 <NumberField id={`target-min-${editingTarget.index}`} label="活跃数" help="最小可用数量。" value={String(activeTarget.minActive)} min={0} max={100} onChange={(value) => patchTargetDraft({ minActive: Number(value) })} />
                 <TextField id={`target-country-${editingTarget.index}`} label="国家" help="可填多个，逗号分隔；任一命中即可。" value={activeTarget.country} placeholder="JP,US,SG" onValue={(value) => patchTargetDraft({ country: value })} />
@@ -499,6 +512,30 @@ function exitFilterLabel(value: TargetConfig['exitFilter']): string {
   if (value === 'v6') return 'IPv6 出口';
   if (value === 'dual') return '双栈出口';
   return '任意出口';
+}
+
+function TargetPoolField({ target, bindings, pools, busy, onBind }: {
+  readonly target: TargetDraft;
+  readonly bindings: RequestState<DomainBindingsResponse>;
+  readonly pools: RequestState<PoolsResponse>;
+  readonly busy: boolean;
+  readonly onBind: (key: string, poolKey: string) => void;
+}) {
+  const item = bindings.status === 'ready' ? bindings.data.items.find(binding => binding.key === target.sourceKey) : undefined;
+  const persisted = target.sourceKey !== null && target.sourceKey === bindingKey(target);
+  const poolKey = item?.poolKey ?? DEFAULT_POOL_KEY;
+  return (
+    <label class="field target-pool-field">
+      <span>IP 池</span>
+      <select class="form-select form-select-sm domain-binding-select" value={poolKey}
+        aria-label={`${targetDisplayDomain(target)} 绑定的 IP 池`} aria-busy={busy}
+        disabled={busy || !persisted || !item?.enabled || !target.enabled || pools.status !== 'ready'}
+        onChange={(event) => { if (target.sourceKey) onBind(target.sourceKey, event.currentTarget.value); }}>
+        {poolOptions(pools, poolKey).filter(pool => isUserPoolKey(pool.key)).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}
+      </select>
+      <small>{persisted ? '更改后立即保存' : '先保存维护域名，再选择 IP 池'}</small>
+    </label>
+  );
 }
 
 function ConfigEditorActions({ disabled, onCancel, onSave }: {
@@ -600,7 +637,6 @@ function SecretField({
   placeholder,
   configured,
   value,
-  clearing,
   onValue,
 }: {
   readonly id: string;
@@ -609,22 +645,20 @@ function SecretField({
   readonly placeholder: string;
   readonly configured: boolean;
   readonly value: string;
-  readonly clearing: boolean;
   readonly onValue: (value: string) => void;
 }) {
   return (
     <div class="field">
       <label class="field-label" for={id}>{label}</label>
-      <small id={`${id}-help`}>{clearing ? '保存后清除；可在高级选项中取消。' : help}</small>
+      <small id={`${id}-help`}>{help}</small>
       <input
         id={id}
         type="password"
         class="form-control form-control-sm"
         value={value}
-        disabled={clearing}
         autocomplete="new-password"
         aria-describedby={`${id}-help`}
-        placeholder={clearing ? '保存后清除' : configured ? '已配置，留空保持不变' : placeholder}
+        placeholder={configured ? '已配置，留空保持不变' : placeholder}
         onInput={(event) => onValue(event.currentTarget.value)}
       />
     </div>
@@ -647,8 +681,8 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
   };
 }
 
-/** 密钥留空时沿用旧值；只有用户在高级选项中勾选清除才提交空字符串。 */
-function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretClearing): ConfigUpdateRequest {
+/** 密钥留空时沿用旧值；新值非空时才提交替换。 */
+function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateRequest {
   const settings = Object.fromEntries(
     SETTINGS_FIELDS.map(([key, label]) => [
       key,
@@ -656,8 +690,8 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretCle
     ]),
   ) as unknown as RuntimeSettings;
 
-  const authKey = secretValue(drafts, clearing, 'authKey');
-  const tgToken = secretValue(drafts, clearing, 'tgToken');
+  const authKey = secretValue(drafts, 'authKey');
+  const tgToken = secretValue(drafts, 'tgToken');
 
   return {
     zoneId: form.zoneId.trim(),
@@ -761,10 +795,8 @@ function splitList(value: string): readonly string[] {
 
 function secretValue(
   drafts: SecretDrafts,
-  clearing: SecretClearing,
   key: SecretKey,
 ): string | undefined {
-  if (clearing[key]) return '';
   const value = drafts[key].trim();
   return value || undefined;
 }
@@ -786,6 +818,6 @@ function readExitFilter(value: string): ExitFilter {
 }
 
 /** 保存入口始终可见；只有表单与已落库基线不同时才允许提交。 */
-function snapshot(form: ConfigForm, drafts: SecretDrafts, clearing: SecretClearing): string {
-  return JSON.stringify([form, drafts, clearing]);
+function snapshot(form: ConfigForm, drafts: SecretDrafts): string {
+  return JSON.stringify([form, drafts]);
 }

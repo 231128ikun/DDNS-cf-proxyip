@@ -21,6 +21,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
   const modeSelect = surface === 'baseline' ? '#edit-target-mode' : '#target-mode-0';
   const section = (type) => `#page-config > :has(> #${type}-edit-panel)`;
   const card = (type) => `${section(type)} .config-mini-card`;
+  const targetCard = index => `${card('target')}${surface === 'current' ? `[data-target-index="${index}"]` : `:nth-child(${index + 1})`}`;
   let zoneOpenAttempts = 0;
   const openZone = async () => {
     zoneOpenAttempts++;
@@ -64,21 +65,21 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
   await click('#zone-edit-panel .config-edit-actions button:first-child');
   check(await read(`document.querySelectorAll(${JSON.stringify(card('zone'))}).length === ${zoneCount}`), '取消添加权限配置留下了空卡片');
 
-  await click(`${card('target')} .actions button:first-of-type`);
+  await click(`${targetCard(0)} .actions button:first-of-type`);
   await setValue(portInput, '2053');
   await setValue(modeSelect, 'TXT');
   check(await read(`document.querySelector(${JSON.stringify(portInput)}).disabled`), 'TXT 模式的端口输入没有禁用');
   await setValue(modeSelect, 'A');
   check(await read(`document.querySelector(${JSON.stringify(portInput)}).value === '2053'`), '切回 A/AAAA 模式丢失了原端口');
-  check(await read(`document.querySelector(${JSON.stringify(`${card('target')} .actions input[type="checkbox"]`)}).checked`), '维护开关的测试初始状态应为开启');
-  await click(`${card('target')} .actions .switch`);
+  check(await read(`document.querySelector(${JSON.stringify(`${targetCard(0)} .actions input[type="checkbox"]`)}).checked`), '维护开关的测试初始状态应为开启');
+  await click(`${targetCard(0)} .actions .switch`);
   await flush();
-  const maintenanceToggleApplied = await read(`!document.querySelector(${JSON.stringify(`${card('target')} .actions input[type="checkbox"]`)}).checked`);
+  const maintenanceToggleApplied = await read(`!document.querySelector(${JSON.stringify(`${targetCard(0)} .actions input[type="checkbox"]`)}).checked`);
   check(maintenanceToggleApplied, '卡片维护开关没有响应点击');
   await click('#target-edit-panel .config-edit-actions button:last-child');
   await flush();
   check(writes().length === initialWrites, '管理域名的保存到页面提前写入了 KV');
-  const enabledAfterCommit = await read(`document.querySelector(${JSON.stringify(`${card('target')} .actions input[type="checkbox"]`)}).checked`);
+  const enabledAfterCommit = await read(`document.querySelector(${JSON.stringify(`${targetCard(0)} .actions input[type="checkbox"]`)}).checked`);
   if (surface === 'baseline' && maintenanceToggleApplied && enabledAfterCommit) {
     referenceDefects.push('基准页面保存编辑器时会恢复旧的维护开关；当前实现应保留编辑期间的新值。');
   } else check(!enabledAfterCommit, '提交编辑草稿覆盖了刚切换的维护开关');
@@ -144,7 +145,7 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     await setValue('#zone-id-1', 'fixture-second-zone');
     await click('#zone-edit-panel .config-edit-actions button:last-child');
     await flush();
-    await click(`${card('target')}:nth-child(2) .actions button:first-of-type`);
+    await click(`${targetCard(1)} .actions button:first-of-type`);
     await cdp.until(sessionId, 'Boolean(document.querySelector("#target-prefix-1")?.offsetWidth)');
     await setValue('#target-edit-panel select:first-of-type', '1');
     await setValue('#target-prefix-1', 'edited');
@@ -153,8 +154,8 @@ export async function auditConfigFlow(cdp, sessionId, surface, requests, fixture
     check(await read('Boolean(document.querySelector("#target-prefix-1")?.offsetWidth)'), '删除权限配置改变了正在编辑的管理域名身份');
     await click('#target-edit-panel .config-edit-actions button:last-child');
     await flush();
-    check(await read(`document.querySelectorAll(${JSON.stringify(card('target'))})[1].textContent.includes('edited.example.net')`), '删除 Zone 后的保存修改了错误的管理域名');
-    check(await read(`document.querySelectorAll(${JSON.stringify(card('target'))})[0].textContent.includes('edge.example.com')`), '编辑第二个管理域名时覆盖了第一个域名');
+    check(await read(`document.querySelector(${JSON.stringify(targetCard(1))}).textContent.includes('edited.example.net')`), '删除 Zone 后的保存修改了错误的管理域名');
+    check(await read(`document.querySelector(${JSON.stringify(targetCard(0))}).textContent.includes('edge.example.net')`), '删除权限配置后，第一个域名的前缀或权限回落错误');
     await click('#btn-cancel-config');
     await flush();
     check(writes().length === initialWrites + 2, '本地编辑验证产生了额外的 KV 写请求');

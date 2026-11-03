@@ -85,9 +85,9 @@ function differences(reference, current, width) {
 
 function workspaceFailures(current, width) {
   const failures = [];
-  const { overview, workbench, consoleCard, bindings } = current.boxes;
+  const { overview, workbench, consoleCard } = current.boxes;
   if (current.overflow) failures.push('页面横向溢出');
-  if (!overview || !workbench || !consoleCard || !bindings) return [...failures, '工作区卡片缺失'];
+  if (!overview || !workbench || !consoleCard) return [...failures, '工作区卡片缺失'];
   if (current.boxes.console?.height < 280) failures.push('工作台日志区域高度不足');
   if (width >= 992) {
     if (workbench.height < 480) failures.push('IP 管理和工作台高度不足');
@@ -96,8 +96,6 @@ function workspaceFailures(current, width) {
     if (Math.abs(workbench.y - consoleCard.y) > 1) failures.push('工作区卡片顶端未对齐');
     if (current.panelHeadingTops.length !== 2 || Math.abs(current.panelHeadingTops[0] - current.panelHeadingTops[1]) > 1) failures.push('工作区标题未对齐');
   }
-  if (Math.abs(bindings.x - overview.x) > 1 || Math.abs(bindings.width - overview.width) > 1) failures.push('域名绑定未与解析实况同宽对齐');
-  if (bindings.y < Math.max(workbench.y + workbench.height, consoleCard.y + consoleCard.height)) failures.push('域名绑定没有位于工作区下方');
   const centers = width <= 768 ? current.toolbarCenters.slice(1) : current.toolbarCenters;
   if (current.toolbarCenters.length !== 4 || Math.max(...centers) - Math.min(...centers) > 2) failures.push('加载栏操作按钮未居中对齐');
   if (width <= 768 && current.toolbarCenters[0] >= current.toolbarCenters[1]) failures.push('窄屏加载地址没有独占上方一行');
@@ -136,10 +134,11 @@ async function captureConfigStates(cdp, session, width, failures) {
 }
 
 async function captureBindings(cdp, session, width, failures) {
-  await cdp.click(session.sessionId, '.domain-binding-header');
-  await cdp.until(session.sessionId, 'document.querySelectorAll(".domain-binding-card[open] tbody select").length === 2');
+  const current = session.name === 'current';
+  await cdp.click(session.sessionId, current ? '.nav-tab[data-page="config"]' : '.domain-binding-header');
+  await cdp.until(session.sessionId, 'document.querySelectorAll(".domain-binding-card select.domain-binding-select").length === 2');
   session.bindings = await cdp.evaluate(session.sessionId, `
-    [...document.querySelectorAll('.domain-binding-card tbody tr')].map(row => ({
+    [...document.querySelectorAll('${current ? '.domain-binding-card .config-mini-card' : '.domain-binding-card tbody tr'}')].map(row => ({
       domain: row.querySelector('.domain-binding-name')?.textContent.trim(),
       pool: row.querySelector('select')?.value,
       options: [...row.querySelectorAll('option')].map(option => option.value),
@@ -153,13 +152,13 @@ async function captureBindings(cdp, session, width, failures) {
     if (JSON.stringify(session.bindings) !== JSON.stringify(expected)) failures.push('绑定域名、当前选择或完整可选池集合与测试数据不符');
   }
   await capture(cdp, session, width, 'bindings', failures);
-  await cdp.click(session.sessionId, '.domain-binding-header');
+  await cdp.click(session.sessionId, current ? '.nav-tab[data-page="dashboard"]' : '.domain-binding-header');
 }
 
 function writeReport(results, fatal) {
   const report = { reference: currentOnly ? null : referenceRef, mode: currentOnly ? 'functional' : 'baseline-comparison', generatedAt: new Date().toISOString(), flows: args.includes('--flows'),
     referenceDefects: [...new Set(results.flatMap((result) => result.sessions.flatMap((session) => session.referenceDefects ?? [])))],
-    coverage: ['运行面板', '域名池绑定展开与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
+    coverage: ['运行面板', '维护域名卡片内的 IP 池绑定与当前选择', '配置卡片', '基础配置展开与运行参数顺序', '权限编辑器', '管理域名编辑器',
       ...(args.includes('--flows') ? ['已列出的解析与配置保存流程', '浏览器并发与 DoH 超时的编辑、保存失败重试与还原',
         '两种排序的本地草稿、取消、背景关闭、保存失败重试与完整顺序', '当前实现排序的 Escape、焦点约束与归还、固定系统池',
         '24 个长名称自定义池、20 个长域名的滚动与取消，以及零或单条目的提示', '当前实现配置延迟返回时首次检测非 443 端口',

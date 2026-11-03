@@ -473,7 +473,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     const generation = orderGeneration.current;
     try {
       const module = orderModule.current ?? await import('./components/order-dialog');
-      if (currentPage.current !== 'dashboard' || generation !== orderGeneration.current) return;
+      if (currentPage.current !== (kind === 'pools' ? 'dashboard' : 'config') || generation !== orderGeneration.current) return;
       orderModule.current = module;
       setOrderRequest(module.createOrderRequest(kind, pools.status === 'ready' ? pools.data : null,
         bindings.status === 'ready' ? bindings.data : null));
@@ -612,10 +612,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     cleanPool: handleCleanPool,
     restoreTrash: handleRestoreTrash,
     clearTrash: handleClearTrash,
-    bindPool: handleBindPool,
-    openBindingOrder: () => void openOrderDialog('bindings'),
     refreshPools: () => void refreshPools(),
-    refreshBindings: () => void refreshBindings(),
     addRecord: handleAddRecord,
     deleteRecord: handleDeleteRecord,
     runMaintenance: handleRunMaintenance,
@@ -667,9 +664,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             poolBusy={poolBusy}
             consoleLogs={consoleLogs}
             batchProgressState={batchProgressState}
-            bindings={bindings}
-            bindingBusy={bindingBusy}
-            targetKeys={config.status === 'ready' ? targetKeys : []}
             targetStatus={targetStatus}
             selectedTargetKey={selectedTargetKey}
             targetPort={targetPort}
@@ -686,7 +680,9 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         </div>
         <div hidden={page !== 'config'}>
           {ConfigPage ? (
-            <ConfigPage client={client} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved} />
+            <ConfigPage client={client} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
+              pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
+              onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (
             <p class="text-secondary text-center py-4">正在加载配置中心…</p>
           )}
