@@ -1,20 +1,14 @@
-import type { ConfigResponse } from '../../../src/contracts/config';
 import type { HealthResponse } from '../../../src/contracts/probe';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
 
-export type GlobalSettingKey = 'scheduledEnabled' | 'tgEnabled';
-
 interface HeroProps {
   readonly health: RequestState<HealthResponse>;
-  readonly config: RequestState<ConfigResponse>;
-  readonly saving: boolean;
   readonly usageOpen: boolean;
   readonly onToggleUsage: () => void;
-  readonly onToggleSetting: (key: GlobalSettingKey, enabled: boolean) => void;
 }
 
-export function Hero({ health, config, saving, usageOpen, onToggleUsage, onToggleSetting }: HeroProps) {
+export function Hero({ health, usageOpen, onToggleUsage }: HeroProps) {
   return (
     <div class="container hero">
       <div class="hero-copy">
@@ -24,14 +18,6 @@ export function Hero({ health, config, saving, usageOpen, onToggleUsage, onToggl
           <div class="config-info"><span><Icon name="compass" /> 建议流程：导入IP → 检测 → 入库 → 执行维护</span></div>
         </div>
       </div>
-      <fieldset class="header-settings" aria-label="全局任务设置" aria-busy={saving} disabled={saving || config.status !== 'ready'}>
-        {config.status === 'ready' ? ([['scheduledEnabled', '自动维护', 'cfg-scheduled-enabled'], ['tgEnabled', 'Telegram 通知', 'cfg-tg-enabled']] as const).map(([key, label, id]) => (
-          <label class="setting-switch" key={key}>
-            <input id={id} type="checkbox" role="switch" checked={config.data.config[key]} onChange={(event) => onToggleSetting(key, event.currentTarget.checked)} />
-            <span class="setting-switch-track" aria-hidden="true" /><span>{label}</span>
-          </label>
-        )) : <span class="text-secondary small">{config.status === 'error' ? '配置读取失败' : '正在读取配置…'}</span>}
-      </fieldset>
       {health.status === 'error' && <div class="kv-alert"><strong>Worker API 暂不可用。</strong>{health.message}。页面仍可浏览，但检测和后续维护功能不可用。</div>}
       <div id="usage-guide" class="usage-guide" hidden={!usageOpen}>
         <ol>
