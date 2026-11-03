@@ -25,6 +25,7 @@ import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
+import { formatProbeLog } from './components/probe-log';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -68,6 +69,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const orderModule = useRef<OrderDialogModule | null>(null);
   const OrderDialog = orderModule.current?.OrderDialog;
   const startupLogged = useRef(false);
+  const loggedProbeDiagnostics = useRef(new Map<string, string>());
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -142,10 +144,33 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!configuredTargets) return;
     resetLookup();
     const controller = new AbortController();
+    loggedProbeDiagnostics.current.clear();
     void refreshTargetStatuses(controller.signal);
     void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
     return () => controller.abort();
   }, [configuredTargets, refreshTargetStatuses, resetLookup]);
+
+  /** 解析实况也是检测入口；异常逐项进工作台，同一加载过程不重复打印。 */
+  useEffect(() => {
+    if (targetStatuses.status !== 'ready') return;
+    for (const [key, state] of Object.entries(targetStatuses.data.byKey)) {
+      if (state.status === 'error') {
+        if (loggedProbeDiagnostics.current.get(key) !== state.message) {
+          loggedProbeDiagnostics.current.set(key, state.message);
+          appendConsoleLog('[解析 ' + key + '] ' + state.message, 'error');
+        }
+      } else if (state.status === 'ready') {
+        for (const item of state.data.probes) {
+          if (item.status === 'alive' && !item.diagnostics?.length && item.code !== 'PARTIAL_EXIT') continue;
+          const identity = key + ':' + item.address;
+          const message = formatProbeLog(item);
+          if (loggedProbeDiagnostics.current.get(identity) === message) continue;
+          loggedProbeDiagnostics.current.set(identity, message);
+          appendConsoleLog('[解析 ' + key + '] ' + item.address + ' · ' + message, item.status === 'dead' ? 'error' : 'warning');
+        }
+      }
+    }
+  }, [targetStatuses, appendConsoleLog]);
 
   /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
   useLayoutEffect(() => {
@@ -217,6 +242,10 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       .then((data) => {
         if (controller.signal.aborted || activeLookup.current !== controller) return;
         setCheck({ status: 'ready', data });
+        for (const item of data.items) {
+          appendConsoleLog('[探测] ' + item.address + ' · ' + formatProbeLog(item.result),
+            item.result.status === 'dead' ? 'error' : item.result.status === 'unknown' || item.result.diagnostics?.length ? 'warning' : 'success');
+        }
         const statuses = data.items.reduce((counts, item) => {
           counts[item.result.status] += 1;
           return counts;
@@ -237,6 +266,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleRefresh = (): void => {
     resetLookup();
+    loggedProbeDiagnostics.current.clear();
     appendConsoleLog('[系统] 正在并发刷新全部域名解析');
     void refreshTargetStatuses();
   };
