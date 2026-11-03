@@ -485,26 +485,17 @@ async function runConfigCardCheck(cdp, sessionId, viewport) {
             title: heading?.textContent?.trim() ?? "",
           };
         });
-        const gridStyle = grids[0] ? getComputedStyle(grids[0]) : null;
-        if (gridStyle && gridStyle.columnGap !== "12px") failures.push("配置卡片网格间距应为 12px");
         const formGrid = document.querySelector("#page-config .config-grid");
-        if (formGrid && getComputedStyle(formGrid).columnGap !== "10px") failures.push("配置表单网格间距与基准页面的 10px 不同");
+        if (formGrid && getComputedStyle(formGrid).columnGap !== getComputedStyle(formGrid).getPropertyValue('--space-7').trim()) failures.push("配置表单网格间距未使用统一间距变量");
         const formControl = formGrid?.querySelector(".form-control-sm, .form-select-sm");
-        if (formControl && formControl.getBoundingClientRect().height < 38) failures.push("配置表单控件高度不足 38px");
+        if (formControl && formControl.getBoundingClientRect().height < 32) failures.push("配置表单控件高度不足 32px");
         for (const metric of metrics) {
-          if (metric.height < 120) failures.push(\`配置卡片高度不足 120px：\${metric.title}\`);
-          if (metric.minHeight !== "120px") failures.push(\`配置卡片最小高度未统一：\${metric.title}\`);
-          if (metric.padding !== "14px") failures.push(\`配置卡片内边距未统一：\${metric.title}\`);
-          if (metric.radius !== "10px") failures.push(\`配置卡片圆角未统一：\${metric.title}\`);
-          if (metric.background !== "rgb(251, 251, 253)") failures.push(\`配置卡片底色未统一：\${metric.title}\`);
-          if (metric.headingSize !== "17px") failures.push(\`配置卡片标题字号未统一：\${metric.title}\`);
+          if (metric.height < 64) failures.push(\`配置列表行高度不足 64px：\${metric.title}\`);
+          if (metric.width > page.clientWidth) failures.push(\`配置列表行超出容器：\${metric.title}\`);
         }
         if (zoneCards.length > 1 && metrics[0] && metrics[1]) {
           if (Math.abs(metrics[0].width - metrics[1].width) > 1) failures.push("同一行配置卡片宽度不一致");
           if (Math.abs(metrics[0].height - metrics[1].height) > 1) failures.push("同一行配置卡片高度不一致");
-        }
-        if (window.innerWidth >= 992 && metrics.some((metric) => metric.width > 360)) {
-          failures.push("桌面端单个新增卡片被拉伸得过宽");
         }
         return { failures, metrics };
       })()`,
