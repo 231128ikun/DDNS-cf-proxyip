@@ -86,6 +86,35 @@ npm run deploy
 面板密码 `AUTH_KEY` 支持设置、修改和清空；为空时管理接口不启用鉴权。密码、Token 和实际资源 ID 不应提交到公共仓库。
 
 <details>
+<summary>可选环境变量</summary>
+
+在 Worker 的 **Settings → Variables and Secrets** 中配置。面板密码及 API/Bot Token 建议使用 **Secret**；其他项目可使用普通变量。未设置时使用以下默认值，配置中心保存的 KV 配置优先；环境变量用于首次启动及配置异常回退。
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `AUTH_KEY` | 可选面板登录密码；空值免登录 | 空 |
+| `CF_KEY` | Cloudflare DNS API Token | 空 |
+| `CF_ZONEID` | DNS 区域 ID | 空 |
+| `CF_BASE_DOMAIN` | 托管域名，如 `example.com` | 空 |
+| `CHECK_API` | 可选主检测接口 | 空 |
+| `CHECK_API_BACKUP` | 备用检测接口 | `https://checkapi.dvb.kdns.fr/?candidate=` |
+| `DOH_API` | DNS over HTTPS 查询接口 | `https://cloudflare-dns.com/dns-query` |
+| `CONCURRENT_CHECKS` | 检测并发，范围 1–128 | `32` |
+| `CHECK_TIMEOUT` | 单接口超时，500–30000 毫秒 | `15000` |
+| `REMOTE_LOAD_TIMEOUT` | 远程文本加载超时，1000–60000 毫秒 | `8000` |
+| `DOH_TIMEOUT` | DNS 查询超时，1000–30000 毫秒 | `5000` |
+| `TG_TOKEN` | Telegram Bot Token | 空 |
+| `TG_ID` | Telegram Chat ID | 空 |
+| `TG_ENABLED` | Telegram 通知开关 | `true` |
+| `SCHEDULED_ENABLED` | 定时维护开关 | `true` |
+
+未设置检测接口时沿用默认值；显式清空并保存会禁用对应接口。其他运行参数通过配置中心管理。
+
+`IP_DATA` 是 KV namespace 类型的资源绑定，不是普通文本变量。
+
+</details>
+
+<details>
 <summary>Cloudflare Token 与 Zone ID 获取方式</summary>
 
 - 在 [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) 使用 **Edit zone DNS** 模板，授权需要维护的域名。
