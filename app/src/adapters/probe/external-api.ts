@@ -7,11 +7,13 @@ import {
   type ExitFamily,
   type ProbeExit,
   type ProbeResult,
+  type ProbeDiagnostic,
 } from '../../domain/probe-result';
 import type { ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
 import { appFetch } from '../../util/fetch';
+import { createProbeRedactor, probeErrorMessage, probeResponseShape } from './diagnostics';
 import {
   firstText,
   readProbeExit,
@@ -27,11 +29,22 @@ export interface ExternalApiProbeEndpoint {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
+export interface ProbeFailureDiagnostic extends ProbeDiagnostic {
+  readonly target: string;
+  readonly attempt: number;
+  readonly phase: 'request' | 'body' | 'payload';
+  readonly latencyMs: number;
+  readonly httpStatus?: number;
+  readonly contentType?: string;
+  readonly responseShape?: string;
+}
+
 export interface ExternalApiProbeOptions {
   readonly endpoints: readonly ExternalApiProbeEndpoint[];
   readonly timeoutMs: number;
   readonly fallbackToNext?: boolean;
   readonly fetchImpl?: typeof fetch;
+  readonly onDiagnostic?: (diagnostic: ProbeFailureDiagnostic) => void;
 }
 
 export class ExternalApiProbeAdapter implements ProbeAdapter {
@@ -41,6 +54,8 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
   private readonly timeoutMs: number;
   private readonly fallbackToNext: boolean;
   private readonly fetchImpl: typeof fetch;
+  private readonly redact: (value: string) => string;
+  private readonly onDiagnostic: ((diagnostic: ProbeFailureDiagnostic) => void) | undefined;
 
   constructor(options: ExternalApiProbeOptions) {
     if (options.endpoints.length === 0) throw new Error('external-api probe requires at least one endpoint');
@@ -48,6 +63,8 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
     this.timeoutMs = options.timeoutMs;
     this.fallbackToNext = options.fallbackToNext ?? true;
     this.fetchImpl = options.fetchImpl ?? appFetch;
+    this.redact = createProbeRedactor(options.endpoints);
+    this.onDiagnostic = options.onDiagnostic;
   }
 
   async probe(target: ProxyTarget, context: ProbeContext = {}): Promise<ProbeResult> {
@@ -55,67 +72,73 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
       ? [this.endpoints[0]!, this.endpoints[0]!]
       : this.endpoints;
     let result: ProbeResult | undefined;
+    const diagnostics: ProbeDiagnostic[] = [];
+    const finish = (value: ProbeResult): ProbeResult => diagnostics.length ? { ...value, diagnostics } : value;
 
-    for (const endpoint of endpoints) {
+    for (const [index, endpoint] of endpoints.entries()) {
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
-      result = await this.probeEndpoint(target, endpoint, context);
+      const checked = await this.probeEndpoint(target, endpoint, context, index + 1);
+      result = checked.result;
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name });
-      if (result.status === 'alive' || !this.fallbackToNext) return result;
+      if (checked.diagnostic) {
+        const { endpoint, status, code, message } = checked.diagnostic;
+        diagnostics.push({ endpoint, status, ...(code ? { code } : {}), message });
+        try { this.onDiagnostic?.(checked.diagnostic); }
+        catch { console.warn('Probe diagnostic logger failed'); }
+      }
+      if (result.status === 'alive' || !this.fallbackToNext) return finish(result);
     }
-
-    // 最后一次异常不能被此前的失效结论覆盖。
-    return result ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口');
+    // 最后一次异常不能被此前的失效结论覆盖，之前的异常仍保留供排查。
+    return finish(result ?? unknown(target, 'NO_ENDPOINT', '没有可用的检测接口'));
   }
 
-  private async probeEndpoint(target: ProxyTarget, endpoint: ExternalApiProbeEndpoint, context: ProbeContext): Promise<ProbeResult> {
+  private async probeEndpoint(target: ProxyTarget, endpoint: ExternalApiProbeEndpoint, context: ProbeContext, attempt: number): Promise<{ result: ProbeResult; diagnostic?: ProbeFailureDiagnostic }> {
     const startedAt = Date.now();
     const timeout = createRequestTimeout(endpoint.timeoutMs ?? this.timeoutMs, context.signal);
-
+    let phase: ProbeFailureDiagnostic['phase'] = 'request';
+    let httpStatus: number | undefined;
+    let contentType: string | undefined;
+    let responseShape: string | undefined;
+    const finish = (value: ProbeResult): { result: ProbeResult; diagnostic?: ProbeFailureDiagnostic } => {
+      const result = value.message ? { ...value, message: this.redact(value.message) } : value;
+      if (result.code === 'CANCELLED' || (result.status !== 'unknown' && result.code !== 'TIMEOUT' && result.code !== 'PARTIAL_EXIT')) return { result };
+      return { result, diagnostic: { target: target.authority, endpoint: endpoint.name, attempt, phase,
+        status: result.status, ...(result.code ? { code: result.code } : {}), message: result.message ?? result.code ?? '检测异常', latencyMs: Date.now() - startedAt,
+        ...(httpStatus === undefined ? {} : { httpStatus }), ...(contentType ? { contentType } : {}), ...(responseShape ? { responseShape } : {}),
+      } };
+    };
     try {
       const url = buildProbeUrl(endpoint.urlTemplate, target);
       const init: RequestInit = { method: 'GET', signal: timeout.signal };
       if (endpoint.headers) init.headers = endpoint.headers;
-
       const response = await this.fetchImpl(url, init);
+      httpStatus = response.status;
+      const mime = response.headers.get('content-type')?.split(';')[0]?.trim();
+      contentType = ['application/json', 'text/html', 'text/plain'].includes(mime ?? '') ? mime : mime ? 'other' : undefined;
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
-        return unknown(target, 'HTTP_ERROR', `检测接口 HTTP ${response.status}`, {
-          endpoint: endpoint.name,
-          latencyMs: Date.now() - startedAt,
-        });
+        return finish(unknown(target, 'HTTP_ERROR', `检测接口 HTTP ${response.status}`, { endpoint: endpoint.name, latencyMs: Date.now() - startedAt }));
       }
-
+      phase = 'body';
       const text = await response.text();
+      phase = 'payload';
       let payload: unknown;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        return unknown(target, 'INVALID_JSON', '检测接口返回的 JSON 无法解析', {
-          endpoint: endpoint.name,
-          latencyMs: Date.now() - startedAt,
-        });
+      try { payload = JSON.parse(text); }
+      catch {
+        responseShape = (text.trim() ? /^\s*</.test(text) ? 'HTML' : 'non-JSON' : 'empty') + '(' + text.length + ')';
+        return finish(unknown(target, 'INVALID_JSON', '检测接口返回的 JSON 无法解析：' + responseShape,
+          { endpoint: endpoint.name, latencyMs: Date.now() - startedAt }));
       }
-
-      return parseProbePayload(payload, target, endpoint.name, Date.now() - startedAt);
+      responseShape = probeResponseShape(payload);
+      return finish(parseProbePayload(payload, target, endpoint.name, Date.now() - startedAt));
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
-      if (context.signal?.aborted) {
-        return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs });
-      }
+      if (context.signal?.aborted) return finish(unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs }));
       if (timeout.didTimeout() || isTimeoutError(error)) {
-        return dead(target, {
-          code: 'TIMEOUT', message: `检测超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`,
-          endpoint: endpoint.name,
-          latencyMs,
-        });
+        return finish(dead(target, { code: 'TIMEOUT', message: `检测超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, endpoint: endpoint.name, latencyMs }));
       }
-      return unknown(target, 'NETWORK_ERROR', '检测接口网络异常', {
-        endpoint: endpoint.name,
-        latencyMs,
-      });
-    } finally {
-      timeout.cleanup();
-    }
+      return finish(unknown(target, 'NETWORK_ERROR', '检测接口网络异常：' + probeErrorMessage(error), { endpoint: endpoint.name, latencyMs }));
+    } finally { timeout.cleanup(); }
   }
 }
 
@@ -127,11 +150,25 @@ export function buildProbeUrl(urlTemplate: string, target: ProxyTarget): string 
 function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: string, latencyMs: number): ProbeResult {
   const record = unwrapPayload(payload);
   if (!record) return unknown(target, 'INVALID_RESPONSE', '检测接口响应不是对象', { endpoint, latencyMs });
-  if (!isRecognizedPayload(record)) return unknown(target, 'INVALID_RESPONSE', '检测接口响应格式不可识别', { endpoint, latencyMs });
+  const message = readMessage(record);
+  if (!isRecognizedPayload(record)) return unknown(target, 'INVALID_RESPONSE', '检测接口响应格式不可识别' + (message ? '：' + message : '') + ' (' + probeResponseShape(payload) + ')', { endpoint, latencyMs });
 
   const statusText = readText(record.status)?.toLowerCase();
-  const message = readMessage(record);
   const infrastructureError = readProbeInfrastructureError(record);
+  const healthyExits = infrastructureError ? readProbeExits(record, true) : [];
+  // 一个出口栈失败不代表整节点失败；明确的全局异常或失败结论仍优先。
+  if (infrastructureError && healthyExits.length && record.apiError !== true
+    && readBooleanDecision(record) !== false && readStatusDecision(statusText) !== false
+    && !['error', 'invalid'].includes(statusText ?? '') && !readProbeInfrastructureError(record, false)) {
+    const exitIp = healthyExits.find(exit => exit.ip)?.ip;
+    const http = infrastructureError.match(PROBE_HTTP_ERROR_PATTERN);
+    const colo = readText(record.colo)?.toUpperCase();
+    return alive(target, { endpoint, latencyMs, code: 'PARTIAL_EXIT',
+      message: '部分出口探测异常：' + (http ? 'HTTP ' + http[1] : infrastructureError),
+      exits: healthyExits, exitFamily: pickExitFamily({}, exitIp, healthyExits),
+      ...(exitIp ? { exitIp } : {}), ...(colo && /^[A-Z]{3}$/.test(colo) ? { colo } : {}),
+    });
+  }
   if (infrastructureError) {
     if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(infrastructureError)) {
       return dead(target, { code: 'TIMEOUT', message: '节点连接超时', endpoint, latencyMs });
@@ -262,20 +299,21 @@ function pickExitIp(record: JsonRecord, exits: readonly ProbeExit[]): string | u
   return undefined;
 }
 
-function readProbeExits(record: JsonRecord): readonly ProbeExit[] {
+function readProbeExits(record: JsonRecord, healthyOnly = false): readonly ProbeExit[] {
   const exits: ProbeExit[] = [];
   const probes = asRecord(record.probe_results) ?? asRecord(record.probeResults) ?? asRecord(record.probes);
 
   if (probes) {
     for (const [stack, value] of Object.entries(probes)) {
       const probe = asRecord(value);
-      if (!probe || !isSuccessfulProbe(probe)) continue;
+      if (!probe || !isSuccessfulProbe(probe) || (healthyOnly && readProbeInfrastructureError(probe))) continue;
       const exit = asRecord(probe.exit) ?? asRecord(probe.egress) ?? asRecord(probe.result) ?? probe;
       const parsed = readProbeExit(exit, stack);
       if (parsed) exits.push(parsed);
     }
   }
 
+  if (healthyOnly) return uniqueExits(exits);
   const directValues = Array.isArray(record.exits) ? record.exits : [];
   for (const value of directValues) {
     const exit = asRecord(value);
@@ -294,6 +332,9 @@ function readProbeExits(record: JsonRecord): readonly ProbeExit[] {
 }
 
 function isSuccessfulProbe(probe: JsonRecord): boolean {
+  if (probe.apiError === true || probe.ok === false || probe.success === false
+    || ['error', 'invalid'].includes(readText(probe.status)?.toLowerCase() ?? '')
+    || readStatusDecision(readText(probe.status)?.toLowerCase()) === false) return false;
   return probe.ok === true || probe.success === true || readText(probe.status)?.toLowerCase() === 'success' || asRecord(probe.exit) !== null;
 }
 
@@ -317,10 +358,10 @@ function pickExitFamily(record: JsonRecord, exitIp: string | undefined, exits: r
   return exitFamilyFromIp(exitIp);
 }
 
-function readProbeInfrastructureError(record: JsonRecord): string | undefined {
+function readProbeInfrastructureError(record: JsonRecord, includeProbes = true): string | undefined {
   const messageKeys = ['message', 'errorMessage', 'detail', 'reason', 'error'];
   // 检查所有错误别名及嵌套消息，只匹配实际字符串，不把计时字段、空 error 或出口元数据当作错误。
-  for (const key of [...messageKeys, 'probe_results', 'probeResults', 'probes']) {
+  for (const key of [...messageKeys, ...(includeProbes ? ['probe_results', 'probeResults', 'probes'] : [])]) {
     const pending = [{ value: record[key], isMessage: messageKeys.includes(key) }];
     while (pending.length) {
       const { value, isMessage } = pending.pop()!;
@@ -349,7 +390,7 @@ function isProbeInfrastructureMessage(value: string): boolean {
 }
 
 function readMessage(record: JsonRecord): string | undefined {
-  const direct = firstText(record, ['message', 'errorMessage']);
+  const direct = firstText(record, ['message', 'errorMessage', 'detail', 'reason']);
   if (direct) return trimMessage(direct);
   const error = record.error;
   if (typeof error === 'string') return trimMessage(error);

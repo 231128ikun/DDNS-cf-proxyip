@@ -423,7 +423,7 @@ describe('complete public probe payload regressions', () => {
       endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
       timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
     });
-    expect(await adapter.probe(target)).toMatchObject({ status: code === 'TIMEOUT' ? 'dead' : 'unknown', code });
+    expect(await adapter.probe(target)).toMatchObject(success ? { status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' } : { status: code === 'TIMEOUT' ? 'dead' : 'unknown', code });
   });
 });
 
