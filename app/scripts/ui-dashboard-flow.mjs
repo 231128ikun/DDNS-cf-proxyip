@@ -87,6 +87,10 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   await cdp.until(sessionId, 'document.querySelector("#status-table").textContent.includes("203.0.113.55:443")');
   await click(surface === 'baseline' ? '[onclick="manualAddIP()"]' : '#manual-add-section button');
   await cdp.until(sessionId, 'document.querySelector("#status-table").textContent.includes("203.0.113.42:443")');
+  // 新记录先展示，刷新和探测结束后才清空输入；等待整个提交完成再验收最终状态。
+  await cdp.until(sessionId, surface === 'current'
+    ? '!document.querySelector("#manual-add-section button").disabled'
+    : 'document.querySelector("#manual-add-ip").value === ""');
   check(await read('document.querySelectorAll("#status-table tr").length === 3 && document.querySelector("#manual-add-ip").value === ""'), '添加成功后没有清空已提交输入并恢复当前 DNS 记录');
   await Promise.all([
     (async () => {
