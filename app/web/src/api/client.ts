@@ -91,8 +91,9 @@ export class ApiClient {
     content: string,
     mode: PoolSaveMode = 'replace',
     signal?: AbortSignal,
+    returnReceipt = false,
   ): Promise<PoolSaveResponse> {
-    return await this.request<PoolSaveResponse>(poolPath(key), 'PUT', { content, mode }, signal);
+    return await this.request<PoolSaveResponse>(poolPath(key), 'PUT', { content, mode, ...(returnReceipt ? { returnReceipt: true } : {}) }, signal);
   }
 
   async previewPool(key: string, content: string, mode: PoolSaveMode = 'append', signal?: AbortSignal): Promise<PoolPreviewResponse> {

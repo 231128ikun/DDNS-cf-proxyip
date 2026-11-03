@@ -36,10 +36,13 @@ export class PoolService {
     return await this.catalog.read(requirePoolKey(poolKey));
   }
 
-  async save(poolKey: unknown, content: unknown, modeValue?: unknown): Promise<PoolSaveResponse> {
+  async save(poolKey: unknown, content: unknown, modeValue?: unknown, returnReceiptValue?: unknown): Promise<PoolSaveResponse> {
+    if (returnReceiptValue !== undefined && typeof returnReceiptValue !== 'boolean') throw new PoolInputError('returnReceipt 必须是布尔值');
     const plan = await this.prepareSave(poolKey, content, modeValue);
     await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
-    return { ok: true, ...plan.summary };
+    return { ok: true, ...plan.summary,
+      ...(returnReceiptValue === true ? { receipt: { poolKey: plan.write.poolKey, content: plan.write.after, written: plan.changed } } : {}),
+    };
   }
 
   async preview(poolKey: unknown, content: unknown, modeValue?: unknown): Promise<PoolPreviewResponse> {

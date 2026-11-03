@@ -212,7 +212,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     return await mapApplicationInputError(async () => {
       const input = body.value as SavePoolRequest | null;
-      const result = await pools.save(context.params.key, input?.content, input?.mode);
+      const result = await pools.save(context.params.key, input?.content, input?.mode, input?.returnReceipt);
       const response: PoolSaveResponse = result;
       return jsonResponse(response);
     });
