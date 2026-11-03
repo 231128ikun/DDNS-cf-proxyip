@@ -40,7 +40,7 @@ export interface CheckTargetDependencies {
  * - `txt@域名` 取 TXT 里的地址列表；
  * - 裸域名先解析 A/AAAA；
  * - 带端口的域名和 IP 按字面目标处理。
- * 解析或探测失败只返回失败结果，不会把节点判成失效。
+ * 解析失败或探针异常不误判节点；节点检测超时按失效处理，此入口不写库或 DNS。
  */
 export class CheckTarget {
   private readonly concurrency: number;

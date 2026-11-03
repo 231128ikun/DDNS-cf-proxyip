@@ -1,3 +1,4 @@
+import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { describe, expect, it, vi } from 'vitest';
 
 import { KvPoolRepository } from '../../src/adapters/storage/kv-pool-repository';
@@ -18,7 +19,7 @@ class AddressingProbeAdapter implements ProbeAdapter {
 
   async probe(target: ProxyTarget): Promise<ProbeResult> {
     const authority = target.authority ?? '';
-    if (authority.startsWith('flaky.')) return unknown(target, 'TIMEOUT', 'timeout');
+    if (authority.startsWith('flaky.')) return unknown(target, 'NETWORK_ERROR', 'network error');
     if (authority.startsWith('dead.')) return dead(target, { code: 'connect-refused' });
     return alive(target, { endpoint: 'fake', exitIp: '198.51.100.8', exitFamily: 'ipv4' });
   }
@@ -203,4 +204,25 @@ describe('一键洗库完整性边界', () => {
     expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
     expect(trash.batches).toEqual([]);
   });
+});
+
+it('洗库将复检后仍超时的节点通过统一 KV 入口入桶并移出原池', async () => {
+  const timed = '203.0.113.10:443,AS64500,JP,v4 # 用户备注';
+  const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: [timed, '203.0.113.20:443 # 保留'].join('\n') });
+  const kv = {
+    get: async (key: string) => catalog.data.get(key) ?? null,
+    put: async (key: string, value: string) => { catalog.data.set(key, value); },
+  } as unknown as KVNamespace;
+  const trash = new KvPoolRepository(kv, { maxTrashSize: 1, now: () => new Date('2026-11-03T00:00:00Z') });
+  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }], timeoutMs: 1000,
+    fetchImpl: (async url => Response.json(String(url).includes('203.0.113.10')
+      ? { success: false, message: 'tcp connect timeout' } : { success: true })) as typeof fetch });
+  const cleaner = new CleanPool({ pools: new PoolService(catalog), catalog, trash, checkPool: new CheckPoolText(new CheckProxy(probe), 2) });
+  const addToTrash = vi.spyOn(trash, 'addToTrash');
+  expect(await cleaner.execute(DEFAULT_POOL_KEY)).toMatchObject({ checked: 2, kept: 1, trashed: 1, unknown: 0, skipped: false });
+  expect(addToTrash).toHaveBeenCalledTimes(1);
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).not.toContain('203.0.113.10');
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('203.0.113.20');
+  expect(catalog.data.get(TRASH_POOL_KEY)).toContain('203.0.113.10:443,AS64500,JP,v4 # 洗库失效');
+  expect(catalog.data.get(TRASH_POOL_KEY)).toContain('来自 ip_pool_default');
 });

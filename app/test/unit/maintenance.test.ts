@@ -41,11 +41,11 @@ describe('maintenance planning', () => {
       current: [
         currentItem('a1', '203.0.113.10:443', matchingResult),
         currentItem('a2', '203.0.113.11:443', dead(proxyTarget('203.0.113.11:443'))),
-        currentItem('a3', '203.0.113.12:443', unknown(proxyTarget('203.0.113.12:443'), 'TIMEOUT', 'timeout')),
+        currentItem('a3', '203.0.113.12:443', unknown(proxyTarget('203.0.113.12:443'), 'NETWORK_ERROR', 'network error')),
       ],
       candidates: [
         { entry: candidate, address: '203.0.113.20:443', value: '203.0.113.20', result: matchingResult },
-        { entry: candidate, address: '203.0.113.21:443', value: '203.0.113.21', result: unknown(proxyTarget('203.0.113.21:443'), 'TIMEOUT', 'timeout') },
+        { entry: candidate, address: '203.0.113.21:443', value: '203.0.113.21', result: unknown(proxyTarget('203.0.113.21:443'), 'NETWORK_ERROR', 'network error') },
       ],
       poolText: [
         '203.0.113.10:443 # active',

@@ -160,7 +160,7 @@ describe('MaintainManagedTarget', () => {
     const probe = new StubProbeAdapter(new Map([
       ['203.0.113.10:443', match('203.0.113.10:443')],
       ['203.0.113.11:443', dead(requireProxy('203.0.113.11:443'))],
-      ['203.0.113.12:443', unknown(requireProxy('203.0.113.12:443'), 'TIMEOUT', 'timeout')],
+      ['203.0.113.12:443', unknown(requireProxy('203.0.113.12:443'), 'NETWORK_ERROR', 'network error')],
       ['203.0.113.20:443', matchWithLatency('203.0.113.20:443', 120)],
       ['203.0.113.21:443', matchWithLatency('203.0.113.21:443', 260)],
     ]));
@@ -385,4 +385,35 @@ describe('external probe to maintenance safety', () => {
     expect(pools.value()).toBe(initial);
     expect(pools.trash).toEqual([]);
   });
+});
+
+it.each(['A', 'AAAA', 'TXT'] as const)('维护 %s 时将复检后仍超时的地址入桶并移出 DNS', async kind => {
+  const target = requireTarget({ mode: kind === 'TXT' ? 'TXT' : 'A', domain: 'edge.example.com', minActive: 1, port: 443 });
+  const host = kind === 'A' ? '203.0.113.10' : '2001:db8::10';
+  const address = kind === 'A' ? `${host}:443` : `[${host}]:${kind === 'TXT' ? 8443 : 443}`;
+  const healthy = '203.0.113.20:443';
+  const dns = kind === 'TXT'
+    ? new MemoryDnsRepository([], [{ id: 'txt-timeout', type: 'TXT', name: target.domain, content: `"${address},${healthy}"` }])
+    : new MemoryDnsRepository([
+      { id: 'timeout', type: kind, name: target.domain, content: host },
+      { id: 'healthy', type: 'A', name: target.domain, content: '203.0.113.20' },
+    ]);
+  const pools = new MemoryPoolRepository(`${address},AS64500,JP,${kind === 'A' ? 'v4' : 'v6'} # 用户备注\n${healthy}`);
+  const fetchImpl = vi.fn(async (url: RequestInfo | URL) => Response.json(new URL(String(url)).searchParams.get('proxyip') === address
+    ? { success: false, probe_results: { ipv6: { ok: false, error: 'tcp connect timeout' } } } : { success: true }));
+  const probe = new ExternalApiProbeAdapter({ endpoints: [
+    { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
+    { name: 'backup', urlTemplate: 'https://backup.example/?proxyip=' },
+  ], timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
+  const trash = vi.spyOn(pools, 'addToTrash');
+  const report = await new MaintainManagedTarget({ probe, pools, dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(report).toMatchObject({ dnsUpdated: true, probeErrors: 0, errors: [] });
+  expect(report.plan.current.map(item => item.decision)).toEqual(['remove-dead', 'active']);
+  expect(trash).toHaveBeenCalledTimes(1);
+  expect(pools.trash).toEqual([{ entryLine: `${address},AS64500,JP,${kind === 'A' ? 'v4' : 'v6'} # 用户备注`, reason: '维护失效', poolKey: 'ip_pool_default' }]);
+  expect(pools.value()).not.toContain(address);
+  expect(pools.value()).toContain(healthy);
+  if (kind === 'TXT') expect(dns.upserted).toEqual([{ recordId: 'txt-timeout', addresses: [healthy] }]);
+  else expect(dns.deleted).toEqual(['timeout']);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
 });

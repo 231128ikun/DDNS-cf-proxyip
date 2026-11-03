@@ -18,7 +18,7 @@ class RecordingProbe implements ProbeAdapter {
   async probe(target: ProxyTarget): Promise<ProbeResult> {
     this.probed.push(target.authority);
     if (this.verdict === 'dead') return dead(target);
-    if (this.verdict === 'unknown') return unknown(target, 'TIMEOUT', '探测超时');
+    if (this.verdict === 'unknown') return unknown(target, 'NETWORK_ERROR', '网络异常');
     return alive(target, { exitFamily: 'ipv4', exitIp: '198.51.100.8' });
   }
 }

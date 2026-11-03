@@ -102,8 +102,9 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
       if (context.signal?.aborted) {
         return unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs });
       }
-      if (timeout.didTimeout() || isAbortError(error)) {
-        return unknown(target, 'TIMEOUT', `检测超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, {
+      if (timeout.didTimeout() || isTimeoutError(error)) {
+        return dead(target, {
+          code: 'TIMEOUT', message: `检测超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`,
           endpoint: endpoint.name,
           latencyMs,
         });
@@ -133,7 +134,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const infrastructureError = readProbeInfrastructureError(record);
   if (infrastructureError) {
     if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(infrastructureError)) {
-      return unknown(target, 'TIMEOUT', '探针连接超时（节点状态未知）', { endpoint, latencyMs });
+      return dead(target, { code: 'TIMEOUT', message: '节点连接超时', endpoint, latencyMs });
     }
     const http = infrastructureError.match(PROBE_HTTP_ERROR_PATTERN);
     if (http) return unknown(target, 'HTTP_ERROR', `探针上游 HTTP ${http[1]}（节点状态未知）`, { endpoint, latencyMs });
@@ -361,6 +362,6 @@ function trimMessage(value: string): string | undefined {
   return trimmed ? trimmed.slice(0, 240) : undefined;
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
 }

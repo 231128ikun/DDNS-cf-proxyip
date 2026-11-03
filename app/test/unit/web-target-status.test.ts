@@ -177,6 +177,18 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     expect(writes).not.toHaveBeenCalled();
   });
 
+  it('displays timed-out nodes as dead without writing DNS or trash during status refresh', async () => {
+    const records: DnsRecord[] = [{ id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' }];
+    const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }], timeoutMs: 1000,
+      fetchImpl: (async () => Response.json({ success: false, message: 'tcp connect timeout' })) as typeof fetch });
+    const { client, writes, requests } = setup(records, 'A', undefined, probe);
+    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053);
+    expect(view.records).toEqual(records);
+    expect(view.probes).toMatchObject([{ status: 'dead', code: 'TIMEOUT' }]);
+    expect(requests.map(request => request.method)).toEqual(['GET', 'POST']);
+    expect(writes).not.toHaveBeenCalled();
+  });
+
   it('keeps a failed probe unknown and preserves its DNS record', async () => {
     const records: DnsRecord[] = [{ id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' }];
     const { client, writes } = setup(records, 'A', '203.0.113.10:2053');

@@ -12,7 +12,7 @@ import { PoolInputError, type PoolService } from './pool-service';
  *
  * 三条安全规则在服务端一次落地，面板不再自己拼步骤：
  * - 只要还有未确认项（探针异常或无法识别的行），整池不写回也不入桶；
- * - 只有可信探针明确判失效的条目才移入垃圾桶，垃圾桶仍只经过 `addToTrash` 一个入口；
+ * - 可信探针明确判失效或检测超时的条目移入垃圾桶，垃圾桶仍只经过 `addToTrash` 一个入口；
  * - 垃圾桶洗库只做恢复，失效条目留在桶里等下一次判断。
  */
 export class CleanPool {

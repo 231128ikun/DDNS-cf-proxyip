@@ -218,7 +218,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         const delay = fixture.probeDelays[address] ?? fixture.probeDelay;
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         const failure = fixture.probeErrors[address];
-        const result = failure ? { status: 'unknown', exitFamily: 'unknown', exits: [], ...failure }
+        const result = failure ? { status: failure.code === 'TIMEOUT' ? 'dead' : 'unknown', exitFamily: 'unknown', exits: [], ...failure }
           : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })

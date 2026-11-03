@@ -16,7 +16,10 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
       await click('#pool-action-trigger');
       const index = await read('[...document.querySelectorAll(".action-menu-item")].findIndex(item => item.textContent.includes("自定义池排序"))');
       await click(`.action-menu-item:nth-child(${index + 1})`);
-    } else await click('#domain-order-trigger');
+    } else {
+      await cdp.until(sessionId, 'Boolean(document.querySelector("#domain-order-trigger")?.offsetWidth)');
+      await click('#domain-order-trigger');
+    }
   };
   const run = async (name, task) => {
     Object.assign(fixture, createUiFixture());

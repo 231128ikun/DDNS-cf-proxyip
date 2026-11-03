@@ -98,7 +98,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       if (event.sourceComplete) batchCompleted.current.add(sourceIndex);
       const statusLabel = probeStatusLabel(event.item.status, event.item.code);
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
-      const detail = event.item.status === 'unknown' && event.item.message ? ` · ${event.item.message}` : '';
+      const detail = event.item.status !== 'alive' && event.item.message ? ` · ${event.item.message}` : '';
       appendConsoleLog(`[批量 ${event.completed}/${event.total}] ${event.item.address} · ${statusLabel}${detail}`, tone);
     }, webCheckConcurrency)
       .then((report) => {
