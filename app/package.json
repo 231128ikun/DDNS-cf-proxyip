@@ -26,7 +26,7 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only",
-    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
+    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs scripts/ui-browser.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
   },
   "dependencies": {
     "preact": "^10.29.8"
