@@ -22,3 +22,16 @@ it('redacts quoted credentials and does not print embedded raw response bodies',
   for (const value of ['private key value', 'private-auth', 'private-body']) expect(output).not.toContain(value);
   expect(output).toContain('TLS failed');
 });
+
+it('prints complete DNS addresses but omits ordinary successful probe progress', async () => {
+  const { formatDnsSnapshot, shouldLogProbe } = await import('../../web/src/components/probe-log');
+  const text = formatDnsSnapshot({ ok: true, domain: 'edge.example.com', mode: 'A', records: [
+    { id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' },
+    { id: 'aaaa', type: 'AAAA', name: 'edge.example.com', content: '2001:db8::10' },
+  ] });
+  expect(text).toContain('A 203.0.113.10');
+  expect(text).toContain('AAAA 2001:db8::10');
+  expect(shouldLogProbe({ status: 'alive' })).toBe(false);
+  expect(shouldLogProbe({ status: 'unknown', code: 'HTTP_ERROR' })).toBe(true);
+  expect(shouldLogProbe({ status: 'alive', diagnostics: [{ endpoint: 'primary', status: 'unknown', code: 'HTTP_ERROR', message: 'HTTP 503' }] })).toBe(true);
+});

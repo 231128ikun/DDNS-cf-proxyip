@@ -53,7 +53,7 @@ describe('TelegramNotifier', () => {
       fetchImpl: fetch.fetchImpl,
     });
 
-    expect(await notifier.send('x')).toEqual({ sent: false, reason: 'failed' });
+    expect(await notifier.send('x')).toMatchObject({ sent: false, reason: 'failed' });
   });
 
   it('reports failed instead of throwing when the request itself fails', async () => {
@@ -66,7 +66,7 @@ describe('TelegramNotifier', () => {
       }) as typeof fetch,
     });
 
-    expect(await notifier.send('x')).toEqual({ sent: false, reason: 'failed' });
+    expect(await notifier.send('x')).toMatchObject({ sent: false, reason: 'failed' });
   });
 
   it('skips the request when credentials are incomplete', async () => {
@@ -82,4 +82,40 @@ describe('TelegramNotifier', () => {
     expect(await notifier.send('x')).toEqual({ sent: false, reason: 'disabled' });
     expect(calls).toHaveLength(0);
   });
+});
+it('does not report a Telegram JSON rejection as sent even when HTTP is 200', async () => {
+  const fetch = createFetch(200, '{"ok":false,"error_code":400,"description":"Bad Request"}');
+  const result = await new TelegramNotifier({ enabled: true, token: 'fixture-token', chatId: 'fixture-chat', fetchImpl: fetch.fetchImpl }).send('test');
+  expect(result).toMatchObject({ sent: false, reason: 'failed' });
+});
+
+it('splits long reports at complete HTML lines without silently dropping addresses', async () => {
+  const fetch = createFetch();
+  const text = Array.from({ length: 500 }, (_, index) => '<code>node-' + index + '.example:443</code>').join('\n');
+  const result = await new TelegramNotifier({ enabled: true, token: 'fixture-token', chatId: 'fixture-chat', fetchImpl: fetch.fetchImpl }).send(text);
+  expect(result.sent).toBe(true);
+  expect(fetch.calls.length).toBeGreaterThan(1);
+  const parts = fetch.calls.map(call => JSON.parse(String(call.init.body)).text as string);
+  expect(parts.join('\n')).toBe(text);
+  expect(parts.every(part => part.length <= 3500)).toBe(true);
+});
+
+it('reports partial delivery without claiming complete success', async () => {
+  let count = 0;
+  const fetchImpl = (async () => new Response(++count === 1 ? '{"ok":true}' : '{"ok":false}', { status: count === 1 ? 200 : 503 })) as typeof fetch;
+  const notifier = new TelegramNotifier({ enabled: true, token: 'fixture-token', chatId: 'fixture-chat', fetchImpl });
+  const result = await notifier.send(Array.from({ length: 500 }, (_, index) => '<code>node-' + index + '.example:443</code>').join('\n'));
+  expect(result).toMatchObject({ sent: false, reason: 'failed', delivered: 1, code: 'HTTP_503' });
+  expect(result.total).toBeGreaterThan(1);
+  expect(count).toBe(2);
+});
+
+it('does not accept malformed Telegram JSON or lose blank lines between report parts', async () => {
+  const invalid = createFetch(200, 'not json');
+  expect(await new TelegramNotifier({ enabled: true, token: 'fixture', chatId: 'fixture', fetchImpl: invalid.fetchImpl }).send('report'))
+    .toMatchObject({ sent: false, reason: 'failed', code: 'INVALID_RESPONSE' });
+  const valid = createFetch();
+  const text = Array.from({ length: 300 }, (_, index) => '<code>node-' + index + '.example:443</code>\n').join('\n');
+  await new TelegramNotifier({ enabled: true, token: 'fixture', chatId: 'fixture', fetchImpl: valid.fetchImpl }).send(text);
+  expect(valid.calls.map(call => JSON.parse(String(call.init.body)).text).join('\n')).toBe(text);
 });

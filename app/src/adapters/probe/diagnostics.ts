@@ -1,3 +1,4 @@
+import { createPublicTextRedactor } from '../../contracts/public-text';
 import { asRecord } from '../../contracts/parse';
 
 interface DiagnosticEndpoint {
@@ -19,22 +20,7 @@ export function createProbeRedactor(endpoints: readonly DiagnosticEndpoint[]): (
       for (const value of url.pathname.split('/')) if (value && !value.includes('proxyip')) secrets.push(value);
     } catch { /* 无效接口 URL 由请求路径明确报错，不在这里输出原值。 */ }
   }
-  const values = [...new Set(secrets.filter(Boolean).flatMap(value => {
-    try { return [value, decodeURIComponent(value), encodeURIComponent(value), JSON.stringify(value).slice(1, -1)]; }
-    catch { return [value]; }
-  }))].sort((a, b) => b.length - a.length);
-  return value => {
-    let text = value;
-    for (const secret of values) text = text.split(secret).join('[redacted]');
-    text = text.replace(/https?:\/\/[^\s<>"']+/gi, raw => {
-      try { return new URL(raw).origin; } catch { return '[url]'; }
-    });
-    return text.replace(/\bbody\s*[:=][\s\S]*$/i, '[response body omitted]')
-      .replace(/\b(?:token|secret|password|authorization|cookie|auth[_-]?key|api[_-]?key|cf[_-]?(?:key|token)|tg[_-]?token)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,}]+)/gi, '[credential redacted]')
-      .replace(/Bearer\s+[^\s,"']+/gi, 'Bearer [redacted]')
-      .replace(/\b[a-f0-9]{32}\b/gi, '[resource-id]')
-      .replace(/[\r\n\t]+/g, ' ').trim().slice(0, 240);
-  };
+  return createPublicTextRedactor(secrets);
 }
 
 export function probeErrorMessage(error: unknown): string {

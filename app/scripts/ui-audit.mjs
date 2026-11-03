@@ -325,7 +325,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         if (document.querySelector('#manual-add-section')?.checkVisibility()) failures.push('未配置目标时不应显示 DNS 添加控件');
         if (document.querySelector('.domain-selector > button')) failures.push('未配置目标时多出独立跳转按钮');
         if (document.querySelector('.target-summary-meta')?.textContent !== '请先到配置中心添加') failures.push('空目标摘要与基准页面不同');
-        if (!document.querySelector('#log-window')?.textContent.includes('请先在配置中心添加管理域名')) failures.push('空配置缺少启动引导日志');
+        if (!document.querySelector('#log-window')?.textContent.includes('未设置维护域名，请在配置中心添加')) failures.push('空配置缺少启动引导日志');
         if (document.querySelector('#page-dashboard .domain-binding-card')) failures.push('运行面板不应保留重复绑定入口');
         }
         const original = "203.0.113.10:443\\n203.0.113.11:443";

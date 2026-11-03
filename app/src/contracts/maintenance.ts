@@ -1,3 +1,5 @@
+import type { NotifyResult } from './notification';
+import type { ProbeStatus } from '../domain/probe-result';
 import type { TargetMode } from '../domain/managed-target';
 
 export interface DomainBindingItem {
@@ -22,6 +24,31 @@ export interface SaveDomainBindingOrderRequest {
   readonly order: readonly string[];
 }
 
+export interface MaintenanceDnsState {
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+}
+
+export interface MaintenanceCandidateStats {
+  readonly total: number;
+  readonly checked: number;
+  readonly unknown: number;
+  readonly remaining: number;
+  readonly sourceCount?: number;
+}
+
+export interface MaintenanceAddressCheck {
+  readonly value: string;
+  readonly address: string;
+  readonly status: ProbeStatus;
+  readonly matchesTarget: boolean;
+  readonly details: string;
+  readonly code?: string;
+  readonly message?: string;
+}
+
 export interface MaintenanceRunResult {
   readonly domain: string;
   readonly mode: TargetMode;
@@ -32,6 +59,16 @@ export interface MaintenanceRunResult {
   readonly deleted: number;
   readonly probeErrors: number;
   readonly error: string | null;
+  readonly errors?: readonly string[];
+  readonly dns?: MaintenanceDnsState;
+  readonly activeCount?: number;
+  readonly minActive?: number;
+  readonly port?: number;
+  readonly checks?: readonly MaintenanceAddressCheck[];
+  readonly candidates?: MaintenanceCandidateStats;
+  readonly candidateErrors?: readonly { readonly code: string; readonly message: string; readonly count: number }[];
+  readonly archived?: number;
+  readonly lines?: readonly string[];
 }
 
 export interface MaintenanceRunResponse {
@@ -41,4 +78,8 @@ export interface MaintenanceRunResponse {
   readonly errors: readonly string[];
   readonly probeErrors: number;
   readonly results: readonly MaintenanceRunResult[];
+  readonly notification?: NotifyResult | null;
+  readonly notificationMessage?: string;
+  readonly message?: string;
+  readonly completed?: boolean;
 }

@@ -26,7 +26,7 @@ import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
-import { formatProbeLog } from './components/probe-log';
+import { formatProbeLog, formatDnsSnapshot, shouldLogProbe } from './components/probe-log';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -163,8 +163,13 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
           appendConsoleLog('[解析 ' + key + '] ' + state.message, 'error');
         }
       } else if (state.status === 'ready') {
+        const snapshot = formatDnsSnapshot(state.data);
+        if (loggedProbeDiagnostics.current.get(key + ':dns') !== snapshot) {
+          loggedProbeDiagnostics.current.set(key + ':dns', snapshot);
+          appendConsoleLog('[解析] ' + snapshot);
+        }
         for (const item of state.data.probes) {
-          if (item.status === 'alive' && !item.diagnostics?.length && item.code !== 'PARTIAL_EXIT') continue;
+          if (!shouldLogProbe(item)) continue;
           const identity = key + ':' + item.address;
           const message = formatProbeLog(item);
           if (loggedProbeDiagnostics.current.get(identity) === message) continue;
@@ -208,13 +213,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready' || pools.status !== 'ready' || !confirmedBindings) return;
     if (targetChoices.length && !selectedTargetKey) return;
     startupLogged.current = true;
-    appendConsoleLog('🚀 系统就绪', 'success');
-    appendConsoleLog(`⚙️ 配置: 并发${webCheckConcurrency} | 超时${config.data.config.settings.CHECK_TIMEOUT}ms`);
-    const target = targetChoices.find(item => item.key === selectedTargetKey);
-    if (target) appendConsoleLog(`切换到: ${target.domain} (${target.mode})`);
-    else appendConsoleLog('请先在配置中心添加管理域名', 'warning');
-    appendConsoleLog('✅ 已加载池配置', 'success');
-  }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices, webCheckConcurrency]);
+    appendConsoleLog(targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加', targetChoices.length ? 'success' : 'warning');
+  }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices]);
 
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
     setPoolBusy(key);
@@ -285,7 +285,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const handleSelectPool = (key: string): void => {
     setPoolKey(key);
     const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === key)?.name ?? key : key;
-    appendConsoleLog(`📦 切换到: ${name}`);
+    appendConsoleLog(`[IP池] 已选择 ${name}`);
   };
 
   /** 只读地把当前记录复制到池工作台，不在 DNS 层做任何写入。 */
@@ -315,7 +315,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       notify('请输入要添加的 IP', 'error');
       return Promise.resolve(false);
     }
-    appendConsoleLog(`[记录] 正在添加 ${input}`);
     return client.addRecord(selectedTargetKey, input)
       .then(async () => {
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
@@ -351,11 +350,9 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleLoadPool = (): void => {
     setLoadingPool(true);
-    appendConsoleLog(`[IP池] 正在读取 ${poolKey}`);
     client.readPool(poolKey)
       .then(({ content }) => {
         replaceIpText(content.replace(/\n$/, ''));
-        appendConsoleLog(`[IP池] 已读取 ${countPoolTextLines(content)} 条地址`, 'success');
         notify(content.trim() ? '已从库中加载' : '该池当前为空', content.trim() ? 'success' : 'error');
       })
       .catch((error: unknown) => {
@@ -377,7 +374,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       return;
     }
     setSavingPool(true);
-    appendConsoleLog(`[IP池] 正在保存 ${poolKey}`);
     client.savePool(poolKey, normalized)
       .then(async () => {
         const { content } = await client.readPool(poolKey);
@@ -396,7 +392,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleRemoveLines = (): void => {
     if (!ipText.trim()) {
-      appendConsoleLog('❌ 内容为空', 'error');
+      appendConsoleLog('输入为空，未移除地址', 'error');
       return;
     }
     const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.name ?? poolKey : poolKey;
@@ -594,23 +590,14 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     client.runMaintenance()
       .then(async (data) => {
         for (const item of data.results) {
-          appendConsoleLog(
-            `[维护] ${item.domain} (${item.mode}) · +${item.added} / -${item.deleted}${item.probeErrors ? ` · 探针异常 ${item.probeErrors} 次` : ''}${item.error ? ` · ${item.error}` : ''}`,
-            item.error ? 'error' : item.probeErrors ? 'warning' : 'success',
-          );
+          for (const line of item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')]) appendConsoleLog('[维护] ' + line, item.error ? 'error' : item.probeErrors ? 'warning' : 'success');
         }
-        for (const error of data.errors) appendConsoleLog(`[维护] ${error}`, 'error');
-        if (data.insufficient) appendConsoleLog('[维护] 可用 IP 不足', 'warning');
-        appendConsoleLog(
-          `[维护] 完成 · 更新 ${data.results.filter((item) => item.dnsUpdated).length} 个目标 / 探针异常 ${data.probeErrors} 次 / 错误 ${data.errors.length} 项`,
-          data.errors.length || data.probeErrors ? 'warning' : 'success',
-        );
+        const notification = data.notificationMessage;
+        if (notification) appendConsoleLog('[通知] ' + notification, data.notification?.reason === 'failed' ? 'error' : 'info');
+        appendConsoleLog('[维护] 结束', data.insufficient || data.errors.length || data.probeErrors ? 'warning' : 'success');
         await refreshBindings();
         await refreshPools();
-        notify(
-          data.changed ? '维护完成：DNS 已更新' : '维护完成：无需变更',
-          data.errors.length || data.probeErrors ? 'error' : 'success',
-        );
+        notify(data.message ?? '维护结束', data.completed === false ? 'error' : 'success');
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);

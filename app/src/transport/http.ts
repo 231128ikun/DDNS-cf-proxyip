@@ -1,3 +1,4 @@
+import { toMaintenanceRunResponse } from '../application/maintenance-summary';
 import type { CheckTarget, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
@@ -11,7 +12,7 @@ import {
   type AppConfig,
   type ConfigResponse,
 } from '../contracts/config';
-import type { MaintenanceRunResponse, SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
+import type { SaveDomainBindingOrderRequest, SaveDomainBindingsRequest } from '../contracts/maintenance';
 import type {
   CreatePoolRequest,
   CreatePoolResponse,
@@ -278,8 +279,8 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const maintenance = dependencies.maintenance;
     if (!maintenance) return errorResponse('maintenance unavailable', 503);
 
-    const { run } = await maintenance.run(true);
-    return jsonResponse(toMaintenanceResponse(run));
+    const { run, notification } = await maintenance.run(true);
+    return jsonResponse(toMaintenanceRunResponse(run, notification));
   });
 
   /** 只读查询 DNS；检测与写入使用各自的接口。 */
@@ -425,27 +426,6 @@ function remoteLoadStatus(reason: RemoteLoadFailure): number {
 }
 
 /** 维护结果只暴露面板需要的信息，绝不回传 Cloudflare 凭据。 */
-function toMaintenanceResponse(run: MaintenanceJobResult['run']): MaintenanceRunResponse {
-  return {
-    ok: true,
-    changed: run.changed,
-    insufficient: run.insufficient,
-    errors: run.errors,
-    probeErrors: run.probeErrors,
-    results: run.results.map(({ target, poolKey, poolName, report, error }) => ({
-      domain: target.domain,
-      mode: target.mode,
-      poolKey,
-      poolName,
-      dnsUpdated: report?.dnsUpdated ?? false,
-      added: report?.added ?? 0,
-      deleted: report?.deleted ?? 0,
-      probeErrors: report?.probeErrors ?? 0,
-      error: error ?? (report?.errors.length ? report.errors.join('；') : null),
-    })),
-  };
-}
-
 function toCheckTargetResponse(report: CheckTargetReport): CheckTargetResponse {
   const { source } = report;
   return {

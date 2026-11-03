@@ -7,7 +7,7 @@ import { errorMessage, isAbort } from '../api/errors';
 import type { ConsoleTone, PoolCheckProgressState } from '../components/dashboard-page';
 import type { RequestState } from './request-state';
 import { mergeBatchProgress, remainingBatch } from './batch-resume';
-import { formatProbeLog } from '../components/probe-log';
+import { formatProbeLog, shouldLogProbe } from '../components/probe-log';
 
 /** 批量检测中断时的进度摘要。 */
 interface BatchInterrupt {
@@ -86,7 +86,6 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: 0, total });
     appendConsoleLog(`[批量] ${resume ? '继续检测未完成项' : '开始检测清洗'} · ${total} 个地址`);
-    appendConsoleLog(`[批量] 浏览器并发 ${webCheckConcurrency}，每个地址独立请求`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: event.completed, total: event.total });
@@ -98,7 +97,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       if (event.sourceComplete) batchCompleted.current.add(sourceIndex);
       const statusLabel = formatProbeLog(event.item);
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
-      appendConsoleLog(`[批量 ${event.completed}/${event.total}] ${event.item.address} · ${statusLabel}`, tone);
+      if (shouldLogProbe(event.item)) appendConsoleLog(`[批量] ${event.item.address} · ${statusLabel}`, tone);
     }, webCheckConcurrency)
       .then((report) => {
         if (activeBatch.current !== controller) return;

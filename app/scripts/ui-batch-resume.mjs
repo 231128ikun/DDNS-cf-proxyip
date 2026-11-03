@@ -21,7 +21,7 @@ export async function auditBatchResume(cdp, sessionId, base, requests, fixture, 
     })()`);
     const start = requests.length;
     await cdp.click(sessionId, '#main-actions button:first-child');
-    await cdp.until(sessionId, 'document.querySelector("#log-window")?.textContent.includes("[批量 2/")');
+    await cdp.until(sessionId, "Number(document.querySelector('[role=progressbar]')?.getAttribute('aria-valuetext')?.split(' ')[1]) >= 2");
 
     assert(await read('document.querySelector("#ip-input").readOnly'), '批量检测期间仍可编辑源输入，会破坏续检状态');
     assert(await read('document.querySelector("#pool-selector").disabled'), '批量检测期间仍可切换目标 IP 池');
@@ -49,6 +49,7 @@ export async function auditBatchResume(cdp, sessionId, base, requests, fixture, 
       '继续检测完成后没有保留完整输入数量');
     assert(await read(`document.querySelector("#ip-input").value.trim() === ${JSON.stringify(addresses.map(address => `${address},AS64500,US,v4`).join('\n'))}`),
       '继续检测完成后已完成和未完成项没有统一规范');
+    assert(await read('![...document.querySelectorAll("#log-window .console-event")].some(entry => entry.textContent.includes("[批量 1/") || entry.textContent.includes("[批量 2/"))'), '普通成功进度不应逐地址刷入日志');
     await capture?.('batch-resume');
   } catch (error) {
     failures.push(`batch-resume: ${error.message}`);

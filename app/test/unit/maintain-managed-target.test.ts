@@ -426,3 +426,84 @@ it.each(['A', 'AAAA', 'TXT'] as const)('does not delete the sole %s DNS source w
   expect(dns.upserted).toEqual([]);
   expect(report).toMatchObject({ dnsUpdated: false, deleted: 0, added: 0, errors: ['写入垃圾桶失败'] });
 });
+
+it('counts distinct active DNS addresses rather than duplicate records and probes each current address once', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 3 });
+  const dns = new MemoryDnsRepository([
+    { id: 'one', type: 'A', name: target.domain, content: '203.0.113.10' },
+    { id: 'duplicate', type: 'A', name: target.domain, content: '203.0.113.10' },
+    { id: 'two', type: 'A', name: target.domain, content: '203.0.113.11' },
+  ]);
+  const pools = new MemoryPoolRepository('203.0.113.12:443');
+  const probe = new StubProbeAdapter(new Map(['10', '11', '12'].map(last => {
+    const address = '203.0.113.' + last + ':443';
+    return [address, match(address)];
+  })));
+  const report = await new MaintainManagedTarget({ probe, pools, dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(dns.added).toEqual([{ host: '203.0.113.12', type: 'A' }]);
+  expect(probe.calls.filter(address => address === '203.0.113.10:443')).toHaveLength(1);
+  expect(report.activeCount).toBe(3);
+  expect(report.dns?.after).toEqual(['203.0.113.10', '203.0.113.11', '203.0.113.12']);
+});
+
+it('continues past the first uncertain candidate window until it finds the missing verified address', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 3 });
+  const dns = new MemoryDnsRepository(['10', '11'].map(last => ({ id: last, type: 'A' as const, name: target.domain, content: '203.0.113.' + last })));
+  const candidates = ['20', '21', '22', '23', '24', '25'];
+  const pools = new MemoryPoolRepository(candidates.map(last => '203.0.113.' + last + ':443').join('\n'));
+  const results = new Map<string, ProbeResult>();
+  for (const last of ['10', '11', ...candidates]) {
+    const address = '203.0.113.' + last + ':443';
+    results.set(address, ['20', '21', '22'].includes(last) ? unknown(requireProxy(address), 'HTTP_ERROR', 'HTTP 503') : match(address));
+  }
+  const report = await new MaintainManagedTarget({ probe: new StubProbeAdapter(results), pools, dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(report.activeCount).toBe(3);
+  expect(report.probeErrors).toBe(3);
+  expect(dns.added).toEqual([{ host: '203.0.113.23', type: 'A' }]);
+  expect(pools.trash).toEqual([]);
+});
+
+it('reports the actual active count when adding the planned DNS address fails', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 3 });
+  const dns = new MemoryDnsRepository(['10', '11'].map(last => ({ id: last, type: 'A' as const, name: target.domain, content: '203.0.113.' + last })));
+  vi.spyOn(dns, 'addAddressRecord').mockRejectedValueOnce(new Error('fixture write failure'));
+  const results = new Map(['10', '11', '12'].map(last => { const address = '203.0.113.' + last + ':443'; return [address, match(address)]; }));
+  const report = await new MaintainManagedTarget({ probe: new StubProbeAdapter(results), pools: new MemoryPoolRepository('203.0.113.12:443'), dns })
+    .execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(report.plan.activeCount).toBe(3);
+  expect(report.activeCount).toBe(2);
+  expect(report.dns?.after).toEqual(['203.0.113.10', '203.0.113.11']);
+});
+
+it('continues with untested candidates on the next run when an uncertain scan reaches its budget', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 3 });
+  const dns = new MemoryDnsRepository(['10', '11'].map(last => ({ id: last, type: 'A' as const, name: target.domain, content: '203.0.113.' + last })));
+  const candidates = Array.from({ length: 13 }, (_, index) => '203.0.113.' + (20 + index) + ':443');
+  const pools = new MemoryPoolRepository(candidates.join('\n'));
+  const values = new Map<string, ProbeResult>();
+  for (const address of ['203.0.113.10:443', '203.0.113.11:443', ...candidates]) values.set(address,
+    address === candidates[12] || address.endsWith('.10:443') || address.endsWith('.11:443') ? match(address) : unknown(requireProxy(address), 'HTTP_ERROR', 'HTTP 503'));
+  const service = new MaintainManagedTarget({ probe: new StubProbeAdapter(values), pools, dns });
+  const first = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(first.activeCount).toBe(2);
+  expect(first.candidates).toMatchObject({ checked: 12, remaining: 1, unknown: 12 });
+  expect(pools.value().split('\n')[0]).toBe(candidates[12]);
+  const next = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(next.activeCount).toBe(3);
+  expect(dns.added).toEqual([{ host: '203.0.113.32', type: 'A' }]);
+  expect(pools.trash).toEqual([]);
+});
+
+it('does not replace an invalid DNS record verdict with a successful duplicate-family probe', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 1 });
+  const dns = new MemoryDnsRepository([
+    { id: 'invalid', type: 'A', name: target.domain, content: '2001:db8::10' },
+    { id: 'valid', type: 'AAAA', name: target.domain, content: '2001:db8::10' },
+  ]);
+  const address = '[2001:db8::10]:443';
+  const probe = new StubProbeAdapter(new Map([[address, match(address)]]));
+  const result = await new MaintainManagedTarget({ probe, pools: new MemoryPoolRepository(), dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(result.plan.current.map(item => item.decision)).toEqual(['keep-unknown', 'active']);
+  expect(result.plan.current[0]!.item.result.code).toBe('INVALID_DNS_VALUE');
+  expect(probe.calls).toEqual([address]);
+});
