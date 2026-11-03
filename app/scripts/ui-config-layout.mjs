@@ -1,4 +1,4 @@
-/** Credential layout and clear/cancel regression; all requests use the in-memory fixture. */
+/** Compact settings and credential actions; all requests use the in-memory fixture. */
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -34,35 +34,35 @@ try {
       await cdp.until(sessionId, 'Boolean(document.querySelector(".config-details-summary")?.offsetWidth)');
       await cdp.click(sessionId, '.config-details-summary > :first-child');
       await cdp.until(sessionId, 'Boolean(document.querySelector("#cfg-tg-token")?.offsetWidth)');
+      await cdp.until(sessionId, '[...document.querySelectorAll(".ui-icon")].filter(icon => icon.checkVisibility()).every(icon => { const box = icon.getBBox(); return box.width > 0 && box.height > 0; })');
       const state = `${configured ? 'configured' : 'empty'}-${width}`;
       const issues = await read(`(() => {
         const issues = [];
+        const basics = document.querySelector('.config-details').getBoundingClientRect();
+        if (innerWidth >= 992 && basics.height > 800) issues.push('basic settings exceed a compact desktop panel');
+        if (innerWidth >= 992 && basics.top > 200) issues.push('header pushes settings below the first screen');
         const reference = document.querySelector('#cfg-doh').getBoundingClientRect();
+        if (document.querySelector('.field button, .secret-state')) issues.push('routine fields contain auxiliary actions or badges');
+        if (document.querySelector('.config-details .switch-slider')) issues.push('routine settings contain decorative switches');
         for (const id of ['cfg-auth-key', 'cfg-tg-token']) {
           const input = document.getElementById(id);
           const field = input.closest('.field');
-          const action = field.querySelector('button');
           const box = input.getBoundingClientRect();
           const area = field.getBoundingClientRect();
           if (Math.abs(box.height - reference.height) > 1) issues.push(id + ': control height differs');
           if (!input.labels.length) issues.push(id + ': missing associated label');
+          if (innerWidth > 768 && id === 'cfg-auth-key' && Math.abs(box.top - reference.top) > 1) issues.push(id + ': paired inputs are not aligned');
           if (box.width < 140 || box.left < area.left - 1 || box.right > area.right + 1) issues.push(id + ': input does not fit field');
-          if (!action) continue;
-          if (action.closest('label')) issues.push(id + ': action nested inside input label');
-          const range = document.createRange();
-          range.selectNodeContents(action);
-          if (range.getBoundingClientRect().height > parseFloat(getComputedStyle(action).lineHeight) + 1) issues.push(id + ': action label wraps');
-          const button = action.getBoundingClientRect();
-          if (button.left < box.right || button.right > area.right + 1) issues.push(id + ': action overlaps field');
         }
         if (document.documentElement.scrollWidth > innerWidth) issues.push('page overflows viewport');
         return issues;
       })()`);
       failures.push(...issues.map(issue => `${state}: ${issue}`));
       if (configured) {
-        const action = '#cfg-tg-token';
+        await cdp.click(sessionId, '.config-options > summary');
+        const action = '#cfg-clear-tgToken';
         const clickAction = async () => {
-          await read(`document.querySelector(${JSON.stringify(action)}).closest('.field').querySelector('button').click()`);
+          await cdp.click(sessionId, action);
           await read('new Promise(resolve => requestAnimationFrame(resolve))');
         };
         const writes = () => server.requests.filter(item => item.path === '/api/config' && item.method === 'PUT').length;
@@ -72,12 +72,22 @@ try {
         await clickAction();
         assert(await read('!document.querySelector("#cfg-tg-token").disabled'), `${state}: cancel did not restore input`);
         assert.equal(writes(), before, `${state}: clear/cancel wrote configuration before save`);
+        await cdp.click(sessionId, '.config-options > summary');
       }
       await read('window.scrollTo({ top: 0, behavior: "instant" })');
       const { cssContentSize: size } = await cdp.send('Page.getLayoutMetrics', {}, sessionId);
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
         clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } }, sessionId);
       writeFileSync(join(out, `${state}.png`), Buffer.from(shot.data, 'base64'));
+      if (configured && width === 1440) {
+        await cdp.click(sessionId, '.config-options > summary');
+        await cdp.click(sessionId, '#cfg-clear-tgToken');
+        assert.equal(server.fixture.config.tgToken, 'fixture-telegram-token', 'Selecting clear persisted before Save');
+        await cdp.click(sessionId, '#btn-save-config');
+        await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
+        assert.equal(server.fixture.config.tgToken, '', 'Explicit Save did not clear the selected credential');
+        assert.equal(server.fixture.config.authKey, 'fixture-panel-key', 'Clearing Telegram changed the untouched panel key');
+      }
       console.log(`${state}: ${issues.length ? issues.join('; ') : 'PASS'}`);
     }
   }

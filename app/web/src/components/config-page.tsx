@@ -292,28 +292,32 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
         </summary>
         <div class="config-details-body">
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
-          <div class="switch-row mb-3">
-            <label class="switch">
-              <input type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} />
-              <span class="switch-slider" /><span>自动维护</span>
-            </label>
-            <label class="switch">
-              <input type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} />
-              <span class="switch-slider" /><span>TG通知</span>
-            </label>
-          </div>
-
-          <div class="config-grid mb-3">
-            <TextField id="cfg-check-api" label="检测 API" help="可留空使用备用接口；支持 {proxyip} 占位符。" span={2} value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
-            <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；只配一个接口时复用该接口。" span={2} value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
+          <div class="config-grid config-group">
+            <TextField id="cfg-check-api" label="检测 API" help="留空使用备用接口；支持 {proxyip} 占位符。" value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
+            <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；单接口时复用原接口。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
-            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="为空则关闭前端鉴权。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} onToggleClear={() => setClearing((current) => ({ ...current, authKey: !current.authKey }))} />
-            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 TG 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} onToggleClear={() => setClearing((current) => ({ ...current, tgToken: !current.tgToken }))} />
+            <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} clearing={clearing.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
+            <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} clearing={clearing.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
-            {SETTINGS_FIELDS.map(([key, label, help, id]) => (
-              <NumberField key={key} id={id} label={label} help={help} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
-            ))}
           </div>
+          <section class="config-group" aria-labelledby="config-runtime-title">
+            <h3 id="config-runtime-title">运行参数</h3>
+            <div class="config-grid config-runtime-grid">
+              {SETTINGS_FIELDS.map(([key, label, help, id]) => (
+                <NumberField key={key} id={id} label={label} help={help} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
+              ))}
+            </div>
+          </section>
+          <details class="config-options">
+            <summary>高级选项</summary>
+            <div class="config-options-list">
+              <label><input id="cfg-scheduled-enabled" type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} /> 自动维护</label>
+              <label><input id="cfg-tg-enabled" type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} /> Telegram 通知</label>
+              {(['authKey', 'tgToken'] as const).map((key) => secrets[key] && (
+                <label class="text-danger" key={key}><input id={`cfg-clear-${key}`} type="checkbox" checked={clearing[key]} onChange={(event) => { const checked = event.currentTarget.checked; setClearing((current) => ({ ...current, [key]: checked })); }} /> 清除{SECRET_LABELS[key]}（保存后生效）</label>
+              ))}
+            </div>
+          </details>
         </div>
       </details>
 
@@ -395,7 +399,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved }: 
               <div class="actions">
                 <label class="switch" title="单独控制这个域名是否参与维护">
                   <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
-                  <span class="switch-slider" />
+                  <span>维护</span>
                 </label>
                 <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => editTarget(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeTarget(index)}>删除</button>
@@ -522,7 +526,6 @@ function TextField({
   placeholder,
   type = 'text',
   autoComplete,
-  span,
   onValue,
 }: {
   readonly id: string;
@@ -532,13 +535,12 @@ function TextField({
   readonly placeholder?: string;
   readonly type?: string;
   readonly autoComplete?: string;
-  readonly span?: 2;
   readonly onValue: (value: string) => void;
 }) {
   return (
-    <label class={`field${span ? ' span-2' : ''}`} for={id}>
-      <span>{label}</span>
-      {help && <small>{help}</small>}
+    <div class="field">
+      <label class="field-label" for={id}>{label}</label>
+      {help && <small id={`${id}-help`}>{help}</small>}
       <input
         id={id}
         type={type}
@@ -546,9 +548,10 @@ function TextField({
         value={value}
         placeholder={placeholder}
         autocomplete={autoComplete}
+        aria-describedby={help ? `${id}-help` : undefined}
         onInput={(event) => onValue(event.currentTarget.value)}
       />
-    </label>
+    </div>
   );
 }
 
@@ -572,9 +575,9 @@ function NumberField({
   readonly onChange: (value: string) => void;
 }) {
   return (
-    <label class="field">
-      <span>{label}</span>
-      <small>{help}</small>
+    <div class="field">
+      <label class="field-label" for={id}>{label}</label>
+      <small id={`${id}-help`}>{help}</small>
       <input
         id={id}
         type={disabled ? 'text' : 'number'}
@@ -582,10 +585,11 @@ function NumberField({
         class="form-control form-control-sm"
         min={min}
         max={max}
+        aria-describedby={`${id}-help`}
         value={value}
         onInput={(event) => onChange(event.currentTarget.value)}
       />
-    </label>
+    </div>
   );
 }
 
@@ -598,7 +602,6 @@ function SecretField({
   value,
   clearing,
   onValue,
-  onToggleClear,
 }: {
   readonly id: string;
   readonly label: string;
@@ -608,30 +611,22 @@ function SecretField({
   readonly value: string;
   readonly clearing: boolean;
   readonly onValue: (value: string) => void;
-  readonly onToggleClear: () => void;
 }) {
   return (
     <div class="field">
-      <label class="field-label" for={id}>{label} {configured && <span class="record-badge">已配置</span>}</label>
-      <small id={`${id}-help`}>{help}</small>
-      <div class="secret-control">
-        <input
-          id={id}
-          type="password"
-          class="form-control form-control-sm"
-          value={value}
-          disabled={clearing}
-          autocomplete="new-password"
-          aria-describedby={`${id}-help`}
-          placeholder={configured ? '留空保持不变' : placeholder}
-          onInput={(event) => onValue(event.currentTarget.value)}
-        />
-        {configured && (
-          <button class="btn btn-sm btn-outline-danger" type="button" aria-label={`${clearing ? '取消清除' : '清除'}${label}`} aria-pressed={clearing} onClick={onToggleClear}>
-            {clearing ? '取消清除' : '清除'}
-          </button>
-        )}
-      </div>
+      <label class="field-label" for={id}>{label}</label>
+      <small id={`${id}-help`}>{clearing ? '保存后清除；可在高级选项中取消。' : help}</small>
+      <input
+        id={id}
+        type="password"
+        class="form-control form-control-sm"
+        value={value}
+        disabled={clearing}
+        autocomplete="new-password"
+        aria-describedby={`${id}-help`}
+        placeholder={clearing ? '保存后清除' : configured ? '已配置，留空保持不变' : placeholder}
+        onInput={(event) => onValue(event.currentTarget.value)}
+      />
     </div>
   );
 }
@@ -652,7 +647,7 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
   };
 }
 
-/** 密钥留空时沿用旧值；只有用户明确点击“清除”才提交空字符串。 */
+/** 密钥留空时沿用旧值；只有用户在高级选项中勾选清除才提交空字符串。 */
 function buildUpdate(form: ConfigForm, drafts: SecretDrafts, clearing: SecretClearing): ConfigUpdateRequest {
   const settings = Object.fromEntries(
     SETTINGS_FIELDS.map(([key, label]) => [

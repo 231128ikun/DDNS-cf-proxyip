@@ -1,7 +1,7 @@
 import type { DomainBindingItem, DomainBindingsResponse } from '../../../src/contracts/maintenance';
 import type { HealthResponse } from '../../../src/contracts/probe';
 import type { RequestState } from '../state/request-state';
-import { Icon, iconText } from './icon';
+import { Icon } from './icon';
 import { RecordBadge } from './record-badge';
 
 interface HeroProps {
@@ -28,7 +28,7 @@ export function Hero({
   return (
     <div class="container hero">
       <div class="hero-copy">
-        <h1>{`${iconText('globe')} DDNS Pro 多域名管理`}</h1>
+        <h1><Icon name="globe" /> DDNS Pro 多域名管理</h1>
         <div class="hero-actions">
           <button
             type="button"
@@ -53,9 +53,9 @@ export function Hero({
 
       <div id="usage-guide" class="usage-guide" hidden={!usageOpen}>
         <ol>
-          <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【{iconText('activity')} 检测】筛出可用 IP。</li>
-          <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【{iconText('save')} 入库】将可用 IP 入库。</li>
-          <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【{iconText('wrench')} 执行全部维护】或依靠定时任务自动维护。</li>
+          <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【检测】筛出可用 IP。</li>
+          <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【入库】将可用 IP 入库。</li>
+          <li><strong>执行维护</strong>：在顶部选择要维护的域名，点击右侧【执行全部维护】或依靠定时任务自动维护。</li>
         </ol>
       </div>
 
