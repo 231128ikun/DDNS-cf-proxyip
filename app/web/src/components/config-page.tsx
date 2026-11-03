@@ -611,10 +611,10 @@ function SecretField({
   readonly onToggleClear: () => void;
 }) {
   return (
-    <label class="field">
-      <span>{label} {configured && <span class="record-badge">已配置</span>}</span>
-      <small>{help}</small>
-      <div class="d-flex gap-2">
+    <div class="field">
+      <label class="field-label" for={id}>{label} {configured && <span class="record-badge">已配置</span>}</label>
+      <small id={`${id}-help`}>{help}</small>
+      <div class="secret-control">
         <input
           id={id}
           type="password"
@@ -622,16 +622,17 @@ function SecretField({
           value={value}
           disabled={clearing}
           autocomplete="new-password"
+          aria-describedby={`${id}-help`}
           placeholder={configured ? '留空保持不变' : placeholder}
           onInput={(event) => onValue(event.currentTarget.value)}
         />
         {configured && (
-          <button class="btn btn-sm btn-outline-danger" type="button" onClick={onToggleClear}>
+          <button class="btn btn-sm btn-outline-danger" type="button" aria-label={`${clearing ? '取消清除' : '清除'}${label}`} aria-pressed={clearing} onClick={onToggleClear}>
             {clearing ? '取消清除' : '清除'}
           </button>
         )}
       </div>
-    </label>
+    </div>
   );
 }
 

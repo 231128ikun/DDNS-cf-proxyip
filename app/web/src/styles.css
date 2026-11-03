@@ -611,7 +611,7 @@ body {
   gap: var(--field-gap);
   min-width: 0;
 }
-.field > span {
+.field > span, .field-label {
   font-size: var(--font-size-field);
   font-weight: 700;
   color: var(--color-text);
@@ -620,6 +620,21 @@ body {
   color: var(--color-field-help);
   font-size: var(--font-size-data);
   line-height: 1.35;
+}
+.secret-control {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+.secret-control > input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+.secret-control > .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding-inline: var(--space-5);
 }
 .config-grid .form-control-sm,
 .config-grid .form-select-sm {
