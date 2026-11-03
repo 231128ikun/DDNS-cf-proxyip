@@ -8,14 +8,11 @@ import {
   isPoolDataKey,
   isUserPoolKey,
 } from '../contracts/pool';
-import {
-  canonicalAddressKey,
-  formatPoolEntry,
-  mergePoolEntry,
-  parsePoolAddress,
-  parsePoolText,
-  type PoolEntry,
-} from '../domain/pool-entry';
+import { canonicalAddressKey } from '../domain/pool-entry';
+import { readPoolSnapshot, type PoolSnapshot } from '../domain/pool-snapshot';
+import { planPoolSave, planPoolRestore } from '../domain/pool-mutation';
+import { sourcePoolFromTrash } from '../domain/trash';
+import { executePoolWrites } from './pool-write';
 import type { PoolCatalog } from '../ports/pool-catalog';
 
 /** KV 单值上限远大于此值，这里限制的是面板一次能提交的池大小，避免误粘贴超大文本。 */
@@ -44,33 +41,11 @@ export class PoolService {
     // 垃圾桶只有 addToTrash 一个写入入口：去重、上限截断与注释格式都依赖它。
     if (key === TRASH_POOL_KEY) throw new PoolInputError('垃圾桶只能由维护和洗库流程写入');
     const mode = parseSaveMode(modeValue);
-    const incoming = poolEntryMap(normalizeContent(content));
-    const existing = poolEntryMap(await this.catalog.read(key));
-    const existingCount = existing.size;
-    let added = 0;
-    let removed = 0;
-    let replaced = 0;
-
-    if (mode === 'append') {
-      if (incoming.size === 0) throw new PoolInputError('没有有效 IP');
-      for (const [addressKey, entry] of incoming) {
-        const previous = existing.get(addressKey);
-        existing.set(addressKey, previous ? mergePoolEntry(previous, entry) : entry);
-      }
-      added = existing.size - existingCount;
-    } else if (mode === 'remove') {
-      for (const addressKey of incoming.keys()) {
-        if (existing.delete(addressKey)) removed += 1;
-      }
-    } else {
-      replaced = existingCount;
-      added = incoming.size;
-      existing.clear();
-      for (const [addressKey, entry] of incoming) existing.set(addressKey, entry);
-    }
-
-    await this.catalog.write(key, serializeEntries(existing));
-    return { ok: true, mode, count: existing.size, added, removed, replaced };
+    const incoming = readPoolSnapshot(normalizeContent(content));
+    if (mode === 'append' && incoming.entries.size === 0) throw new PoolInputError('没有有效 IP');
+    const plan = planPoolSave(key, readPoolSnapshot(await this.catalog.read(key)), incoming, mode);
+    await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
+    return { ok: true, ...plan.summary };
   }
 
   async create(displayNameValue: unknown): Promise<PoolSummary> {
@@ -126,54 +101,26 @@ export class PoolService {
 
     const restoreToSource = restoreToSourceValue === true;
     const fallbackPool = restoreToSource ? DEFAULT_POOL_KEY : requireUserPoolKey(targetPoolValue ?? DEFAULT_POOL_KEY);
-    const trash = poolLineMap(await this.catalog.read(TRASH_POOL_KEY));
-    const targetPools = new Map<string, Map<string, PoolEntry>>();
-    const restoredByPool: Record<string, number> = {};
-    let restored = 0;
-    let trashChanged = false;
-
-    for (const addressKey of requested) {
-      const trashItem = trash.get(addressKey);
-      if (!trashItem) continue;
-      trash.delete(addressKey);
-      trashChanged = true;
-
-      const targetPool = restoreToSource
-        ? await this.resolveSourcePool(trashItem.raw, fallbackPool)
-        : fallbackPool;
-      let targetEntries = targetPools.get(targetPool);
-      if (!targetEntries) {
-        targetEntries = poolEntryMap(await this.catalog.read(targetPool));
-        targetPools.set(targetPool, targetEntries);
-      }
-      if (targetEntries.has(addressKey)) continue;
-
-      targetEntries.set(addressKey, { ...trashItem.entry, comment: '' });
-      restored += 1;
-      restoredByPool[targetPool] = (restoredByPool[targetPool] ?? 0) + 1;
+    const trash = readPoolSnapshot(await this.catalog.read(TRASH_POOL_KEY));
+    const destinations = new Map<string, PoolSnapshot>();
+    const assignments = new Map<string, string>();
+    for (const key of requested) {
+      const item = trash.entries.get(key);
+      if (!item) continue;
+      const poolKey = restoreToSource ? await this.resolveSourcePool(item.raw, fallbackPool) : fallbackPool;
+      assignments.set(key, poolKey);
+      if (!destinations.has(poolKey)) destinations.set(poolKey, readPoolSnapshot(await this.catalog.read(poolKey)));
     }
-
-    // 先保留目标池副本；任一写入失败时，垃圾桶仍可用于安全重试。
-    for (const [poolKey, entries] of targetPools) {
-      if ((restoredByPool[poolKey] ?? 0) > 0) await this.catalog.write(poolKey, serializeEntries(entries));
-    }
-    if (trashChanged) await this.catalog.write(TRASH_POOL_KEY, serializeEntries(lineEntriesToEntries(trash)));
-    return { ok: true, restored, restoredByPool };
+    const plan = planPoolRestore(trash, destinations, assignments);
+    await executePoolWrites(plan.writes, (key, text) => this.catalog.write(key, text));
+    return { ok: true, ...plan.summary };
   }
 
   private async resolveSourcePool(trashLine: string, fallbackPool: string): Promise<string> {
-    const marker = ' 来自 ';
-    const markerIndex = trashLine.lastIndexOf(marker);
-    if (markerIndex < 0) return fallbackPool;
-    const candidate = trashLine.slice(markerIndex + marker.length).trim();
-    if (!isUserPoolKey(candidate)) return fallbackPool;
+    const candidate = sourcePoolFromTrash(trashLine);
+    if (!candidate) return fallbackPool;
     return candidate === DEFAULT_POOL_KEY || await this.catalog.exists(candidate) ? candidate : fallbackPool;
   }
-}
-
-interface PoolLineItem {
-  readonly raw: string;
-  readonly entry: PoolEntry;
 }
 
 function requirePoolKey(value: unknown): string {
@@ -207,31 +154,6 @@ function normalizeContent(value: unknown): string {
   if (typeof value !== 'string') throw new PoolInputError('IP 池内容必须是文本');
   if (value.length > MAX_POOL_CONTENT_LENGTH) throw new PoolInputError('IP 池内容超出长度限制');
   return value.replace(/\r\n?/g, '\n').trim();
-}
-
-function poolEntryMap(text: string): Map<string, PoolEntry> {
-  const entries = new Map<string, PoolEntry>();
-  for (const line of poolLineMap(text).values()) entries.set(canonicalAddressKey(line.entry.address), line.entry);
-  return entries;
-}
-
-function poolLineMap(text: string): Map<string, PoolLineItem> {
-  const entries = new Map<string, PoolLineItem>();
-  for (const line of parsePoolText(text)) {
-    const entry = line.entry;
-    if (!entry || !parsePoolAddress(entry)) continue;
-    const key = canonicalAddressKey(entry.address);
-    if (key) entries.set(key, { raw: line.raw, entry });
-  }
-  return entries;
-}
-
-function lineEntriesToEntries(lines: ReadonlyMap<string, PoolLineItem>): Map<string, PoolEntry> {
-  return new Map([...lines].map(([key, line]) => [key, line.entry]));
-}
-
-function serializeEntries(entries: ReadonlyMap<string, PoolEntry>): string {
-  return [...entries.values()].map((entry) => formatPoolEntry(entry)).join('\n');
 }
 
 function normalizePoolOrder(submitted: readonly string[], actual: readonly string[]): readonly string[] {
