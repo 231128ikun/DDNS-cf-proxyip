@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
-import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../../src/contracts/probe';
 import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
@@ -80,7 +80,6 @@ interface DashboardPageProps {
   readonly targetStatus: RequestState<TargetStatusView>;
   readonly selectedTargetKey: string | null;
   readonly targetPort: number | 'any';
-  readonly maintenance: RequestState<MaintenanceRunResponse>;
   readonly maintenanceBusy: boolean;
   readonly actions: DashboardActions;
   readonly onCopyToInput: (address: string) => void;
@@ -121,7 +120,6 @@ export function DashboardPage({
   targetStatus,
   selectedTargetKey,
   targetPort,
-  maintenance,
   maintenanceBusy,
   actions,
   onCopyToInput,
@@ -319,7 +317,7 @@ export function DashboardPage({
 
           <div class="card p-4 dashboard-card dashboard-console-card">
             <div class="dashboard-card-header">
-              <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 系统控制台</h2>
+              <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 工作台</h2>
             </div>
             <Console logs={consoleLogs} />
               <div
@@ -341,7 +339,6 @@ export function DashboardPage({
             >
               <Icon name="wrench" /> {maintenanceBusy ? '维护中…' : '执行全部维护'}
             </button>
-            <MaintenanceSummary state={maintenance} />
           </div>
       </div>
       <DomainBindingsCard bindings={bindings} pools={pools} busy={bindingBusy} targetKeys={targetKeys} actions={actions} />
@@ -436,7 +433,7 @@ function Console({ logs }: {
   }, [logs]);
 
   return (
-    <div id="log-window" class="console mb-3" role="log" aria-live="polite" aria-relevant="additions text" ref={consoleRef}>
+    <div id="log-window" class="console mb-3" role="log" aria-label="工作台日志" aria-live="polite" aria-relevant="additions text" ref={consoleRef}>
       <div class="console-event-list">
         {logs.length === 0 && <div class="console-empty">正在连接系统…</div>}
         {logs.map((entry) => (
@@ -586,36 +583,4 @@ function batchProgress(
 function batchProgressLabel(progress: PoolCheckProgressState | null): string {
   if (!progress?.total) return '正在准备批量检测';
   return `已完成 ${progress.completed} / ${progress.total} 个地址`;
-}
-
-
-/** 维护结果只展示面板关心的字段；探针异常必须与“节点失效”区分显示。 */
-function MaintenanceSummary({ state }: { readonly state: RequestState<MaintenanceRunResponse> }) {
-  if (state.status === 'idle') return null;
-  if (state.status === 'loading') return <p class="text-secondary small mb-3">正在执行维护，请保持页面打开…</p>;
-  if (state.status === 'error') return <p class="text-danger small mb-3">{state.message}</p>;
-
-  const { data } = state;
-  const warning = data.errors.length > 0 || data.probeErrors > 0;
-  return (
-    <div class="maintenance-summary small mb-3">
-      <div class={warning ? 'text-warning' : 'text-secondary'}>
-        {data.changed ? '维护完成：DNS 已更新' : '维护完成：无需变更'}
-        {data.insufficient ? ' · 可用 IP 不足' : ''}
-        {data.probeErrors > 0 ? ` · ${data.probeErrors} 次探针异常（未计为失效）` : ''}
-      </div>
-      {data.results.map((item) => (
-        <div key={`${item.domain}|${item.mode}`} class="maintenance-result">
-          <RecordBadge mode={item.mode} />
-          <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
-          <span class="text-secondary">+{item.added} / -{item.deleted}</span>
-          {item.probeErrors > 0 && <span class="text-warning">探针异常 {item.probeErrors} 次</span>}
-          {item.error && <span class="text-danger">{item.error}</span>}
-        </div>
-      ))}
-      {data.errors.map((error) => (
-        <div class="text-danger">{error}</div>
-      ))}
-    </div>
-  );
 }

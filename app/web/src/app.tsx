@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { MaintenanceRunResponse } from '../../src/contracts/maintenance';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import type { ConfigResponse } from '../../src/contracts/config';
@@ -24,7 +23,7 @@ import { Modal } from './components/modal';
 import type { OrderRequest } from './components/order-dialog';
 import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
-import { loadTargetStatus, type TargetStatusView } from './state/target-status';
+import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
@@ -44,7 +43,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
   const [filterText, setFilterText] = useState('');
   const [remoteUrl, setRemoteUrl] = useState('');
-  const [maintenance, setMaintenance] = useState<RequestState<MaintenanceRunResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(() => {
     const first = initialConfig?.config.targets[0];
@@ -116,12 +114,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   });
   const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
   const targetPort = configuredTarget?.port ?? 443;
-  const [targetStatus, refreshTargetStatus] = useResource<TargetStatusView>((signal, progress) => {
-    if (!selectedTargetKey) return Promise.reject(new Error('尚未选择维护域名'));
-    if (config.status !== 'ready') return Promise.reject(new Error(config.status === 'error' ? config.message : '正在读取维护配置，请稍后刷新'));
-    if (!configuredTarget) return Promise.reject(new Error('当前目标已变更，请刷新域名绑定'));
-    return loadTargetStatus(client, selectedTargetKey, targetPort, signal, webCheckConcurrency, progress);
-  });
+  const [targetStatuses, refreshTargetStatuses] = useResource<TargetStatusesView>((signal, progress) =>
+    loadTargetStatuses(client, configuredTargets ?? [], signal, progress), true);
+  const targetStatus: RequestState<TargetStatusView> = targetStatuses.status === 'ready'
+    ? targetStatuses.data.byKey[selectedTargetKey ?? ''] ?? { status: 'idle' }
+    : targetStatuses;
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
   useEffect(() => {
@@ -140,15 +137,15 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     });
   }, [configuredTargets, confirmedBindings, targetKeys]);
 
-  /** 配置就绪后立即发起读取；公开检测模块与 DNS 并行加载，不提前执行探测。 */
+  /** 配置就绪即并发预取全部域名；切换目标不取消其他域名或重复请求。 */
   useLayoutEffect(() => {
-    if (!selectedTargetKey || config.status === 'loading' || config.status === 'idle') return;
+    if (!configuredTargets) return;
     resetLookup();
     const controller = new AbortController();
-    void refreshTargetStatus(controller.signal);
+    void refreshTargetStatuses(controller.signal);
     void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
     return () => controller.abort();
-  }, [config.status, refreshTargetStatus, resetLookup, selectedTargetKey, targetPort, webCheckConcurrency]);
+  }, [configuredTargets, refreshTargetStatuses, resetLookup]);
 
   /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
   useLayoutEffect(() => {
@@ -240,8 +237,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleRefresh = (): void => {
     resetLookup();
-    appendConsoleLog('[系统] 正在刷新当前域名解析');
-    void refreshTargetStatus();
+    appendConsoleLog('[系统] 正在并发刷新全部域名解析');
+    void refreshTargetStatuses();
   };
 
   const handleSelectTarget = (key: string | null): void => {
@@ -291,7 +288,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已添加 ${input}`, 'success');
         notify('已添加 DNS 记录');
-        await refreshTargetStatus();
+        await refreshTargetStatuses();
         return true;
       })
       .catch((error: unknown) => {
@@ -310,7 +307,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已删除 ${address ?? recordId}`, 'success');
         notify('已删除 DNS 记录');
-        await refreshTargetStatus();
+        await refreshTargetStatuses();
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
@@ -535,11 +532,17 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const handleRunMaintenance = (): void => {
     if (maintenanceBusy) return;
     setMaintenanceBusy(true);
-    setMaintenance({ status: 'loading' });
     appendConsoleLog('[维护] 开始执行全部目标');
     client.runMaintenance()
       .then(async (data) => {
-        setMaintenance({ status: 'ready', data });
+        for (const item of data.results) {
+          appendConsoleLog(
+            `[维护] ${item.domain} (${item.mode}) · +${item.added} / -${item.deleted}${item.probeErrors ? ` · 探针异常 ${item.probeErrors} 次` : ''}${item.error ? ` · ${item.error}` : ''}`,
+            item.error ? 'error' : item.probeErrors ? 'warning' : 'success',
+          );
+        }
+        for (const error of data.errors) appendConsoleLog(`[维护] ${error}`, 'error');
+        if (data.insufficient) appendConsoleLog('[维护] 可用 IP 不足', 'warning');
         appendConsoleLog(
           `[维护] 完成 · 更新 ${data.results.filter((item) => item.dnsUpdated).length} 个目标 / 探针异常 ${data.probeErrors} 次 / 错误 ${data.errors.length} 项`,
           data.errors.length || data.probeErrors ? 'warning' : 'success',
@@ -553,7 +556,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
-        setMaintenance({ status: 'error', message });
         appendConsoleLog(`[维护] ${message}`, 'error');
         notify(message, 'error');
       })
@@ -641,7 +643,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             targetStatus={targetStatus}
             selectedTargetKey={selectedTargetKey}
             targetPort={targetPort}
-            maintenance={maintenance}
             maintenanceBusy={maintenanceBusy}
             actions={actions}
             onCopyToInput={handleCopyToInput}

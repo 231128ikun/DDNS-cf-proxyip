@@ -10,13 +10,13 @@ export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
   text: string,
   signal?: AbortSignal,
   onProgress?: (event: PoolCheckProgressEvent) => void,
-  concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS,
+  concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS,
 ): Promise<PoolCheckResponse> {
   const { targets, invalid } = parsePoolCheckTargets(text);
   let completed = 0;
   let total = targets.length;
 
-  const limit = parseRuntimeSetting('CONCURRENT_CHECKS', concurrency);
+  const limit = concurrency === 'all' ? targets.length : parseRuntimeSetting('CONCURRENT_CHECKS', concurrency);
   const itemGroups = await mapWithConcurrency(targets, limit, async (target) => {
     if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
     const checked = await checkPoolTarget(client, target, signal);

@@ -72,7 +72,7 @@ export class ApiClient {
    * 浏览器限制并发，每个地址单独请求 Worker。
    * 单个 Worker 请求只承担一个目标的主/备探测，避免整批耗尽子请求预算。
    */
-  async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
+  async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
     const { checkBatch } = await loadBatchCheckModule();
     return checkBatch(this, text, signal, onProgress, concurrency);
   }

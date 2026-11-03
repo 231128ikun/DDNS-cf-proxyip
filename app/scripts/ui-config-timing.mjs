@@ -129,8 +129,9 @@ export async function auditConfigTiming(cdp, sessionId, base, requests, fixture,
       await click('.nav-tab[data-page="dashboard"]');
       await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:443")');
       const lookups = requests.slice(start).filter(request => request.path === '/api/current-status');
-      assert(lookups.length > 0 && lookups.every(request => request.query.target === 'renamed.example.com|TXT'),
-        '改名后的当前记录查询转向了另一个目标');
+      const configuredKeys = fixture.config.targets.map(target => `${target.domain}|${target.mode}`);
+      assert(lookups.some(request => request.query.target === 'renamed.example.com|TXT') && lookups.every(request => configuredKeys.includes(request.query.target)),
+        '并发预取遗漏改名后的目标或查询了已删除的目标');
       assert(requests.slice(start).find(request => request.path === '/api/config' && request.method === 'PUT').input.targets
         .every(target => !('sourceKey' in target)), '前端行身份进入了持久化配置请求');
     });

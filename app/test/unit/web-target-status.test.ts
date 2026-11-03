@@ -10,7 +10,7 @@ import type { ProbeAdapter } from '../../src/ports/probe';
 import { createHttpApp } from '../../src/transport/http';
 import { ApiClient } from '../../web/src/api/client';
 import { probeStatusLabel } from '../../web/src/components/probe-status';
-import { loadTargetStatus, MAX_CURRENT_STATUS_PROBES } from '../../web/src/state/target-status';
+import { loadTargetStatus, loadTargetStatuses } from '../../web/src/state/target-status';
 
 function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string, probeAdapter?: ProbeAdapter) {
   const writes = vi.fn();
@@ -82,7 +82,7 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     });
     const { client, requests, writes } = setup(records, 'A', undefined, adapter);
     const progress = vi.fn();
-    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, progress);
     expect(view.records).toEqual(records);
     expect(view.probes).toMatchObject([
       { address: '188.166.171.1:2053', status: 'alive', colo: 'LHR', exitFamily: 'dual', exitIp: '198.51.100.42', exits: [
@@ -110,7 +110,7 @@ describe('current DNS display through ApiClient and Worker routes', () => {
       return { total: 0, alive: 0, dead: 0, unknown: 0, invalid: [], items: [] };
     });
     const progress = vi.fn();
-    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, progress);
     await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({ records, probes: [] })));
     finish();
     await pending;
@@ -128,7 +128,7 @@ describe('current DNS display through ApiClient and Worker routes', () => {
       return check(address, signal);
     });
     const progress = vi.fn();
-    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2, progress);
+    const pending = loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, progress);
     try {
       await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({
         records, probes: [expect.objectContaining({ address: '203.0.113.10:2053', status: 'alive' })],
@@ -140,13 +140,13 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     expect(writes).not.toHaveBeenCalled();
   });
 
-  it('uses the configured browser concurrency for automatic current-record probing', async () => {
+  it('starts every current-record probe concurrently', async () => {
     const records: DnsRecord[] = Array.from({ length: 6 }, (_, index) => ({
       id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,
     }));
     const { client, peak } = setup(records);
-    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined, 2);
-    expect(peak()).toBe(2);
+    const view = await loadTargetStatus(client, 'edge.example.com|A', 2053, undefined);
+    expect(peak()).toBe(6);
     expect(view.probes.map(item => item.address)).toEqual([
       '203.0.113.1:2053', '203.0.113.2:2053', '203.0.113.3:2053',
       '203.0.113.4:2053', '203.0.113.5:2053', '203.0.113.6:2053',
@@ -186,15 +186,16 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     expect(writes).not.toHaveBeenCalled();
   });
 
-  it('bounds automatic probing without hiding remaining DNS records', async () => {
-    const records: DnsRecord[] = Array.from({ length: MAX_CURRENT_STATUS_PROBES + 1 }, (_, index) => ({
+  it('probes all records without a 200-address cap or the batch concurrency ceiling', async () => {
+    const records: DnsRecord[] = Array.from({ length: 201 }, (_, index) => ({
       id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,
     }));
-    const { client, requests, writes } = setup(records);
+    const { client, requests, writes, peak } = setup(records);
     const view = await loadTargetStatus(client, 'edge.example.com|A', 2053);
-    expect(view.records).toHaveLength(MAX_CURRENT_STATUS_PROBES + 1);
-    expect(view.probes).toHaveLength(MAX_CURRENT_STATUS_PROBES);
-    expect(requests).toHaveLength(MAX_CURRENT_STATUS_PROBES + 1);
+    expect(peak()).toBe(201);
+    expect(view.records).toHaveLength(201);
+    expect(view.probes).toHaveLength(201);
+    expect(requests).toHaveLength(202);
     expect(writes).not.toHaveBeenCalled();
   });
 
@@ -209,5 +210,58 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     controller.abort();
     await expect(loadTargetStatus(cancelled.client, 'edge.example.com|A', 2053, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
     expect(cancelled.requests).toHaveLength(1);
+  });
+});
+
+
+describe('concurrent domain status loading', () => {
+  const targets = [
+    { domain: 'slow.example.com', mode: 'A' as const, port: 2053 },
+    { domain: 'fast.example.com', mode: 'TXT' as const, port: 'any' as const },
+  ];
+
+  it('starts all domains together and publishes fast results before a slow domain finishes', async () => {
+    const { client } = setup([]);
+    let finish!: () => void;
+    const slow = new Promise<void>(resolve => { finish = resolve; });
+    const reads = vi.spyOn(client, 'currentStatus').mockImplementation(async key => {
+      if (key.startsWith('slow.')) await slow;
+      const isTxt = key.endsWith('|TXT');
+      return { ok: true, domain: key.split('|')[0]!, mode: isTxt ? 'TXT' : 'A', records: [
+        { id: key, name: key.split('|')[0]!, type: isTxt ? 'TXT' : 'A',
+          content: isTxt ? '"203.0.113.11:8443"' : '203.0.113.10' },
+      ] };
+    });
+    const progress = vi.fn();
+    const pending = loadTargetStatuses(client, targets, undefined, progress);
+    try {
+      expect(reads).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({ byKey: expect.objectContaining({
+        'fast.example.com|TXT': expect.objectContaining({ status: 'ready', data: expect.objectContaining({ probes: [
+          expect.objectContaining({ address: '203.0.113.11:8443', status: 'alive' }),
+        ] }) }),
+        'slow.example.com|A': { status: 'loading' },
+      }) })));
+    } finally { finish(); }
+    const completed = await pending;
+    expect(completed.byKey['slow.example.com|A']).toMatchObject({ status: 'ready', data: { probes: [
+      { address: '203.0.113.10:2053', status: 'alive' },
+    ] } });
+  });
+
+  it('isolates a domain read failure without hiding another domain and ignores cancelled progress', async () => {
+    const { client } = setup([]);
+    vi.spyOn(client, 'currentStatus').mockImplementation(async key => {
+      if (key.startsWith('slow.')) throw new Error('fixture DNS failure');
+      return { ok: true, domain: 'fast.example.com', mode: 'TXT', records: [] };
+    });
+    const status = await loadTargetStatuses(client, targets);
+    expect(status.byKey['slow.example.com|A']).toMatchObject({ status: 'error', message: 'fixture DNS failure' });
+    expect(status.byKey['fast.example.com|TXT']).toMatchObject({ status: 'ready', data: { probes: [] } });
+    const controller = new AbortController();
+    controller.abort();
+    const progress = vi.fn();
+    await expect(loadTargetStatuses(client, targets, controller.signal, progress)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(progress).not.toHaveBeenCalled();
   });
 });
