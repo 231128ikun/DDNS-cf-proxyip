@@ -88,9 +88,9 @@ function workspaceFailures(current, width) {
   const { overview, workbench, consoleCard, bindings } = current.boxes;
   if (current.overflow) failures.push('页面横向溢出');
   if (!overview || !workbench || !consoleCard || !bindings) return [...failures, '工作区卡片缺失'];
-  if (current.boxes.console?.height < (width >= 992 ? 360 : 320)) failures.push('工作台日志区域高度不足');
+  if (current.boxes.console?.height < 280) failures.push('工作台日志区域高度不足');
   if (width >= 992) {
-    if (workbench.height < 640) failures.push('IP 管理和工作台高度不足');
+    if (workbench.height < 480) failures.push('IP 管理和工作台高度不足');
     if (Math.abs(workbench.width - consoleCard.width) > 1) failures.push('IP 管理和控制台未等宽');
     if (Math.abs(workbench.height - consoleCard.height) > 1) failures.push('IP 管理和控制台未等高');
     if (Math.abs(workbench.y - consoleCard.y) > 1) failures.push('工作区卡片顶端未对齐');

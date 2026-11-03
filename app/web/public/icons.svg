@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="activity" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-12h-7l1-8Z"/></symbol>
+  <symbol id="antenna" viewBox="0 0 24 24"><path d="M5 8a10 10 0 0 1 14 0M8 11a6 6 0 0 1 8 0M12 14v7m-3 0h6"/></symbol>
+  <symbol id="compass" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm4 5-3 5-5 3 3-5 5-3Z"/></symbol>
+  <symbol id="dashboard" viewBox="0 0 24 24"><path d="M4 3v17h17M8 15V9m5 6V5m5 10v-4"/></symbol>
+  <symbol id="database" viewBox="0 0 24 24"><path d="M3 6c0-5 18-5 18 0s-18 5-18 0Zm0 0v12c0 5 18 5 18 0V6M3 12c0 5 18 5 18 0"/></symbol>
+  <symbol id="download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v11H3V6Z"/></symbol>
+  <symbol id="globe" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-5 5-5 13 0 18 5-5 5-13 0-18ZM3 12h18"/></symbol>
+  <symbol id="help" viewBox="0 0 24 24"><path d="M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 3m0 4v.1"/></symbol>
+  <symbol id="link" viewBox="0 0 24 24"><path d="m10 7 3-3a5 5 0 0 1 7 7l-3 3M7 10l-3 3a5 5 0 0 0 7 7l3-3M8 16l8-8"/></symbol>
+  <symbol id="sort" viewBox="0 0 24 24"><path d="M8 3v18m-4-4 4 4 4-4M16 21V3m-4 4 4-4 4 4"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+  <symbol id="pencil" viewBox="0 0 24 24"><path d="m15 4 5 5-11 11H4v-5L15 4Zm-3 3 5 5"/></symbol>
+  <symbol id="broom" viewBox="0 0 24 24"><path d="m19 3-8 9m-3-2 6 6-5 5-6-6 5-5Zm-2 8 3-3"/></symbol>
+  <symbol id="recycle" viewBox="0 0 24 24"><path d="m8 7 4-5 4 5M3 13l-1 6h7m12-6 1 6h-7M8 7h8m-9 4-4 7m14-7 4 7"/></symbol>
+  <symbol id="refresh" viewBox="0 0 24 24"><path d="M20 8a9 9 0 1 0 0 8M20 3v5h-5"/></symbol>
+  <symbol id="save" viewBox="0 0 24 24"><path d="M4 3h13l4 4v14H3V3h1Zm3 0v6h10V3M7 21v-8h10v8"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><path d="M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5 12 6 6"/></symbol>
+  <symbol id="settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></symbol>
+  <symbol id="stop" viewBox="0 0 24 24"><path d="M5 5h14v14H5V5Z"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+  <symbol id="wrench" viewBox="0 0 24 24"><path d="M14 3a6 6 0 0 0-7 8l-5 5 4 4 5-5a6 6 0 0 0 8-7l-4 4-3-3 4-4Z"/></symbol>
+</svg>
