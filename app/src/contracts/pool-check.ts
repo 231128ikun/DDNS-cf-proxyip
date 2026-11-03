@@ -1,4 +1,4 @@
-import type { ExitFamily, ProbeExit, ProbeStatus } from '../domain/probe-result';
+import type { ExitFamily, ProbeExit, ProbeStatus, ProbeDiagnostic } from '../domain/probe-result';
 
 /** 批量检测的响应条目：只保留面板需要的字段，不回传大的原始响应。 */
 export interface PoolCheckItemResponse {
@@ -11,6 +11,8 @@ export interface PoolCheckItemResponse {
   readonly exits?: readonly ProbeExit[];
   readonly code?: string;
   readonly message?: string;
+  readonly endpoint?: string;
+  readonly diagnostics?: readonly ProbeDiagnostic[];
   readonly asn?: string;
   readonly country?: string;
   /** 已合并检测元数据、可直接入库的池条目文本。 */
