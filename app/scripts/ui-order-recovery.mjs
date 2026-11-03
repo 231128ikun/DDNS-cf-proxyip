@@ -12,6 +12,8 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
     await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:443")');
   };
   const open = async kind => {
+    await click(kind === 'bindings' ? '.nav-tab[data-page="config"]' : '.nav-tab[data-page="dashboard"]');
+    await cdp.until(sessionId, kind === 'bindings' ? 'Boolean(document.querySelector("#domain-order-trigger")?.offsetWidth)' : 'Boolean(document.querySelector("#pool-action-trigger")?.offsetWidth)');
     if (kind === 'pools') {
       await click('#pool-action-trigger');
       const index = await read('[...document.querySelectorAll(".action-menu-item")].findIndex(item => item.textContent.includes("自定义池排序"))');
@@ -40,6 +42,7 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
       })()`);
       await click('#main-actions button:first-child');
       await open('bindings');
+      await click('.nav-tab[data-page="dashboard"]');
       await click('#main-actions button:first-child');
       await cdp.until(sessionId, "document.querySelector('[aria-labelledby=\"batch-interrupt-title\"]')");
       await cdp.until(sessionId, 'performance.getEntriesByType("resource").some(entry => entry.name.includes("/order-dialog-") && entry.responseEnd > 0)');
@@ -54,6 +57,15 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 180, y: 180, deltaX: 0, deltaY: 600 }, sessionId);
         await cdp.until(sessionId, 'scrollY > 0');
       }
+    });
+    await run('bindings-delayed-navigation', async () => {
+      await navigate();
+      fixture.orderChunkDelay = 800;
+      await open('bindings');
+      await click('.nav-tab[data-page="dashboard"]');
+      await cdp.until(sessionId, 'performance.getEntriesByType("resource").some(entry => entry.name.includes("/order-dialog-") && entry.responseEnd > 0)');
+      await read('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+      assert(await read('!document.querySelector(".pool-order-modal")'), '离开维护域名管理后，延迟加载的排序弹窗仍弹出');
     });
     for (const kind of ['pools', 'bindings']) await run(`${kind}-read-retry`, async () => {
       await navigate();

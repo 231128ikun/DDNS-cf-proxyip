@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
-import type { DomainBindingsResponse } from '../../../src/contracts/maintenance';
+import { TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, type PoolsResponse } from '../../../src/contracts/pool';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../../src/contracts/probe';
 import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
@@ -8,7 +7,7 @@ import { countPoolTextLines } from '../../../src/domain/pool-text';
 import type { RequestState } from '../state/request-state';
 import type { TargetStatusView } from '../state/target-status';
 import { Icon, type IconName } from './icon';
-import { RecordBadge } from './record-badge';
+import { poolOptions } from '../state/pool-options';
 import { StatusOverview } from './status-overview';
 import { ResourceFeedback } from './resource-feedback';
 
@@ -48,9 +47,6 @@ export interface DashboardActions {
   readonly cleanPool: () => void;
   readonly restoreTrash: () => void;
   readonly clearTrash: () => void;
-  readonly bindPool: (key: string, poolKey: string) => void;
-  readonly openBindingOrder: () => void;
-  readonly refreshBindings: () => void;
   readonly refreshPools: () => void;
   readonly addRecord: (value: string) => Promise<boolean>;
   readonly deleteRecord: (recordId: string, address?: string) => void;
@@ -74,9 +70,6 @@ interface DashboardPageProps {
   readonly poolBusy: PoolActionKey | null;
   readonly consoleLogs: readonly ConsoleLogEntry[];
   readonly batchProgressState: PoolCheckProgressState | null;
-  readonly bindings: RequestState<DomainBindingsResponse>;
-  readonly bindingBusy: boolean;
-  readonly targetKeys: readonly string[];
   readonly targetStatus: RequestState<TargetStatusView>;
   readonly selectedTargetKey: string | null;
   readonly targetPort: number | 'any';
@@ -91,11 +84,6 @@ interface DashboardPageProps {
   readonly onPoolChange: (key: string) => void;
 }
 
-interface PoolOption {
-  readonly key: string;
-  readonly name: string;
-  readonly count?: number;
-}
 
 export function DashboardPage({
   check,
@@ -114,9 +102,6 @@ export function DashboardPage({
   poolBusy,
   consoleLogs,
   batchProgressState,
-  bindings,
-  bindingBusy,
-  targetKeys,
   targetStatus,
   selectedTargetKey,
   targetPort,
@@ -341,7 +326,6 @@ export function DashboardPage({
             </button>
           </div>
       </div>
-      <DomainBindingsCard bindings={bindings} pools={pools} busy={bindingBusy} targetKeys={targetKeys} actions={actions} />
     </div>
   );
 }
@@ -446,121 +430,11 @@ function Console({ logs }: {
   );
 }
 
-function DomainBindingsCard({
-  bindings,
-  pools,
-  busy,
-  targetKeys,
-  actions,
-}: {
-  readonly bindings: RequestState<DomainBindingsResponse>;
-  readonly pools: RequestState<PoolsResponse>;
-  readonly busy: boolean;
-  readonly targetKeys: readonly string[];
-  readonly actions: DashboardActions;
-}) {
-  return (
-    <>
-    <ResourceFeedback state={bindings} id="retry-bindings" onRetry={actions.refreshBindings} />
-    <details class="card p-4 mb-3 domain-binding-card">
-      <summary class="domain-binding-header" title="点击展开/折叠域名池绑定">
-        <div class="domain-binding-title">
-          <h2 class="card-title m-0 fw-bold"><Icon name="link" /> 域名池绑定</h2>
-        </div>
-        <div class="domain-binding-actions">
-          <button
-            class="btn btn-sm btn-outline-primary domain-binding-refresh"
-            type="button"
-            aria-label="刷新域名池绑定"
-            title="刷新域名池绑定"
-            disabled={bindings.status === 'loading' || (bindings.status === 'ready' && bindings.refreshing)}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              actions.refreshBindings();
-            }}
-          >
-            <Icon name="refresh" />
-          </button>
-          {bindings.status === 'ready' && (
-            <button
-              id="domain-order-trigger"
-              class="btn btn-sm btn-outline-primary"
-              type="button"
-              aria-haspopup="dialog"
-              aria-label="调整域名池绑定顺序"
-              title="调整域名池绑定顺序"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                actions.openBindingOrder();
-              }}
-            >
-              <Icon name="sort" />
-            </button>
-          )}
-        </div>
-      </summary>
-      {bindings.status === 'loading' && <p class="text-secondary small mb-0">正在读取绑定…</p>}
-      {bindings.status === 'ready' && (
-          <div class="domain-binding-table-wrap">
-            <table class="table table-sm mb-0">
-              <thead>
-                <tr>
-                  <th>域名</th>
-                  <th>绑定池</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bindings.data.items.length === 0 ? (
-                  <tr><td colspan={2} class="text-center text-secondary">请先到配置中心添加管理域名</td></tr>
-                ) : bindings.data.items.map(item => (
-                  <tr key={item.key}>
-                    <td>
-                      <div class="domain-binding-domain">
-                        <RecordBadge mode={item.mode} />
-                        <span class="domain-binding-name" title={item.domain}>{item.domain}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <select
-                        class="form-select form-select-sm domain-binding-select"
-                        value={item.poolKey}
-                        disabled={busy || !item.enabled || !targetKeys.includes(item.key)}
-                        aria-busy={busy}
-                        aria-label={`${item.domain} 绑定的 IP 池`}
-                        onChange={(event) => actions.bindPool(item.key, event.currentTarget.value)}
-                      >
-                        {poolOptions(pools, item.poolKey).filter((pool) => isUserPoolKey(pool.key)).map((pool) => (
-                          <option key={pool.key} value={pool.key}>{pool.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-      )}
-    </details>
-    </>
-  );
-}
-
 function filterPreviewText(ipText: string, filterText: string): string {
   if (!filterText.trim()) return '输入条件后会显示匹配数量。';
   const filter = parsePoolFilter(filterText);
   if (!filter) return '筛选条件无效：端口需为 1-65535 的数字或范围。';
   return `匹配 ${countPoolFilterMatches(ipText, filter)} 条，输入框内共 ${countPoolTextLines(ipText)} 条。`;
-}
-
-function poolOptions(state: RequestState<PoolsResponse>, currentKey: string): readonly PoolOption[] {
-  // 列表已经按保存的池顺序返回；在页面再按名称排序会让“保存排序”失效。
-  const options: PoolOption[] = state.status === 'ready'
-    ? state.data.pools.map((pool) => ({ key: pool.key, name: pool.name, count: pool.count }))
-    : [{ key: DEFAULT_POOL_KEY, name: '默认池' }, { key: TRASH_POOL_KEY, name: '垃圾桶' }];
-  if (!options.some((option) => option.key === currentKey)) options.push({ key: currentKey, name: currentKey });
-  return options;
 }
 
 function currentPoolCount(state: RequestState<PoolsResponse>, key: string): number | string {
