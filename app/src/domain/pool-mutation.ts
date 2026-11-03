@@ -39,6 +39,15 @@ export function planPoolSave(poolKey: string, before: PoolSnapshot, incoming: Po
   return {
     write: { poolKey, before: before.text, after: content } satisfies PoolContentWrite,
     changed: content !== before.text,
+    currentCount: existing.size,
+    standaloneComments: {
+      before: before.invalid.filter(line => line.startsWith('#')).length,
+      after: (mode === 'replace' ? incoming.invalid : before.invalid).filter(line => line.startsWith('#')).length,
+    },
+    unrecognized: {
+      before: before.invalid.filter(line => !line.startsWith('#')).length,
+      after: (mode === 'replace' ? incoming.invalid : before.invalid).filter(line => !line.startsWith('#')).length,
+    },
     changes,
     summary: { mode, count: next.size, added: mode === 'replace' ? next.size : mode === 'append' ? next.size - existing.size : 0,
       removed: mode === 'remove' ? existing.size - next.size : 0, replaced: mode === 'replace' ? existing.size : 0 },

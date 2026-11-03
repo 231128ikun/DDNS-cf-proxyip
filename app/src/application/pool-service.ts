@@ -1,4 +1,4 @@
-import type { PoolSaveMode, PoolSaveResponse, PoolSummary, RestoreTrashResponse } from '../contracts/pool';
+import type { PoolSaveMode, PoolSaveResponse, PoolPreviewResponse, PoolSummary, RestoreTrashResponse } from '../contracts/pool';
 import {
   DEFAULT_POOL_KEY,
   MAX_POOL_DISPLAY_NAME_LENGTH,
@@ -8,7 +8,7 @@ import {
   isPoolDataKey,
   isUserPoolKey,
 } from '../contracts/pool';
-import { canonicalAddressKey } from '../domain/pool-entry';
+import { canonicalAddressKey, formatPoolEntry } from '../domain/pool-entry';
 import { readPoolSnapshot, type PoolSnapshot } from '../domain/pool-snapshot';
 import { planPoolSave, planPoolRestore } from '../domain/pool-mutation';
 import { sourcePoolFromTrash } from '../domain/trash';
@@ -37,16 +37,33 @@ export class PoolService {
   }
 
   async save(poolKey: unknown, content: unknown, modeValue?: unknown): Promise<PoolSaveResponse> {
+    const plan = await this.prepareSave(poolKey, content, modeValue);
+    await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
+    return { ok: true, ...plan.summary };
+  }
+
+  async preview(poolKey: unknown, content: unknown, modeValue?: unknown): Promise<PoolPreviewResponse> {
+    const plan = await this.prepareSave(poolKey, content, modeValue);
+    const counts = { add: 0, update: 0, remove: 0 };
+    for (const change of plan.changes) counts[change.kind]++;
+    return { ok: true, poolKey: plan.write.poolKey, mode: plan.summary.mode, currentCount: plan.currentCount,
+      count: plan.summary.count, added: counts.add, updated: counts.update, removed: counts.remove,
+      changed: plan.changed, unrecognized: plan.unrecognized, standaloneComments: plan.standaloneComments,
+      changes: plan.changes.map(change => ({ address: change.key, kind: change.kind,
+        ...(change.before ? { before: formatPoolEntry(change.before) } : {}),
+        ...(change.after ? { after: formatPoolEntry(change.after) } : {}),
+      })),
+    };
+  }
+
+  private async prepareSave(poolKey: unknown, content: unknown, modeValue?: unknown) {
     const key = requirePoolKey(poolKey);
-    // 垃圾桶只有 addToTrash 一个写入入口：去重、上限截断与注释格式都依赖它。
     if (key === TRASH_POOL_KEY) throw new PoolInputError('垃圾桶只能由维护和洗库流程写入');
     const mode = parseSaveMode(modeValue);
     const incoming = readPoolSnapshot(normalizeContent(content));
     if (incoming.invalid.some(line => !line.startsWith('#'))) throw new PoolInputError('包含无法识别的条目，原池未修改');
     if (mode === 'append' && incoming.entries.size === 0) throw new PoolInputError('没有有效 IP');
-    const plan = planPoolSave(key, readPoolSnapshot(await this.catalog.read(key)), incoming, mode);
-    await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
-    return { ok: true, ...plan.summary };
+    return planPoolSave(key, readPoolSnapshot(await this.catalog.read(key)), incoming, mode);
   }
 
   async create(displayNameValue: unknown): Promise<PoolSummary> {
