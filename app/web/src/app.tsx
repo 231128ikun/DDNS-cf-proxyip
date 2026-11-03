@@ -17,7 +17,8 @@ import {
   type DashboardActions,
   type PoolActionKey,
 } from './components/dashboard-page';
-import { Hero, type GlobalSettingKey } from './components/hero';
+import { Hero } from './components/hero';
+import type { GlobalSettingKey } from './components/config-page';
 import { TopNav, type AppPage } from './components/top-nav';
 import { Modal } from './components/modal';
 import type { OrderRequest } from './components/order-dialog';
@@ -662,11 +663,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       </a>
       <Hero
         health={health}
-        config={config}
-        saving={configBusy}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
-        onToggleSetting={handleToggleSetting}
       />
 
       <div class="container">
@@ -708,7 +706,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         </div>
         <div hidden={page !== 'config'}>
           {ConfigPage ? (
-            <ConfigPage onSaveConfig={saveConfig} saving={configBusy} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
+            <ConfigPage onSaveConfig={saveConfig} onToggleSetting={handleToggleSetting} saving={configBusy} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
               pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
               onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (

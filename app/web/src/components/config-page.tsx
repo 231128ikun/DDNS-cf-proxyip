@@ -22,7 +22,10 @@ import { Icon } from './icon';
 import { ResourceFeedback } from './resource-feedback';
 import { poolOptions } from '../state/pool-options';
 
+export type GlobalSettingKey = 'scheduledEnabled' | 'tgEnabled';
+
 interface ConfigPageProps {
+  readonly onToggleSetting: (key: GlobalSettingKey, enabled: boolean) => void;
   readonly onSaveConfig: (update: ConfigUpdateRequest) => Promise<ConfigResponse>;
   readonly saving: boolean;
   readonly notify: (message: string, type?: 'success' | 'error') => void;
@@ -86,7 +89,7 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
   ['MAX_TRASH_SIZE', '垃圾桶上限', '超过后保留最新条目。', 'cfg-max-trash-size'],
 ];
 
-export function ConfigPage({ onSaveConfig, saving, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
+export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
   onBindPool, onReloadBindings, onOpenBindingOrder }: ConfigPageProps) {
   const applied = useRef<ConfigResponse | null>(null);
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
@@ -301,6 +304,14 @@ export function ConfigPage({ onSaveConfig, saving, notify, config: load, onReloa
           </div>
         </summary>
         <div class="config-details-body">
+          <fieldset class="config-task-settings" aria-label="自动化设置" disabled={saving}>
+            {([['scheduledEnabled', '自动维护', 'cfg-scheduled-enabled'], ['tgEnabled', 'Telegram 通知', 'cfg-tg-enabled']] as const).map(([key, label, id]) => (
+              <label class="setting-switch" key={key}>
+                <input id={id} type="checkbox" role="switch" checked={load.data.config[key]} onChange={(event) => onToggleSetting(key, event.currentTarget.checked)} />
+                <span class="setting-switch-track" aria-hidden="true" /><span>{label}</span>
+              </label>
+            ))}
+          </fieldset>
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
           <div class="config-grid config-group">
             <TextField id="cfg-check-api" label="检测 API" help="留空使用备用接口；支持 {proxyip} 占位符。" value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
