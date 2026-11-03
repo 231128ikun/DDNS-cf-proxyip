@@ -16,7 +16,6 @@ import type { DomainBindingsResponse } from '../../../src/contracts/maintenance'
 import { DEFAULT_POOL_KEY, isUserPoolKey, type PoolsResponse } from '../../../src/contracts/pool';
 import { sortByKeyOrder } from '../../../src/util/key-order';
 import { bindingKey } from '../../../src/domain/domain-binding';
-import { ApiClient } from '../api/client';
 import { errorMessage } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
@@ -24,7 +23,8 @@ import { ResourceFeedback } from './resource-feedback';
 import { poolOptions } from '../state/pool-options';
 
 interface ConfigPageProps {
-  readonly client: ApiClient;
+  readonly onSaveConfig: (update: ConfigUpdateRequest) => Promise<ConfigResponse>;
+  readonly saving: boolean;
   readonly notify: (message: string, type?: 'success' | 'error') => void;
   readonly config: RequestState<ConfigResponse>;
   readonly onReload: (signal?: AbortSignal) => Promise<boolean>;
@@ -67,8 +67,6 @@ interface ConfigForm {
   readonly zoneId: string;
   readonly tgId: string;
   readonly settings: Readonly<Record<keyof RuntimeSettings, string>>;
-  readonly scheduledEnabled: boolean;
-  readonly tgEnabled: boolean;
 }
 
 type SecretKey = 'authKey' | 'tgToken';
@@ -88,7 +86,7 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
   ['MAX_TRASH_SIZE', '垃圾桶上限', '超过后保留最新条目。', 'cfg-max-trash-size'],
 ];
 
-export function ConfigPage({ client, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
+export function ConfigPage({ onSaveConfig, saving, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
   onBindPool, onReloadBindings, onOpenBindingOrder }: ConfigPageProps) {
   const applied = useRef<ConfigResponse | null>(null);
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
@@ -96,7 +94,6 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
   const [form, setForm] = useState<ConfigForm | null>(null);
   const [secrets, setSecrets] = useState<PublicAppConfig['secrets']>({ apiKey: false, authKey: false, tgToken: false });
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
-  const [saving, setSaving] = useState(false);
   const [editingZone, setEditingZone] = useState<ZoneEditor | null>(null);
   const [editingTarget, setEditingTarget] = useState<TargetEditor | null>(null);
 
@@ -116,14 +113,20 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
   const retried = useRef(false);
   useEffect(() => {
     if (load.status === 'ready') {
-      if (applied.current !== load.data) applyResponse(load.data);
+      if (applied.current !== load.data) {
+        // 顶部开关只更新全局标志，远端表单基线未变时保留本地表单和编辑区草稿。
+        if (applied.current && snapshot(formFromConfig(load.data.config), EMPTY_DRAFTS) === baseline) {
+          applied.current = load.data;
+          setSecrets(load.data.config.secrets);
+        } else applyResponse(load.data);
+      }
       return undefined;
     }
     if (load.status !== 'error' || retried.current) return undefined;
     retried.current = true;
     void onReload();
     return undefined;
-  }, [applyResponse, load, onReload]);
+  }, [applyResponse, baseline, load, onReload]);
 
   const patch = (partial: Partial<ConfigForm>): void => {
     setForm((current) => (current ? { ...current, ...partial } : current));
@@ -241,7 +244,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
   }, [baseline, drafts, form]);
 
   const handleSave = (): void => {
-    if (!form) return;
+    if (!form || saving) return;
     let update: ConfigUpdateRequest;
     try {
       update = buildUpdate(form, drafts);
@@ -252,8 +255,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
       return;
     }
 
-    setSaving(true);
-    client.saveConfig(update)
+    onSaveConfig(update)
       .then((response) => {
         applyResponse(response);
         const targetKeys = Object.fromEntries(form.targets.flatMap((target, index) => target.sourceKey && update.targets?.[index]
@@ -261,8 +263,7 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
         onSaved(response, targetKeys);
         notify('配置已保存到 KV');
       })
-      .catch((error: unknown) => notify(errorMessage(error), 'error'))
-      .finally(() => setSaving(false));
+      .catch((error: unknown) => notify(errorMessage(error), 'error'));
   };
 
   if (load.status === 'loading') return <div class="card p-4"><p class="text-secondary mb-0">正在读取配置…</p></div>;
@@ -317,13 +318,6 @@ export function ConfigPage({ client, notify, config: load, onReload, onSaved, po
               ))}
             </div>
           </section>
-          <details class="config-options">
-            <summary>高级选项</summary>
-            <div class="config-options-list">
-              <label><input id="cfg-scheduled-enabled" type="checkbox" checked={form.scheduledEnabled} onChange={(event) => patch({ scheduledEnabled: event.currentTarget.checked })} /> 自动维护</label>
-              <label><input id="cfg-tg-enabled" type="checkbox" checked={form.tgEnabled} onChange={(event) => patch({ tgEnabled: event.currentTarget.checked })} /> Telegram 通知</label>
-            </div>
-          </details>
         </div>
       </details>
 
@@ -676,8 +670,6 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
     zoneId: config.zoneId,
     tgId: config.tgId,
     settings: Object.fromEntries(SETTINGS_FIELDS.map(([key]) => [key, String(config.settings[key])])) as ConfigForm['settings'],
-    scheduledEnabled: config.scheduledEnabled,
-    tgEnabled: config.tgEnabled,
   };
 }
 
@@ -709,8 +701,6 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateReques
     dohApi: form.dohApi.trim(),
     ...(tgToken === undefined ? {} : { tgToken }),
     tgId: form.tgId.trim(),
-    scheduledEnabled: form.scheduledEnabled,
-    tgEnabled: form.tgEnabled,
     settings,
     projectUrl: form.projectUrl.trim(),
   };

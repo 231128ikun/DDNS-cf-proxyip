@@ -30,6 +30,9 @@ try {
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
       await cdp.send('Page.navigate', { url: server.base }, sessionId);
       await cdp.until(sessionId, 'Boolean(document.querySelector("#tab-config")?.offsetWidth)');
+      await cdp.until(sessionId, 'Boolean(document.querySelector(".target-summary-domain")?.offsetWidth)');
+      const prominentTarget = await read('document.querySelector(".target-summary").getBoundingClientRect().height >= 64 && parseFloat(getComputedStyle(document.querySelector(".target-summary-domain")).fontSize) >= 16');
+      assert(prominentTarget, `Target chooser lacks visual prominence at ${width}px`);
       await cdp.click(sessionId, '#tab-config');
       await cdp.until(sessionId, 'Boolean(document.querySelector(".config-details-summary")?.offsetWidth)');
       await cdp.click(sessionId, '.config-details-summary > :first-child');
@@ -42,11 +45,9 @@ try {
         if (innerWidth >= 992 && basics.height > 800) issues.push('basic settings exceed a compact desktop panel');
         if (innerWidth >= 992 && basics.top > 200) issues.push('header pushes settings below the first screen');
         const reference = document.querySelector('#cfg-doh').getBoundingClientRect();
-        const target = document.querySelector('.target-summary');
-        if (target.getBoundingClientRect().height < 64 || parseFloat(getComputedStyle(document.querySelector('.target-summary-domain')).fontSize) < 16) issues.push('target chooser lacks visual prominence');
         if (document.querySelector('#zone-config-title').textContent.trim() !== '域名权限配置') issues.push('permissions heading does not match the domain task');
         if (document.querySelector('#target-config-title').textContent.trim() !== '维护域名管理') issues.push('maintained domain heading does not match the domain task');
-        if (document.querySelectorAll('.config-options input[type="checkbox"]').length !== 2) issues.push('advanced options include removed credential actions');
+        if (document.querySelectorAll('.hero input[role="switch"]').length !== 2 || document.querySelector('#page-config #cfg-scheduled-enabled, #page-config #cfg-tg-enabled, .config-options')) issues.push('global settings are duplicated or not in the header');
         if (document.querySelectorAll('#target-config-title').length !== 1 || document.querySelectorAll('#target-edit-panel').length !== 1) issues.push('domain settings entry is duplicated');
         if (document.querySelectorAll('#page-config .config-mini-card .domain-binding-select').length !== 2) issues.push('pool binding is not integrated with maintained domains');
         if (document.querySelector('#page-dashboard .domain-binding-card')) issues.push('dashboard still has a second binding panel');

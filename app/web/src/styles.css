@@ -121,6 +121,12 @@
   --pool-selector-width: 160px;
   --target-selector-min-width: 288px;
   --target-selector-height: 76px;
+  --setting-switch-width: 42px;
+  --setting-switch-height: 24px;
+  --setting-switch-thumb: 18px;
+  --setting-switch-inset: 3px;
+  --lookup-form-width: 500px;
+  --status-context-width: 440px;
   --config-card-min-width: 280px;
   --config-grid-max-height: min(60vh, 520px);
   --exit-details-width: 500px;
@@ -194,6 +200,7 @@ body {
 @keyframes app-enter { from { opacity: .6; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .loading-indicator, .app-entrance { animation: none; }
+  .setting-switch .setting-switch-track, .setting-switch .setting-switch-track::after { transition: none; }
 }
         button, input, select, textarea { font-family: inherit; font-size: inherit; line-height: inherit; margin: 0; }
         ::placeholder { color: var(--color-placeholder); opacity: 1; }
@@ -300,6 +307,22 @@ body {
             position: relative;
         }
         .hero-copy { min-width: 0; }
+.hero > .kv-alert { grid-column: 1 / -1; }
+.header-settings { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8); min-width: 0; margin: 0; padding: var(--space-5) var(--space-7); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
+.setting-switch { position: relative; display: inline-flex; align-items: center; gap: var(--space-3); min-height: var(--control-height); color: var(--color-text); font-size: var(--font-size-sm); font-weight: 600; white-space: nowrap; cursor: pointer; }
+.setting-switch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: inherit; }
+.header-settings:disabled .setting-switch { opacity: .6; cursor: progress; }
+.setting-switch-track { position: relative; flex: 0 0 auto; width: var(--setting-switch-width); height: var(--setting-switch-height); border-radius: var(--radius-pill); background: var(--color-text-muted); transition: background-color .15s ease; pointer-events: none; }
+.setting-switch-track::after { content: ''; position: absolute; top: var(--setting-switch-inset); left: var(--setting-switch-inset); width: var(--setting-switch-thumb); height: var(--setting-switch-thumb); background: var(--color-surface); border-radius: var(--radius-pill); box-shadow: var(--shadow-xs); transition: transform .15s ease; }
+.setting-switch input:checked + .setting-switch-track { background: var(--color-success); }
+.setting-switch input:checked + .setting-switch-track::after { transform: translateX(calc(var(--setting-switch-width) - var(--setting-switch-thumb) - 2 * var(--setting-switch-inset))); }
+.setting-switch input:focus-visible + .setting-switch-track { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.status-overview-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-7); }
+.status-overview-context { display: flex; flex: 1 1 var(--status-context-width); align-items: center; flex-wrap: wrap; gap: var(--space-5); min-width: 0; }
+.status-overview-context .card-title { white-space: nowrap; }
+.status-overview-context .domain-selector { flex: 1 1 var(--target-selector-min-width); min-width: 0; }
+.status-overview-context .target-summary { width: 100%; }
+.status-overview-toolbar .ddns-lookup-form { flex: 1 1 var(--lookup-form-width); margin-left: auto; }
         .hero h1 {
             display: flex;
             align-items: center;
@@ -626,10 +649,6 @@ body {
 }
 .config-group + .config-group { margin-top: var(--space-7); padding-top: var(--space-7); border-top: 1px solid var(--color-border); }
 .config-group h3 { margin: 0 0 var(--space-5); font-size: var(--font-size-field); color: var(--color-text-muted); }
-.config-options { margin-top: var(--space-7); font-size: var(--font-size-xs); color: var(--color-text-muted); }
-.config-options summary { cursor: pointer; padding-block: var(--space-2); }
-.config-options-list { display: flex; flex-wrap: wrap; gap: var(--space-5) var(--space-8); padding-block: var(--space-5); }
-.config-options-list label { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height-compact); }
 input[type="checkbox"] { accent-color: var(--color-primary); }
 .config-grid .form-control-sm,
 .config-grid .form-select-sm {
@@ -1350,7 +1369,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
             }
         }
         .ddns-lookup-form {
-            max-width: 500px;
+            max-width: var(--lookup-form-width);
         }
         #lookup-domain, #remote-url, #universal-filter { border-radius: var(--radius-md); }
         .ddns-lookup-form .btn-sm {
@@ -1401,6 +1420,8 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
         .status-address { overflow-wrap: anywhere; }
         .status-exit-cell { min-width: var(--exit-details-width); text-align: left; }
         @media (max-width: 768px) {
+            .status-overview-context { flex-basis: 100%; }
+            .status-overview-toolbar .ddns-lookup-form { max-width: none; flex-basis: 100%; margin-left: 0; }
             .status-exit-cell { min-width: var(--exit-details-width-compact); }
             .exit-detail { grid-template-columns: var(--exit-detail-columns-compact); }
         }

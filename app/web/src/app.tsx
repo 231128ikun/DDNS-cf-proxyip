@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey } from '../../src/contracts/pool';
 import type { CheckTargetResponse } from '../../src/contracts/probe';
-import type { ConfigResponse } from '../../src/contracts/config';
+import type { ConfigResponse, ConfigUpdateRequest } from '../../src/contracts/config';
 import { bindingKey } from '../../src/domain/domain-binding';
 import { extractPoolAddressKey } from '../../src/domain/pool-entry';
 import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
@@ -17,7 +17,7 @@ import {
   type DashboardActions,
   type PoolActionKey,
 } from './components/dashboard-page';
-import { Hero } from './components/hero';
+import { Hero, type GlobalSettingKey } from './components/hero';
 import { TopNav, type AppPage } from './components/top-nav';
 import { Modal } from './components/modal';
 import type { OrderRequest } from './components/order-dialog';
@@ -55,6 +55,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [bindingBusy, setBindingBusy] = useState(false);
+  const [configBusy, setConfigBusy] = useState(false);
+  const configWritePending = useRef(false);
   const bindingWritePending = useRef(false);
   const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -549,6 +551,31 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     }
   };
 
+  const saveConfig = async (update: ConfigUpdateRequest): Promise<ConfigResponse> => {
+    if (configWritePending.current) throw new Error('配置正在保存，请稍后重试');
+    configWritePending.current = true;
+    setConfigBusy(true);
+    try {
+      return await client.saveConfig(update);
+    } finally {
+      configWritePending.current = false;
+      setConfigBusy(false);
+    }
+  };
+
+  const handleToggleSetting = async (key: GlobalSettingKey, enabled: boolean): Promise<void> => {
+    if (config.status !== 'ready' || configWritePending.current) return;
+    try {
+      const response = await saveConfig({ [key]: enabled });
+      // 只确认全局开关，保留目标/参数引用和配置中心尚未提交的草稿。
+      acceptConfig(current => ({ ...response, config: { ...current.config,
+        scheduledEnabled: response.config.scheduledEnabled, tgEnabled: response.config.tgEnabled } }));
+      notify(`${key === 'scheduledEnabled' ? '自动维护' : 'Telegram 通知'}已${enabled ? '开启' : '关闭'}`);
+    } catch (error) {
+      notify(errorMessage(error), 'error');
+    }
+  };
+
   const handleConfigSaved = (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>): void => {
     initialOrderPending.current = false;
     const nextKeys = response.config.targets.map(bindingKey);
@@ -635,13 +662,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       </a>
       <Hero
         health={health}
-        bindings={bindings}
-        selectedTargetKey={selectedTargetKey}
-        targetPort={targetPort}
-        targetChoices={targetChoices}
+        config={config}
+        saving={configBusy}
         usageOpen={usageOpen}
         onToggleUsage={() => setUsageOpen((current) => !current)}
-        onSelectTarget={handleSelectTarget}
+        onToggleSetting={handleToggleSetting}
       />
 
       <div class="container">
@@ -665,6 +690,9 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             consoleLogs={consoleLogs}
             batchProgressState={batchProgressState}
             targetStatus={targetStatus}
+            bindings={bindings}
+            targetChoices={targetChoices}
+            onSelectTarget={handleSelectTarget}
             selectedTargetKey={selectedTargetKey}
             targetPort={targetPort}
             maintenanceBusy={maintenanceBusy}
@@ -680,7 +708,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         </div>
         <div hidden={page !== 'config'}>
           {ConfigPage ? (
-            <ConfigPage client={client} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
+            <ConfigPage onSaveConfig={saveConfig} saving={configBusy} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
               pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
               onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (
