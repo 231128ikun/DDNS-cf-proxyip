@@ -147,15 +147,24 @@ try {
     for (const path of ['/api/pools', '/api/domain-bindings']) {
       assert.ok(requests.slice(start).some(entry => entry.path === path && !entry.completed), `DNS must not wait for ${path}`);
     }
-    const dnsRequest = requests.slice(start).find(entry => entry.path === '/api/current-status');
-    assert.ok(requests.slice(start).filter(entry => entry.path === '/api/check').every(entry => entry.startedAt >= dnsRequest.completedAt), 'module prewarming must not start probes before DNS returns');
+    const dnsRequests = requests.slice(start).filter(entry => entry.path === '/api/current-status');
+    assert.equal(dnsRequests.length, fixture.config.targets.length, 'startup must fetch all configured domains');
+    assert.ok(dnsRequests.every(entry => entry.startedAt < Math.min(...dnsRequests.map(item => item.completedAt))), 'domain DNS requests must all start before the first one completes');
+    assert.ok(requests.slice(start).filter(entry => entry.path === '/api/check').every(entry => entry.startedAt >= Math.min(...dnsRequests.map(item => item.completedAt))), 'module prewarming must not start probes before DNS returns');
     await cdp.until(sessionId, "document.querySelectorAll('#status-table .status-badge.ok').length === 1");
     const firstProbeAt = await read('performance.now()');
     await complete();
     const completedAt = await read('performance.now()');
     assert.equal(requests.slice(start).filter(entry => entry.path === '/api/config').length, 1, 'startup must not read config twice');
     assert.equal(requests.slice(start).filter(entry => entry.path === '/api/auth/status').length, 0, 'normal startup must not add a separate auth roundtrip');
-    console.log(`DNS visible at ${Math.round(early.at)}ms, first probe at ${Math.round(firstProbeAt)}ms, all probes at ${Math.round(completedAt)}ms; batch code overlaps DNS.`);
+    await cdp.until(sessionId, 'window.performance.getEntriesByType("resource").filter(entry => new URL(entry.name).pathname === "/api/check").length >= 4');
+    const switchStart = requests.length;
+    await selectTarget('proxy.example.com|TXT');
+    await cdp.until(sessionId, "document.querySelector('#status-table')?.textContent.includes('[2001:db8::10]:8443')");
+    await complete();
+    assert.equal(requests.slice(switchStart).filter(entry => ['/api/current-status', '/api/check'].includes(entry.path)).length, 0, 'switching domains must reuse the prefetched status without repeated requests');
+    assert.ok(fixture.probeMetrics.peak >= 4, 'automatic status probes must run across both domains concurrently');
+    console.log(`DNS visible at ${Math.round(early.at)}ms, first probe at ${Math.round(firstProbeAt)}ms, all probes at ${Math.round(completedAt)}ms; all domains overlap and switching reuses results.`);
     await waitForUiRequest(requests, start, '/api/domain-bindings', 'GET', 200);
     await waitForUiRequest(requests, start, '/api/pools', 'GET', 200);
 

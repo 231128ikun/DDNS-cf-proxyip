@@ -124,7 +124,7 @@ function StatusRow({ address, result, onCopyAddress, action }: {
     <td><span class="latency-badge">{result?.latencyMs === undefined ? '—' : `${result.latencyMs}ms`}</span></td>
     <td class="status-decision">
       <span class={`status-badge ${result?.status === 'alive' ? 'ok' : result?.status === 'dead' ? 'bad' : 'warn'}`} title={result?.message ?? result?.code}>{result ? probeStatusLabel(result.status, result.code) : '未检测'}</span>
-      {result?.status === 'unknown' && (result.message || result.code) && <small class="status-reason">{result.message ?? result.code}</small>}
+      {result && result.status !== 'alive' && (result.message || result.code) && <small class="status-reason">{result.message ?? result.code}</small>}
     </td>
     <td class="status-exit-cell">{result ? <ProbeExits result={result} onCopy={onCopyAddress} /> : '-'}</td>
     <td>{action}</td>

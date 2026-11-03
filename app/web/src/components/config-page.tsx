@@ -72,8 +72,8 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   tgToken: 'TG Bot Token',
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
-  ['CONCURRENT_CHECKS', '检测并发', '统一控制浏览器检测、域名探测、洗库与维护补货；1–128。', 'cfg-concurrent-checks'],
-  ['CHECK_TIMEOUT', '检测超时(ms)', '单个检测接口请求超时；超时结果为未知。', 'cfg-check-timeout'],
+  ['CONCURRENT_CHECKS', '检测并发', '控制手动批量检测、域名探测、洗库与维护补货；1–128。解析实况全并发。', 'cfg-concurrent-checks'],
+  ['CHECK_TIMEOUT', '检测超时(ms)', '单接口请求超时；复检后仍超时按失效处理，洗库和维护时入桶。', 'cfg-check-timeout'],
   ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
   ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
   ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增管理域名默认值。', 'cfg-default-min-active'],

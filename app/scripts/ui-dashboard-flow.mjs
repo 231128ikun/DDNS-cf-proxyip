@@ -16,6 +16,20 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   const refreshButton = surface === 'baseline' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
   const select = '.target-select-overlay';
   if (surface === 'current') {
+    fixture.maintenanceResponse = { ok: true, changed: true, insufficient: true, errors: ['模拟维护错误'], probeErrors: 2,
+      results: [{ domain: 'edge.example.com', mode: 'A', poolKey: 'ip_pool_default', poolName: '默认池',
+        dnsUpdated: true, added: 2, deleted: 1, probeErrors: 2, error: '模拟目标错误' }] };
+    try {
+      await click('.dashboard-console-card > button');
+      await cdp.until(sessionId, 'document.querySelector("#log-window").textContent.includes("[维护] 完成")');
+      const log = await read('document.querySelector("#log-window").textContent');
+      for (const text of ['edge.example.com (A)', '+2 / -1', '模拟目标错误', '模拟维护错误', '可用 IP 不足']) {
+        check(log.includes(text), '维护信息没有写入工作台日志：' + text);
+      }
+      check(await read('document.querySelector(".dashboard-console-card h2").textContent.trim().endsWith("工作台")'), '日志区域应明确命名为工作台');
+      check(await read('!document.querySelector(".maintenance-summary, .maintenance-result")'), '工作台外仍保留另一套维护日志');
+      check(await read('Math.abs(document.querySelector("#log-window").scrollHeight - document.querySelector("#log-window").clientHeight - document.querySelector("#log-window").scrollTop) < 2'), '工作台日志没有自动滚动到最新结果');
+    } finally { fixture.maintenanceResponse = null; }
     const remove = '#main-actions button:last-child';
     const canRemove = await read(`!document.querySelector('${remove}').disabled`);
     check(canRemove, '空输入应允许点击移除，并在本地提示');
@@ -91,16 +105,27 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
     await new Promise((resolve) => setTimeout(resolve, 350));
     check(await read('document.querySelector("#status-table").textContent.includes("203.0.113.10:443")'), '旧探测响应覆盖了刷新后的当前记录');
     fixture.probeDelay = 0;
-    fixture.probeErrors['203.0.113.89:443'] = { code: 'TIMEOUT', message: '检测接口超时，节点状态未知' };
+    fixture.probeErrors['203.0.113.89:443'] = { code: 'TIMEOUT', message: '节点检测超时' };
     try {
       await setValue('#lookup-domain', '203.0.113.89:443');
       await click(lookupButton);
-      await cdp.until(sessionId, 'document.querySelector("#status-table .status-reason")?.textContent.includes("检测接口超时")');
-      check(await read('document.querySelector("#status-table .status-badge.warn")?.textContent === "未知（超时）"'), '真实接口异常未显示为未知');
-      check(await read('document.querySelector("#status-table .status-reason")?.checkVisibility()'), '未知原因只藏在提示中，没有直接展示');
+      await cdp.until(sessionId, 'document.querySelector("#status-table .status-reason")?.textContent.includes("节点检测超时")');
+      check(await read('document.querySelector("#status-table .status-badge.bad")?.textContent === "失效（超时）"'), '节点检测超时未显示为失效');
+      check(await read('document.querySelector("#status-table .status-reason")?.checkVisibility()'), '超时原因只藏在提示中，没有直接展示');
+      check(await read('document.querySelector("#log-window").textContent.includes("203.0.113.89:443") && document.querySelector("#log-window").textContent.includes("TIMEOUT") && document.querySelector("#log-window").textContent.includes("节点检测超时")'), '单节点异常缺少逐地址、错误码和具体原因日志');
     } finally {
       delete fixture.probeErrors['203.0.113.89:443'];
     }
+    fixture.probeErrors['203.0.113.10:443'] = { code: 'NETWORK_ERROR', message: 'fixture ECONNRESET', endpoint: 'backup', diagnostics: [
+      { endpoint: 'primary', status: 'unknown', code: 'HTTP_ERROR', message: 'HTTP 503' },
+      { endpoint: 'backup', status: 'unknown', code: 'NETWORK_ERROR', message: 'fixture ECONNRESET' },
+    ] };
+    try {
+      await click(refreshButton);
+      await cdp.until(sessionId, 'document.querySelector("#log-window")?.textContent.includes("[解析 edge.example.com|A]") && document.querySelector("#log-window")?.textContent.includes("fixture ECONNRESET")');
+      const log = await read('document.querySelector("#log-window").textContent');
+      check(log.includes('primary [HTTP_ERROR] HTTP 503') && log.includes('backup [NETWORK_ERROR] fixture ECONNRESET'), '自动解析未展示主／备用接口异常过程');
+    } finally { delete fixture.probeErrors['203.0.113.10:443']; }
     await click(refreshButton);
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
   }
@@ -112,14 +137,20 @@ export async function auditTargetStartup(cdp, sessionId, base, requests, fixture
   const failures = [];
   const previousPort = fixture.config.targets[0].port;
   const previousDelay = fixture.configDelay;
+  const previousStatusDelay = fixture.currentStatusDelay;
   const start = requests.length;
   fixture.config.targets[0].port = 2053;
   fixture.configDelay = 600;
+  fixture.currentStatusDelay = 120;
   try {
     await cdp.send('Page.navigate', { url: `${base}/` }, sessionId);
     await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:2053")');
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
-    const checked = requests.slice(start).filter((request) => request.path === '/api/check').map((request) => request.input.proxyip).sort();
+    const checked = requests.slice(start).filter((request) => request.path === '/api/check' && request.input.proxyip.endsWith(':2053')).map((request) => request.input.proxyip).sort();
+    const dns = requests.slice(start).filter(request => request.path === '/api/current-status');
+    if (dns.length !== fixture.config.targets.length || dns.some(request => request.startedAt >= Math.min(...dns.map(item => item.completedAt)))) {
+      failures.push('首次加载没有同时发起全部域名的解析实况请求');
+    }
     if (JSON.stringify(checked) !== JSON.stringify(['203.0.113.10:2053', '[2001:db8::10]:2053'])) {
       failures.push(`配置延迟返回时首次探测的端口错误：${checked.join('、') || '没有探测请求'}`);
     }
@@ -129,6 +160,7 @@ export async function auditTargetStartup(cdp, sessionId, base, requests, fixture
   } finally {
     fixture.config.targets[0].port = previousPort;
     fixture.configDelay = previousDelay;
+    fixture.currentStatusDelay = previousStatusDelay;
   }
   return failures;
 }

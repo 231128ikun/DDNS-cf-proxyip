@@ -119,8 +119,8 @@ export async function auditPoolTiming(cdp, sessionId, base, requests, fixture, c
         '改名后的目标没有出现在维护域名选择中');
       assert(await read('Boolean(document.querySelector("#retry-bindings")?.offsetWidth)'),
         '局部绑定写入清除了旧目标列表的读取失败提示');
-      assert(requests.slice(start).filter(request => request.path === '/api/current-status')
-        .every(request => request.query.target === 'renamed.example.com|TXT'), '局部绑定写入向另一个目标发起当前记录查询');
+      assert(requests.slice(writeStart).filter(request => request.path === '/api/current-status').length === 0,
+        '局部绑定写入不应重复加载已预取的解析实况');
       const retryStart = requests.length;
       await click('#retry-bindings');
       await waitForUiRequest(requests, retryStart, '/api/domain-bindings', 'GET', 200);

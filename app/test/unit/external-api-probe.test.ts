@@ -14,8 +14,8 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 describe('ExternalApiProbeAdapter', () => {
   it.each([
-    ['tcp connect timeout after 9999ms', 'TIMEOUT', '探针连接超时（节点状态未知）'],
-    ['probe request timed out', 'TIMEOUT', '探针连接超时（节点状态未知）'],
+    ['tcp connect timeout after 9999ms', 'TIMEOUT', '节点连接超时'],
+    ['probe request timed out', 'TIMEOUT', '节点连接超时'],
     ['unexpected status: 502 body: <html><h1>502 Bad Gateway</h1></html>', 'HTTP_ERROR', '探针上游 HTTP 502（节点状态未知）'],
     ['upstream returned 503 Service Unavailable', 'HTTP_ERROR', '探针上游 HTTP 503（节点状态未知）'],
     ['HTTP 500', 'HTTP_ERROR', '探针上游 HTTP 500（节点状态未知）'],
@@ -27,10 +27,10 @@ describe('ExternalApiProbeAdapter', () => {
   ])('classifies reported infrastructure errors without exposing response bodies: %s', async (message, code, expected) => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
       timeoutMs: 15000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
-    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code, message: expected });
+    expect(await adapter.probe(target)).toMatchObject({ status: code === 'TIMEOUT' ? 'dead' : 'unknown', code, message: expected });
   });
 
-  it('retries a reported timeout on the backup without marking the node dead', async () => {
+  it('accepts backup recovery after a reported timeout', async () => {
     let attempts = 0;
     const adapter = new ExternalApiProbeAdapter({ endpoints: [
       { name: 'primary', urlTemplate: 'https://primary.example/?proxyip=' },
@@ -250,6 +250,8 @@ describe('ExternalApiProbeAdapter', () => {
 
 describe('probe rechecks', () => {
   const cases = [
+    { label: 'confirmed timeout', payloads: [{ success: false, message: 'tcp connect timeout' }], status: 'dead', attempts: 2 },
+    { label: 'timeout followed by API error', payloads: [{ success: false, message: 'tcp connect timeout' }, { success: false, message: 'HTTP 500' }], status: 'unknown', attempts: 2 },
     { label: 'healthy', payloads: [{ success: true }], status: 'alive', attempts: 1 },
     { label: 'recovered', payloads: [{ success: false }, { success: true }], status: 'alive', attempts: 2 },
     { label: 'confirmed failure', payloads: [{ success: false }, { success: false }], status: 'dead', attempts: 2 },
@@ -421,7 +423,7 @@ describe('complete public probe payload regressions', () => {
       endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
       timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
     });
-    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code });
+    expect(await adapter.probe(target)).toMatchObject(success ? { status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' } : { status: code === 'TIMEOUT' ? 'dead' : 'unknown', code });
   });
 });
 
@@ -465,7 +467,7 @@ describe('external probe safety regressions', () => {
 
   it('keeps specific timeout classification even when apiError is set', async () => {
     expect(await adapterFor({ success: false, apiError: true, detail: 'tcp connect timeout after 9999ms' }).probe(target))
-      .toMatchObject({ status: 'unknown', code: 'TIMEOUT' });
+      .toMatchObject({ status: 'dead', code: 'TIMEOUT' });
   });
 
   it.each([
@@ -503,5 +505,69 @@ describe('external probe safety regressions', () => {
     [{ supports_ipv4: true }, 'ipv4'],
   ] as const)('keeps explicit family hints ahead of exit inference: %j', async (hint, family) => {
     expect(await adapterFor({ success: true, exits: dualExits, ...hint }).probe(target)).toMatchObject({ exitFamily: family });
+  });
+});
+
+describe('probe timeout decisions', () => {
+  const endpoint = { name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' };
+  const stalledFetch = (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => new Promise((_, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  });
+
+  it('marks an exhausted deadline dead after the existing single-endpoint recheck', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(stalledFetch);
+      const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 10, fetchImpl: fetchImpl as typeof fetch });
+      const pending = adapter.probe(target);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await pending).toMatchObject({ status: 'dead', code: 'TIMEOUT', endpoint: 'primary', message: '检测超时 (10ms)' });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('returns alive when the backup recovers from a local request timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint, { ...endpoint, name: 'backup' }], timeoutMs: 10,
+        fetchImpl: (async (url, init) => ++attempts === 1 ? stalledFetch(url, init) : jsonResponse({ success: true })) as typeof fetch });
+      const pending = adapter.probe(target);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await pending).toMatchObject({ status: 'alive', endpoint: 'backup' });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('marks a response-body deadline dead and releases its timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 10, fallbackToNext: false,
+        fetchImpl: (async (_url, init) => new Response(new ReadableStream({ start(controller) {
+          init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
+        } }))) as typeof fetch });
+      const pending = adapter.probe(target);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await pending).toMatchObject({ status: 'dead', code: 'TIMEOUT' });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps caller cancellation unknown and skips the backup', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(stalledFetch);
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
+    const pending = adapter.probe(target, { signal: controller.signal });
+    controller.abort();
+    expect(await pending).toMatchObject({ status: 'unknown', code: 'CANCELLED' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['AbortError', 'unknown', 'NETWORK_ERROR'],
+    ['TimeoutError', 'dead', 'TIMEOUT'],
+  ])('distinguishes an unsolicited %s from caller cancellation', async (name, status, code) => {
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 1000,
+      fetchImpl: (async () => { throw new DOMException('fixture transport failure', name); }) as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status, code });
   });
 });

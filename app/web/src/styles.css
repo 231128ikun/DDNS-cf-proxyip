@@ -134,11 +134,11 @@
   --exit-details-width-compact: 480px;
   --exit-detail-columns: 54px minmax(140px, 1fr) minmax(86px, 128px) minmax(110px, 180px);
   --exit-detail-columns-compact: 48px minmax(120px, 1fr) minmax(72px, 108px) minmax(110px, 150px);
-  --layout-panel-min-height: 480px;
+  --layout-panel-min-height: 640px;
   --layout-panel-header-height: 48px;
-  --layout-editor-min-height: 168px;
-  --layout-console-min-height: 220px;
-  --layout-console-mobile-height: 280px;
+  --layout-editor-min-height: 280px;
+  --layout-console-min-height: 360px;
+  --layout-console-mobile-height: 320px;
   --status-reason-width: 200px;
   --content-max: 1140px;
   --content-max-wide: 1140px;
@@ -454,7 +454,7 @@ body {
         .console {
             background: var(--color-console-bg);
             color: var(--color-console-text);
-            height: 380px;
+            height: var(--layout-console-mobile-height);
             overflow-y: auto;
             font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
             padding: var(--space-8);
@@ -481,7 +481,6 @@ body {
         .console-progress-bar { background: var(--color-console-success); }
         @media (max-width: 768px) {
             .console {
-                height: 250px;
                 padding: var(--space-5);
                 font-size: var(--font-size-xs);
             }
@@ -955,28 +954,6 @@ body {
         .domain-binding-select {
             width: 100%;
             min-width: 0;
-        }
-        .maintenance-summary {
-            max-height: 180px;
-            overflow: auto;
-        }
-        .maintenance-result {
-            display: grid;
-            grid-template-columns: 30px minmax(0, 1fr) auto;
-            align-items: center;
-            gap: var(--space-3);
-            padding: var(--space-2) 0;
-            border-top: 1px solid var(--color-surface-muted);
-        }
-        .maintenance-result .record-badge {
-            justify-content: center;
-            width: 30px;
-            margin-left: 0;
-            padding: 0;
-        }
-        .maintenance-result .text-warning,
-        .maintenance-result .text-danger {
-            grid-column: 2 / -1;
         }
         .filter-line {
             display: grid;

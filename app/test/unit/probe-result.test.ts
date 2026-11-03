@@ -1,5 +1,6 @@
+import { parseProxyTarget } from '../../src/domain/proxy-target';
 import { describe, expect, it } from 'vitest';
-import { exitFamilyFromIp, isProbeErrorResult, unknown } from '../../src/domain/probe-result';
+import { dead, exitFamilyFromIp, isProbeErrorResult, unknown } from '../../src/domain/probe-result';
 
 describe('exitFamilyFromIp', () => {
   it('detects IPv4', () => {
@@ -17,7 +18,7 @@ describe('exitFamilyFromIp', () => {
 
 describe('isProbeErrorResult', () => {
   it('treats unknown probe outcomes as detection failures', () => {
-    expect(isProbeErrorResult(unknown(null, 'TIMEOUT', 'timeout'))).toBe(true);
+    expect(isProbeErrorResult(unknown(null, 'NETWORK_ERROR', 'network error'))).toBe(true);
     expect(isProbeErrorResult(unknown(null, 'HTTP_ERROR', '500'))).toBe(true);
     expect(isProbeErrorResult(unknown(null, 'NOT_CONFIGURED', 'unset'))).toBe(true);
   });
@@ -26,4 +27,11 @@ describe('isProbeErrorResult', () => {
     expect(isProbeErrorResult(unknown(null, 'NOT_PROBED', 'waiting'))).toBe(false);
     expect(isProbeErrorResult(unknown(null, 'INVALID_DNS_VALUE', 'bad record'))).toBe(false);
   });
+});
+
+
+it('does not count a dead timeout result as a probe error', () => {
+  const target = parseProxyTarget('203.0.113.10:443');
+  if (!target) throw new Error('invalid fixture target');
+  expect(isProbeErrorResult(dead(target, { code: 'TIMEOUT', message: '节点连接超时' }))).toBe(false);
 });

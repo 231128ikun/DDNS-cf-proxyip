@@ -33,7 +33,7 @@ export function createUiFixture() {
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
     poolContents: {}, probeDelay: 0, probeDelays: {}, probeErrors: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
-    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0 };
+    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
 }
 
 /** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
@@ -130,6 +130,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       response.once('close', () => {
         if (!entry.completed) { entry.completed = true; entry.aborted = true; entry.completedAt = Date.now(); }
       });
+      if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) return json(fixture.maintenanceResponse);
       if (url.pathname === '/api/auth/status') {
         const key = String(fixture.config.authKey ?? '').trim();
         const cookie = (request.headers.cookie ?? '').split(';').map(part => part.trim())
@@ -217,7 +218,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         const delay = fixture.probeDelays[address] ?? fixture.probeDelay;
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         const failure = fixture.probeErrors[address];
-        const result = failure ? { status: 'unknown', exitFamily: 'unknown', exits: [], ...failure }
+        const result = failure ? { status: failure.code === 'TIMEOUT' ? 'dead' : 'unknown', exitFamily: 'unknown', exits: [], ...failure }
           : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
