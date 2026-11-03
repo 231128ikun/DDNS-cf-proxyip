@@ -92,6 +92,7 @@ export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAda
     timeoutMs: config.timeoutMs,
     fallbackToNext: config.fallbackToNext,
     fetchImpl: deps.fetchImpl ?? appFetch,
+    onDiagnostic: diagnostic => console.warn('[probe-anomaly]', diagnostic),
   });
 }
 

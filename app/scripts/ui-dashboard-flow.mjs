@@ -112,9 +112,20 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
       await cdp.until(sessionId, 'document.querySelector("#status-table .status-reason")?.textContent.includes("节点检测超时")');
       check(await read('document.querySelector("#status-table .status-badge.bad")?.textContent === "失效（超时）"'), '节点检测超时未显示为失效');
       check(await read('document.querySelector("#status-table .status-reason")?.checkVisibility()'), '超时原因只藏在提示中，没有直接展示');
+      check(await read('document.querySelector("#log-window").textContent.includes("203.0.113.89:443") && document.querySelector("#log-window").textContent.includes("TIMEOUT") && document.querySelector("#log-window").textContent.includes("节点检测超时")'), '单节点异常缺少逐地址、错误码和具体原因日志');
     } finally {
       delete fixture.probeErrors['203.0.113.89:443'];
     }
+    fixture.probeErrors['203.0.113.10:443'] = { code: 'NETWORK_ERROR', message: 'fixture ECONNRESET', endpoint: 'backup', diagnostics: [
+      { endpoint: 'primary', status: 'unknown', code: 'HTTP_ERROR', message: 'HTTP 503' },
+      { endpoint: 'backup', status: 'unknown', code: 'NETWORK_ERROR', message: 'fixture ECONNRESET' },
+    ] };
+    try {
+      await click(refreshButton);
+      await cdp.until(sessionId, 'document.querySelector("#log-window")?.textContent.includes("[解析 edge.example.com|A]") && document.querySelector("#log-window")?.textContent.includes("fixture ECONNRESET")');
+      const log = await read('document.querySelector("#log-window").textContent');
+      check(log.includes('primary [HTTP_ERROR] HTTP 503') && log.includes('backup [NETWORK_ERROR] fixture ECONNRESET'), '自动解析未展示主／备用接口异常过程');
+    } finally { delete fixture.probeErrors['203.0.113.10:443']; }
     await click(refreshButton);
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
   }

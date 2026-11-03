@@ -12,6 +12,13 @@ export interface ProbeExit {
   readonly organization?: string;
 }
 
+export interface ProbeDiagnostic {
+  readonly endpoint: string;
+  readonly status: ProbeStatus;
+  readonly code?: string;
+  readonly message: string;
+}
+
 export interface ProbeResult {
   readonly status: ProbeStatus;
   readonly target: ProxyTarget | null;
@@ -23,6 +30,7 @@ export interface ProbeResult {
   readonly colo?: string;
   readonly code?: string;
   readonly message?: string;
+  readonly diagnostics?: readonly ProbeDiagnostic[];
 }
 
 type ProbeDetails = Omit<ProbeResult, 'status' | 'target' | 'exitFamily' | 'exits'> & {
@@ -71,6 +79,7 @@ function withOptionalDetails(base: Omit<ProbeResult, 'exits'>, details: ProbeDet
     ...(details.colo ? { colo: details.colo } : {}),
     ...(details.code ? { code: details.code } : {}),
     ...(details.message ? { message: details.message } : {}),
+    ...(details.diagnostics?.length ? { diagnostics: details.diagnostics } : {}),
   };
 }
 
