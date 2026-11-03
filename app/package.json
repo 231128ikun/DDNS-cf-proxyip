@@ -22,11 +22,11 @@
     "deploy": "node scripts/deploy.mjs",
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "audit:ui": "node scripts/ui-audit.mjs && node scripts/ui-config-layout.mjs",
+    "audit:ui": "node scripts/ui-audit.mjs && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only",
-    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs"
+    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
   },
   "dependencies": {
     "preact": "^10.29.8"

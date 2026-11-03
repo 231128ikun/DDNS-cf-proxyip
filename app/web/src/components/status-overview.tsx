@@ -7,8 +7,9 @@ import type { RequestState } from '../state/request-state';
 import { currentStatusRows, type TargetStatusView } from '../state/target-status';
 import { Icon } from './icon';
 import { probeStatusLabel } from './probe-status';
+import { TargetSelector, type TargetSelectorProps } from './target-selector';
 
-interface StatusOverviewProps {
+interface StatusOverviewProps extends Pick<TargetSelectorProps, 'bindings' | 'targetChoices' | 'onSelectTarget'> {
   readonly check: RequestState<CheckTargetResponse>;
   readonly current: RequestState<TargetStatusView>;
   readonly selectedKey: string | null;
@@ -25,13 +26,16 @@ interface StatusOverviewProps {
 
 /** 当前 DNS 与任意目标探测共用一个展示区域，刷新或切换目标后回到当前记录。 */
 export function StatusOverview({ check, current, selectedKey, targetPort, lookup, onLookupChange,
-  onLookup, onRefresh, onCopy, onCopyAddress, onAdd, onDelete }: StatusOverviewProps) {
+  onLookup, onRefresh, onCopy, onCopyAddress, onAdd, onDelete, bindings, targetChoices, onSelectTarget }: StatusOverviewProps) {
   const [addValue, setAddValue] = useState('');
   const [adding, setAdding] = useState(false);
   return (
     <section class="card p-4 probe-overview-card" aria-labelledby="status-overview-title">
-      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-        <h2 id="status-overview-title" class="card-title m-0 fw-bold"><Icon name="antenna" /> 解析实况</h2>
+      <div class="status-overview-toolbar mb-3">
+        <div class="status-overview-context">
+          <h2 id="status-overview-title" class="card-title m-0 fw-bold"><Icon name="antenna" /> 解析实况</h2>
+          <TargetSelector bindings={bindings} selectedTargetKey={selectedKey} targetPort={targetPort} targetChoices={targetChoices} onSelectTarget={onSelectTarget} />
+        </div>
         <form class="d-flex gap-2 align-items-center flex-grow-1 ddns-lookup-form" onSubmit={onLookup}>
           <input id="lookup-domain" type="text" class="form-control form-control-sm"
             placeholder="探测: 域名 / IP:端口 / txt@域名" aria-label="要探测的域名或 IP"

@@ -10,6 +10,7 @@ import { Icon, type IconName } from './icon';
 import { poolOptions } from '../state/pool-options';
 import { StatusOverview } from './status-overview';
 import { ResourceFeedback } from './resource-feedback';
+import type { TargetSelectorProps } from './target-selector';
 
 /** 当前忙碌的池写操作。 */
 export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
@@ -53,7 +54,7 @@ export interface DashboardActions {
   readonly runMaintenance: () => void;
 }
 
-interface DashboardPageProps {
+interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'targetChoices' | 'onSelectTarget'> {
   readonly check: RequestState<CheckTargetResponse>;
   readonly pools: RequestState<PoolsResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
@@ -103,6 +104,9 @@ export function DashboardPage({
   consoleLogs,
   batchProgressState,
   targetStatus,
+  bindings,
+  targetChoices,
+  onSelectTarget,
   selectedTargetKey,
   targetPort,
   maintenanceBusy,
@@ -123,6 +127,7 @@ export function DashboardPage({
     <div id="page-dashboard" class="page-panel active" role="tabpanel" aria-labelledby="tab-dashboard">
       <StatusOverview
         check={check} current={targetStatus} selectedKey={selectedTargetKey} targetPort={targetPort}
+        bindings={bindings} targetChoices={targetChoices} onSelectTarget={onSelectTarget}
         lookup={lookup} onLookupChange={onLookupChange} onLookup={actions.lookupSubmit}
         onRefresh={actions.refresh}
         onCopy={onCopyToInput} onCopyAddress={onCopyAddress} onAdd={actions.addRecord} onDelete={actions.deleteRecord}
