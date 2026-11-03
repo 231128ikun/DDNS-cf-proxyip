@@ -2,6 +2,10 @@ name = "ddns-cf-proxyip"
 main = "src/index.ts"
 compatibility_date = "2026-09-24"
 
+[build]
+command = "node scripts/build-worker.mjs"
+watch_dir = ["src", "web", "scripts"]
+
 # API requests run in the Worker; other paths use static assets.
 [assets]
 directory = "dist/web"
@@ -9,7 +13,7 @@ binding = "ASSETS"
 not_found_handling = "none"
 run_worker_first = ["/api/*"]
 
-# Inherit the existing binding or provision a namespace on initial deployment.
+# Reuse the target Worker's IP_DATA binding; otherwise provision a namespace.
 [[kv_namespaces]]
 binding = "IP_DATA"
 

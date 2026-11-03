@@ -32,7 +32,7 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, probeDelay: 0, probeDelays: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
+    poolContents: {}, probeDelay: 0, probeDelays: {}, probeErrors: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0 };
 }
 
@@ -216,7 +216,9 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         const address = input.proxyip ?? url.searchParams.get('ip');
         const delay = fixture.probeDelays[address] ?? fixture.probeDelay;
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-        const result = { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
+        const failure = fixture.probeErrors[address];
+        const result = failure ? { status: 'unknown', exitFamily: 'unknown', exits: [], ...failure }
+          : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
           : json({ ...baselineProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });

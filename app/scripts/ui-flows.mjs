@@ -21,8 +21,8 @@ const referenceRef = flag('ref', UI_BASELINE_REF);
 const currentOnly = args.includes('--current-only');
 const selectors = {
   hero: '.hero', target: '.target-summary', nav: '.top-nav',
-  overview: '#page-dashboard > .card', workbench: '#page-dashboard .col-lg-7 > .card',
-  bindings: '.domain-binding-card', consoleCard: '#page-dashboard .col-lg-5 > .card', console: '#log-window',
+  overview: '#page-dashboard > .card', workbench: '#page-dashboard .dashboard-pool-card, #page-dashboard .col-lg-7 > .card',
+  bindings: '.domain-binding-card', consoleCard: '#page-dashboard .dashboard-console-card, #page-dashboard .col-lg-5 > .card', console: '#log-window',
 };
 
 const measure = (selectors) => {
@@ -42,6 +42,7 @@ const measure = (selectors) => {
     configCards: document.querySelectorAll('#page-config .config-mini-card').length,
     settingsIds: [...document.querySelectorAll('.config-details-body input[type="number"]')].map((input) => input.id),
     editorLabels: [...document.querySelectorAll('.config-edit-panel.active .field > span:first-child')].map((element) => element.textContent.trim()),
+    panelHeadingTops: [...document.querySelectorAll('.dashboard-card-header .card-title')].map(element => element.getBoundingClientRect().top + scrollY),
     toolbarCenters: [...document.querySelectorAll('.toolbar-row > *')].map((element) => {
       const box = element.getBoundingClientRect();
       return box.y + box.height / 2;
@@ -79,6 +80,25 @@ function differences(reference, current, width) {
     if (c.bindings.y < c.workbench.y + c.workbench.height) failures.push('域名绑定没有位于 IP 管理下方');
     if (Math.abs(c.consoleCard.y - c.workbench.y) > 2) failures.push('控制台与 IP 管理没有顶端对齐');
   }
+  return failures;
+}
+
+function workspaceFailures(current, width) {
+  const failures = [];
+  const { overview, workbench, consoleCard, bindings } = current.boxes;
+  if (current.overflow) failures.push('页面横向溢出');
+  if (!overview || !workbench || !consoleCard || !bindings) return [...failures, '工作区卡片缺失'];
+  if (width >= 992) {
+    if (Math.abs(workbench.width - consoleCard.width) > 1) failures.push('IP 管理和控制台未等宽');
+    if (Math.abs(workbench.height - consoleCard.height) > 1) failures.push('IP 管理和控制台未等高');
+    if (Math.abs(workbench.y - consoleCard.y) > 1) failures.push('工作区卡片顶端未对齐');
+    if (current.panelHeadingTops.length !== 2 || Math.abs(current.panelHeadingTops[0] - current.panelHeadingTops[1]) > 1) failures.push('工作区标题未对齐');
+  }
+  if (Math.abs(bindings.x - overview.x) > 1 || Math.abs(bindings.width - overview.width) > 1) failures.push('域名绑定未与解析实况同宽对齐');
+  if (bindings.y < Math.max(workbench.y + workbench.height, consoleCard.y + consoleCard.height)) failures.push('域名绑定没有位于工作区下方');
+  const centers = width <= 768 ? current.toolbarCenters.slice(1) : current.toolbarCenters;
+  if (current.toolbarCenters.length !== 4 || Math.max(...centers) - Math.min(...centers) > 2) failures.push('加载栏操作按钮未居中对齐');
+  if (width <= 768 && current.toolbarCenters[0] >= current.toolbarCenters[1]) failures.push('窄屏加载地址没有独占上方一行');
   return failures;
 }
 
@@ -213,7 +233,7 @@ async function run() {
         await capture(cdp, session, width, 'dashboard', failures);
       }
       if (!currentOnly) failures.push(...differences(sessions[0].data, sessions[1].data, width));
-      else if (sessions[0].data.overflow) failures.push('页面横向溢出');
+      else failures.push(...workspaceFailures(sessions[0].data, width));
       if (currentOnly && JSON.stringify(sessions[0].data.poolOrder) !== JSON.stringify(['ip_pool_default', 'ip_pool_001', 'ip_pool_002', 'ip_pool_trash'])) failures.push('池列表或保存顺序与测试数据不符');
       console.log(`${width}px dashboard: ${failures.join('；') || '通过'}`);
       for (const session of sessions) {

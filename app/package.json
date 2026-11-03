@@ -11,21 +11,20 @@
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
-    "dev": "npm run build && wrangler dev",
+    "dev": "wrangler dev",
     "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && npm run build:worker",
+    "build": "node scripts/build-worker.mjs",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "vitest run",
     "test:contract": "vitest run test/unit/api-contract.test.ts",
     "test:unit": "vitest run --exclude test/unit/api-contract.test.ts",
     "check": "npm run typecheck && npm run test:contract && npm run test:unit && npm run build && npm run check:size && npm run smoke",
-    "deploy": "npm run check:size && wrangler deploy",
+    "deploy": "node scripts/deploy.mjs",
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "build:worker": "node scripts/build-worker.mjs",
     "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only",
     "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression"
   },
@@ -45,7 +44,7 @@
   "cloudflare": {
     "bindings": {
       "IP_DATA": {
-        "description": "保存配置、IP 池和域名绑定。新实例可创建 KV；更新已有实例时必须保留原 Namespace。"
+        "description": "运行配置、IP 池与域名绑定的存储。npm run deploy 在未配置原绑定时先尝试创建；仅在同名 KV 冲突时复用唯一匹配的命名空间。"
       }
     }
   }

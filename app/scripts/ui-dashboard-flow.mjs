@@ -91,6 +91,18 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
     await new Promise((resolve) => setTimeout(resolve, 350));
     check(await read('document.querySelector("#status-table").textContent.includes("203.0.113.10:443")'), '旧探测响应覆盖了刷新后的当前记录');
     fixture.probeDelay = 0;
+    fixture.probeErrors['203.0.113.89:443'] = { code: 'TIMEOUT', message: '检测接口超时，节点状态未知' };
+    try {
+      await setValue('#lookup-domain', '203.0.113.89:443');
+      await click(lookupButton);
+      await cdp.until(sessionId, 'document.querySelector("#status-table .status-reason")?.textContent.includes("检测接口超时")');
+      check(await read('document.querySelector("#status-table .status-badge.warn")?.textContent === "未知（超时）"'), '真实接口异常未显示为未知');
+      check(await read('document.querySelector("#status-table .status-reason")?.checkVisibility()'), '未知原因只藏在提示中，没有直接展示');
+    } finally {
+      delete fixture.probeErrors['203.0.113.89:443'];
+    }
+    await click(refreshButton);
+    await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
   }
   return failures;
 }

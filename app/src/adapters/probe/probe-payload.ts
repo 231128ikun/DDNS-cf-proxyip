@@ -18,7 +18,7 @@ export function firstText(record: JsonRecord, keys: readonly string[]): string |
 export function readProbeExit(record: JsonRecord, stackHint: string | undefined): ProbeExit | null {
   const ip = firstText(record, ['ip', 'ipAddress', 'exitIp', 'exit_ip', 'address', 'query']);
   const family = normalizeSingleExitFamily(readText(record.ipType) ?? readText(record.type) ?? stackHint, ip);
-  const asn = normalizeAsn(firstText(record, ['asn', 'as', 'asNumber']));
+  const asn = normalizeAsn(record.asn) ?? normalizeAsn(record.as) ?? normalizeAsn(record.asNumber);
   const country = firstText(record, ['country', 'countryCode']);
   const organization = firstText(record, ['asOrganization', 'asname', 'org', 'isp']);
 
@@ -40,9 +40,11 @@ export function normalizeSingleExitFamily(value: string | undefined, ip: string 
   return inferred === 'ipv4' || inferred === 'ipv6' ? inferred : 'unknown';
 }
 
-function normalizeAsn(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().replace(/^AS/i, '').toUpperCase();
+function normalizeAsn(value: unknown): string | undefined {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? String(value) : undefined;
+  const text = readText(value);
+  if (!text) return undefined;
+  const normalized = text.replace(/^AS/i, '').toUpperCase();
   return normalized || undefined;
 }
 

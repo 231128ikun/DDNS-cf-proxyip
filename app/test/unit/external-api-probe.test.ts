@@ -312,6 +312,119 @@ describe('probe rechecks', () => {
   });
 });
 
+describe('complete public probe payload regressions', () => {
+  // Failure captured from the public probe on 2026-11-02. Successful IPv6 fields come from the user's live log; IPv4/country are simulated.
+  const completePayload = (success: boolean) => ({
+    candidate: success ? '188.166.171.1:443' : '1.1.1.1:443',
+    success,
+    proxyIP: success ? '188.166.171.1' : '1.1.1.1',
+    portRemote: 443,
+    inferred_stack: success ? 'dual_stack' : 'unknown',
+    supports_ipv4: success,
+    supports_ipv6: success,
+    dual_stack: success,
+    responseTime: success ? 1107 : null,
+    elapsed_ms: success ? 1110 : 1,
+    colo: success ? 'LHR' : 'ICN',
+    timeStamp: '2026-11-02T06:52:27.657Z',
+    message: success ? 'proxy request succeeded' : 'proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead',
+    probe_results: {
+      ipv4: {
+        candidate: success ? '188.166.171.1:443' : '1.1.1.1:443', connect_ms: success ? 12 : null, tls_ms: success ? 24 : null,
+        http_ms: success ? 88 : null, status_code: success ? 200 : null, ok: success,
+        error: success ? null : 'proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead',
+        exit: success ? { ip: '198.51.100.42', ipType: 'ipv4', asn: 'AS64500', country: 'jp', asOrganization: 'Example Network' } : null,
+      },
+      ipv6: {
+        candidate: success ? '188.166.171.1:443' : '1.1.1.1:443', connect_ms: success ? 270 : null, tls_ms: success ? 278 : null,
+        http_ms: success ? 559 : null, status_code: success ? 200 : null, ok: success,
+        error: success ? null : 'proxy request failed, cannot connect to the specified address. It looks like you might be trying to connect to a HTTP-based service — consider using fetch instead',
+        exit: success ? { ip: '2a03:b0c0:1:e0:0:1:38db:b001', ipType: 'ipv6', colo: 'LHR', asn: 14061, country: 'gb', asOrganization: 'DigitalOcean' } : null,
+      },
+    },
+  });
+
+  it.each([true, false])('does not mistake timing/error field names for TLS failures (success=%s)', async (success) => {
+    const fetchImpl = vi.fn(async () => jsonResponse(completePayload(success)));
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: fetchImpl as typeof fetch,
+    });
+    const result = await adapter.probe(target);
+    expect(result).toMatchObject({ status: success ? 'alive' : 'dead' });
+    expect(result.code).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(success ? 1 : 2);
+    if (success) {
+      expect(result).toMatchObject({ colo: 'LHR', exitFamily: 'dual', exitIp: '198.51.100.42', exits: [
+        { family: 'ipv4', ip: '198.51.100.42', asn: '64500', country: 'JP', organization: 'Example Network' },
+        { family: 'ipv6', ip: '2a03:b0c0:1:e0:0:1:38db:b001', asn: '14061', country: 'GB', organization: 'DigitalOcean' },
+      ] });
+    }
+  });
+
+  it.each([
+    ['timeout_ms', 15000], ['error', null], ['tls', { error: null }], ['HTTP', 500],
+    ['TLS handshake failed', null], ['timeout', false],
+  ])('ignores non-string values and infrastructure-looking field names: %s', async (key, value) => {
+    const payload = { ...completePayload(true), error: { [key]: value } };
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
+    });
+    expect((await adapter.probe(target)).status).toBe('alive');
+  });
+
+  it.each(['probe_results', 'probeResults', 'probes'])('ignores normal metadata inside %s even when strings contain error-like words', async (alias) => {
+    const { probe_results, ...record } = completePayload(true);
+    probe_results.ipv6.candidate = 'timeout.example.com:443';
+    probe_results.ipv6.exit!.asOrganization = 'TLS handshake failed';
+    const payload = { ...record, [alias]: probe_results };
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
+    });
+    expect((await adapter.probe(target)).status).toBe('alive');
+  });
+
+  it.each(['asn', 'as', 'asNumber'])('preserves numeric ASN from %s without inventing other metadata', async (key) => {
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse({ success: true,
+        probe_results: { ipv6: { ok: true, error: null, exit: {
+          ip: '2a03:b0c0:1:e0:0:1:38db:b001', ipType: 'ipv6', [key]: 14061, country: 'gb', asOrganization: 'DigitalOcean',
+        } } },
+      })) as typeof fetch,
+    });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'alive', exits: [
+      { family: 'ipv6', ip: '2a03:b0c0:1:e0:0:1:38db:b001', asn: '14061', country: 'GB', organization: 'DigitalOcean' },
+    ] });
+  });
+
+  it.each([null, false, 0, -1, 1.5, '', { number: 14061 }])('ignores invalid numeric/missing ASN without hiding a valid alias: %j', async (asn) => {
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse({ success: true,
+        exit: { ip: '198.51.100.42', asn, asNumber: 'AS64500' },
+      })) as typeof fetch,
+    });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'alive', exits: [{ asn: '64500' }] });
+  });
+
+  it.each([
+    ['TLS handshake failed', 'PROBE_API_ERROR', true], ['TLS handshake failed', 'PROBE_API_ERROR', false],
+    ['tcp connect timeout after 9999ms', 'TIMEOUT', true], ['tcp connect timeout after 9999ms', 'TIMEOUT', false],
+    ['HTTP 502', 'HTTP_ERROR', true], ['HTTP 502', 'HTTP_ERROR', false],
+  ] as const)('still classifies real nested errors in complete payloads: %s / %s (success=%s)', async (message, code, success) => {
+    const payload = completePayload(success);
+    payload.probe_results.ipv6.error = message;
+    const adapter = new ExternalApiProbeAdapter({
+      endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
+    });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code });
+  });
+});
+
 describe('external probe safety regressions', () => {
   const adapterFor = (payload: unknown) => new ExternalApiProbeAdapter({
     endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
@@ -342,6 +455,7 @@ describe('external probe safety regressions', () => {
     ['probes', { probes: { ipv4: { ok: false, error: 'Network connection lost.' } } }],
     ['simultaneous aliases', { probe_results: { ipv4: { ok: false, error: 'connection refused' } }, probeResults: { ipv6: { ok: false, error: 'Network connection lost.' } } }],
     ['nested probe error', { probes: { ipv4: { ok: false, error: { cause: { message: 'Network connection lost.' } } } } }],
+    ['nested error array', { probes: { ipv4: { ok: false, error: { causes: [{ detail: 'Network connection lost.' }] } } } }],
     ['untruncated evidence', { message: 'ordinary details '.repeat(30) + 'Network connection lost.' }],
   ] as const)('detects infrastructure evidence in %s', async (_label, evidence) => {
     const result = await adapterFor({ success: false, ...evidence }).probe(target);

@@ -24,7 +24,7 @@ const child = spawn(process.execPath, [wrangler, 'dev', '--config', 'wrangler.to
   '--var', 'CHECK_API:', '--var', 'CHECK_API_BACKUP:'], {
   cwd: appRoot,
   stdio: 'ignore',
-  env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
+  env: { ...process.env, DDNS_SKIP_CUSTOM_BUILD: '1', CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
 });
 
 let failed = false;
