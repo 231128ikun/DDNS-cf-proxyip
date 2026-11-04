@@ -159,7 +159,7 @@ const auditProbe = () => {
     if (!visible(el)) continue;
     if (el.tagName === "INPUT" && el.type === "hidden") continue;
     // 复选框的关联 label 也是实际点击目标；只量 13px 的 input 会误报。
-    const target = el.tagName === "INPUT" && el.labels?.length
+    const target = el.tagName === "INPUT" && ["checkbox", "radio"].includes(el.type) && el.labels?.length
       ? [...el.labels].find((label) => visible(label)) ?? el
       : el;
     const rect = target.getBoundingClientRect();
@@ -316,6 +316,8 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
           }
           return null;
         };
+        const addTab = await waitFor(() => document.querySelector("[data-pool-mode=import]"));
+        addTab?.click();
         const input = await waitFor(() => document.querySelector("#ip-input"));
         const button = await waitFor(() => document.querySelector('button[aria-label="批量检测导入草稿"]'));
         if (!input || !button) return { failures: ["检测控件未渲染"] };
@@ -336,10 +338,10 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
 
         const report = await waitFor(() => {
           const idle = document.querySelector('button[aria-label="批量检测导入草稿"]');
-          return idle && document.querySelector('.pool-report')?.textContent.includes('未知 1') ? document.querySelector('.pool-report').textContent : null;
+          return idle && document.querySelector('.pool-report')?.textContent.includes('检测异常 1') ? document.querySelector('.pool-report').textContent : null;
         });
         if (!report || !report.includes('可用 1') || input.value !== original) failures.push('检测报告没有独立保留可用/未知数量与原始草稿');
-        const unknown = [...document.querySelectorAll('.pool-report button')].find(button => button.textContent.trim() === '未知 1');
+        const unknown = [...document.querySelectorAll('.pool-report button')].find(button => button.textContent.trim() === '检测异常 1');
         unknown?.click();
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (!document.querySelector('.pool-result-list')?.textContent.includes('检测超时')) failures.push('未知检测结果缺少具体原因');

@@ -150,7 +150,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
         if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);
         const result = await worker.fetch(new Request(url, { method: request.method,
-          headers: { 'content-type': 'application/json' }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }), { IP_DATA: kv });
         const data = await result.json();
         const delay = read ? fixture.poolReadDelay : preview ? fixture.poolPreviewDelay : fixture.poolWriteDelay;
         const output = read && fixture.poolReadOverride !== null ? { ...data, content: fixture.poolReadOverride } : data;

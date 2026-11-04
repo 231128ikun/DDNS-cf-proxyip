@@ -61,13 +61,13 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     batchSourceMap.current = null;
   }, []);
 
-  const handleCheckBatch = (resume = false): void => {
+  const handleCheckBatch = (resume = false, sourceOverride?: string): void => {
     if (config.status !== 'ready') {
       notify(config.status === 'error' ? config.message : '正在读取配置，请稍后检测', 'error');
       return;
     }
     if (activeBatch.current) return;
-    const sourceText = resume ? batchSource.current : ipText;
+    const sourceText = resume ? batchSource.current : sourceOverride ?? ipText;
     const resumed = resume ? remainingBatch(sourceText, batchCompleted.current) : null;
     const text = resumed?.text ?? sourceText;
     if (!text.trim()) {
@@ -75,6 +75,8 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       return;
     }
     if (!resume) {
+      if (sourceOverride !== undefined) setIpText(sourceOverride);
+      setBatchInterrupt(null);
       batchSource.current = sourceText;
       batchCompleted.current.clear();
       batchGroups.current.clear();
@@ -98,7 +100,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
     setBatchProgressState({ completed: retained, total: retained + total });
-    appendConsoleLog(`[批量] ${resume ? '继续检测未完成项' : '开始检测清洗'} · ${total} 个地址`);
+    appendConsoleLog(`[批量] ${resume ? '继续检测未完成项' : '开始检测'} · ${total} 个地址`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
       setBatchProgressState({ completed: retained + event.completed, total: retained + event.total });
@@ -108,6 +110,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       group.push(event.item);
       batchGroups.current.set(sourceIndex, group);
       if (event.sourceComplete) batchCompleted.current.add(sourceIndex);
+      setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
       const statusLabel = formatProbeLog(event.item);
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
       if (shouldLogProbe(event.item)) appendConsoleLog(`[批量] ${event.item.address} · ${statusLabel}`, tone);

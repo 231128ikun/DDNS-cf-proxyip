@@ -16,6 +16,7 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   const refreshButton = surface === 'baseline' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
   const select = '.target-select-overlay';
   if (surface === 'current') {
+    await click('[data-pool-mode=import]');
     fixture.maintenanceResponse = { ok: true, changed: true, insufficient: true,
       errors: ['edge.example.com: 模拟目标错误', 'proxy.example.com: 模拟维护错误'], probeErrors: 2,
       notification: { sent: false, reason: 'failed', code: 'HTTP_503', delivered: 1, total: 2 },

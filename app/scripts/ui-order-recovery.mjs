@@ -33,6 +33,7 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
     await cdp.send('Network.setCacheDisabled', { cacheDisabled: true }, sessionId);
     await run('order-delayed-load', async () => {
       await navigate();
+      await click('[data-pool-mode=import]');
       fixture.orderChunkDelay = 800;
       fixture.probeDelay = 1500;
       await read(`(() => {
@@ -53,8 +54,8 @@ export async function auditOrderRecovery(cdp, sessionId, base, requests, fixture
       await cdp.until(sessionId, '!document.querySelector(".custom-modal-overlay")');
       assert(await read('document.body.style.overflow !== "hidden"'), '关闭弹窗后遗留滚动锁');
       if (await read('document.documentElement.scrollHeight > innerHeight')) {
-        await read('scrollTo(0, 0)');
-        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 180, y: 180, deltaX: 0, deltaY: 600 }, sessionId);
+        await read('scrollTo({ top: 0, behavior: "instant" }); new Promise(resolve => requestAnimationFrame(resolve))');
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 8, y: 180, deltaX: 0, deltaY: 600 }, sessionId);
         await cdp.until(sessionId, 'scrollY > 0');
       }
     });

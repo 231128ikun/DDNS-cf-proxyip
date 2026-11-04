@@ -45,6 +45,7 @@ const measure = (selectors) => {
     settingsIds: [...document.querySelectorAll('.config-details-body input[type="number"]')].map((input) => input.id),
     editorLabels: [...document.querySelectorAll('.config-edit-panel.active .field > span:first-child')].map((element) => element.textContent.trim()),
     panelHeadingTops: [...document.querySelectorAll('.dashboard-card-header .card-title')].map(element => element.getBoundingClientRect().top + scrollY),
+    poolMode: document.querySelector("[data-pool-mode][aria-pressed=true]")?.dataset.poolMode,
     toolbarCenters: [...document.querySelectorAll('.pool-remote > *, .toolbar-row > *')].map((element) => {
       const box = element.getBoundingClientRect();
       return box.y + box.height / 2;
@@ -99,8 +100,7 @@ function workspaceFailures(current, width) {
     if (Math.abs(workbench.y - consoleCard.y) > 1) failures.push('工作区卡片顶端未对齐');
     if (current.panelHeadingTops.length !== 2 || Math.abs(current.panelHeadingTops[0] - current.panelHeadingTops[1]) > 1) failures.push('工作区标题未对齐');
   }
-  if (current.toolbarCenters.length !== 2) failures.push('远程导入必须有且仅有 URL 输入与加载动作');
-  else if (width <= 768 ? current.toolbarCenters[0] >= current.toolbarCenters[1] : Math.abs(current.toolbarCenters[0] - current.toolbarCenters[1]) > 2) failures.push('远程输入/加载未按屏幕宽度对齐');
+  if (current.poolMode !== 'manage') failures.push('IP 库初始视图应直接展示库内地址');
   return failures;
 }
 

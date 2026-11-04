@@ -13,6 +13,7 @@ export async function auditBatchResume(cdp, sessionId, base, requests, fixture, 
     fixture.probeDelay = 180;
     await cdp.send('Page.navigate', { url: base }, sessionId);
     await cdp.until(sessionId, 'document.querySelector("#status-table")?.textContent.includes("203.0.113.10:443")');
+    await cdp.click(sessionId, '[data-pool-mode=import]');
     const initialPoolHeight = await read('document.querySelector(".dashboard-pool-card").getBoundingClientRect().height');
     const addresses = Array.from({ length: 12 }, (_, index) => `203.0.113.${index + 20}:443`);
     await read(`(() => {

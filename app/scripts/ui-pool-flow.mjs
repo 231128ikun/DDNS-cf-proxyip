@@ -11,6 +11,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
   const read = expression => cdp.evaluate(sessionId, expression);
   const click = selector => cdp.click(sessionId, selector);
   const setValue = async (selector, value) => {
+    if (selector === '#ip-input' && !await read('Boolean(document.querySelector("#ip-input"))')) await click('[data-pool-mode=import]');
     if (selector === '#ip-input' && await read('Boolean(document.querySelector("[data-action=view-draft]")) && !document.querySelector("#ip-input").getClientRects().length')) {
       await click('[data-action=view-draft]');
     }
@@ -35,7 +36,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await setValue('#ip-input', source); await click('#main-actions button:first-child');
     await cdp.until(sessionId, 'document.querySelector(".pool-report")?.textContent.includes("可用 1") && document.querySelector("#log-window").textContent.includes("[批量] 完成")');
     assert.equal(await read('document.querySelector("#ip-input").value'), source, '检测改写原始草稿');
-    assert.ok(await read('document.querySelector(".pool-report").textContent.includes("未知 1") && document.querySelector(".pool-report").textContent.includes("失效 1") && document.querySelector(".pool-report").textContent.includes("格式无效 1")'), '报告分类缺项');
+    assert.ok(await read('document.querySelector(".pool-report").textContent.includes("检测异常 1") && document.querySelector(".pool-report").textContent.includes("失效 1") && document.querySelector(".pool-report").textContent.includes("格式无效 1")'), '报告分类缺项');
     assert.ok(await read('document.querySelector("[data-action=append-input]").disabled'), '无效输入仍可直接写入');
     assert.equal(requests.slice(start).filter(item => item.method !== 'GET' && item.path !== '/api/check').length, 0, '普通检测或筛选触发写入');
     await click('[data-action=append-alive]');
@@ -62,20 +63,20 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     fixture.poolReadOverride = '203.0.113.88:443';
     await click('[data-pool-mode=manage]');
     await click('[data-action=read-pool]');
-    await cdp.until(sessionId, 'document.querySelector(".dashboard-pool-card").textContent.includes("可能尚未同步或已被其他操作修改")');
+    await cdp.until(sessionId, 'document.querySelector(".dashboard-pool-card").textContent.includes("可能尚未同步或已在别处修改")');
     assert.ok(await read('document.querySelector(".pool-table").textContent.includes("203.0.113.40:443")'), '差异读取覆盖确认内容');
-    await button('采用读取快照');
+    await button('使用服务器内容');
     await cdp.until(sessionId, 'document.querySelector(".pool-table").textContent.includes("203.0.113.88:443")');
     fixture.poolReadOverride = null;
     await click('[data-action=read-pool]');
     await cdp.until(sessionId, 'document.querySelectorAll(".pool-table tbody tr").length === 3');
-    await click('.pool-table input');
+    await click('.pool-table tbody input');
     await setValue('#universal-filter', 'country:US');
-    assert.equal(await read('document.querySelectorAll(".pool-table input:checked").length'), 0, '筛选保留隐藏旧选择');
+    assert.equal(await read('document.querySelectorAll(".pool-table tbody input:checked").length'), 0, '筛选保留隐藏旧选择');
     assert.ok(await read('document.querySelector("[data-action=remove-selected]").disabled'), '空选择可以删除');
     await setValue('#universal-filter', 'port:0 |');
     assert.ok(await read('document.querySelector(".dashboard-pool-card").textContent.includes("筛选条件无效")'), '非法 OR 被忽略');
-    await setValue('#universal-filter', ''); await click('.pool-table input');
+    await setValue('#universal-filter', ''); await click('.pool-table tbody input');
     await click('[data-action=remove-selected]');
     await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
     assert.ok(await read('document.querySelector(".pool-preview-modal").textContent.includes("仅删除明确选择")'), '删除预览仍使用追加说明');
@@ -84,7 +85,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     assert.ok(!fixture.poolContents.ip_pool_default.includes('203.0.113.10:443') && fixture.poolContents.ip_pool_default.includes('203.0.113.11:443'), '删除范围不等于规范化选择');
     assert.ok(!fixture.poolContents.ip_pool_trash, '人工删除写入垃圾桶');
 
-    await button('完整编辑'); await setValue('#pool-editor', '# standalone\n203.0.113.55:443');
+    await button('编辑文本'); await setValue('#pool-editor', '# standalone\n203.0.113.55:443');
     // A selector change, rather than a click, invokes the dirty-leave guard.
     await read('window.__poolConfirm = window.confirm; window.confirm = () => false');
     await setValue('#pool-selector', 'ip_pool_001');
@@ -94,7 +95,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     assert.ok(await read('document.querySelector(".pool-preview-modal").textContent.includes("独立备注 0 → 1")'), '覆盖遗漏独立备注影响');
     await click('[data-action=confirm-pool]'); await cdp.until(sessionId, '!document.querySelector("#pool-preview-title")');
     assert.ok(fixture.poolContents.ip_pool_default.includes('# standalone'), '完整覆盖未保存备注');
-    await button('完整编辑'); await setValue('#pool-editor', ''); await click('[data-action=replace-pool]');
+    await button('编辑文本'); await setValue('#pool-editor', ''); await click('[data-action=replace-pool]');
     await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
     await dialog('[data-action=confirm-pool]', false);
     assert.notEqual(fixture.poolContents.ip_pool_default, '', '空 replace 缺少独立危险确认');
@@ -106,20 +107,20 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await setValue('#pool-selector', 'ip_pool_001');
     await cdp.until(sessionId, 'document.querySelector("#filter-preview")?.textContent.includes("201")');
     const cleanStart = requests.length;
-    await button('洗库（写库与入桶）');
-    assert.ok(await read('document.querySelector(".pool-feedback")?.textContent.includes("最多 200")'), '洗库超限未提示');
+    await button('检测并清理');
+    assert.ok(await read('document.querySelector(".pool-feedback")?.textContent.includes("最多检测 200")'), '洗库超限未提示');
     assert.equal(requests.slice(cleanStart).filter(item => item.path.endsWith('/clean')).length, 0, '超限洗库仍发请求');
     const geometry = await read(`(() => {
       const table = document.querySelector('.pool-table'), row = table.querySelector('tbody tr');
-      const check = row.querySelector('input').getBoundingClientRect(), address = row.querySelector('strong').getBoundingClientRect();
+      const check = row.querySelector('label').getBoundingClientRect(), address = row.querySelector('strong').getBoundingClientRect();
       const oneLine = element => { const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects().length === 1; };
       return { overlap: check.right > address.left, checkboxSize: Math.min(check.width, check.height),
-        selectionHeading: oneLine(table.querySelector('th:first-child')), statusHeading: oneLine(table.querySelector('th:last-child')),
-        status: oneLine(row.querySelector('td:last-child')) };
+        selectionHeading: Boolean(table.querySelector('th input[aria-label=全选本页]')), statusHeading: oneLine(table.querySelector('th:last-child')),
+        status: oneLine(row.querySelector('strong')) };
     })()`);
     assert.deepEqual(geometry, { overlap: false, checkboxSize: 32, selectionHeading: true, statusHeading: true, status: true }, '管理表选择/状态换行或复选框遮挡地址');
     await capture?.('manage-long');
-    await button('完整编辑'); await setValue('#pool-editor', '203.0.113.200:443');
+    await button('编辑文本'); await setValue('#pool-editor', '203.0.113.200:443');
     await click('[data-action=replace-pool]'); await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
     assert.ok(await read('document.querySelectorAll(".pool-change-list li").length === 202'), '长预览静默截断差异');
     await read('Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})))');
@@ -128,17 +129,17 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await capture?.('long-preview');
     await click('.pool-preview-modal .custom-modal-buttons button:first-child');
     await read('window.__poolConfirm = window.confirm; window.confirm = () => true');
-    await button('取消完整编辑'); await read('window.confirm = window.__poolConfirm');
+    await button('取消'); await read('window.confirm = window.__poolConfirm');
 
     fixture.poolContents.ip_pool_trash = '203.0.113.77:443,AS77,JP,v4 # dead 来自 ip_pool_001';
     await setValue('#pool-selector', 'ip_pool_trash');
     await cdp.until(sessionId, 'document.querySelector(".pool-table")?.textContent.includes("203.0.113.77")');
     assert.equal(await read('document.querySelectorAll("[data-pool-mode]").length'), 0, '垃圾桶有重复入口');
     assert.ok(await read('document.querySelector(".pool-table").textContent.includes("香港节点")'), '未显示来源池');
-    await click('.pool-table input'); fixture.restoreFailures = 1;
+    await click('.pool-table tbody input'); fixture.restoreFailures = 1;
     await click('[data-action=restore-trash]');
     await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("未取得成功确认")');
-    assert.equal(await read('document.querySelectorAll(".pool-table input:checked").length'), 1, '恢复失败丢选择');
+    assert.equal(await read('document.querySelectorAll(".pool-table tbody input:checked").length'), 1, '恢复失败丢选择');
     await click('[data-action=restore-trash]');
     await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("已恢复 1")');
     assert.ok(fixture.poolContents.ip_pool_001.includes('203.0.113.77:443,AS77,JP,v4'), '真实 Worker 未恢复到来源池');
@@ -147,7 +148,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     fixture.poolContents.ip_pool_trash = Array.from({ length: 1001 }, (_, i) => `10.1.${Math.floor(i / 250)}.${i % 250 + 1}:443`).join('\n');
     await click('[data-action=read-pool]');
     await cdp.until(sessionId, 'document.querySelector("#filter-preview")?.textContent.includes("1001")');
-    await button('选择当前筛选结果'); const restoreStart = requests.length;
+    await button('全选匹配结果'); const restoreStart = requests.length;
     await click('[data-action=restore-trash]');
     assert.ok(await read('document.querySelector(".pool-feedback")?.textContent.includes("最多恢复 1000")'), '恢复超限未报错');
     assert.equal(requests.slice(restoreStart).filter(item => item.path.endsWith('/restore')).length, 0, '恢复静默截断或超限发请求');
@@ -157,11 +158,12 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await cdp.until(sessionId, 'document.querySelector(".pool-table")?.textContent.includes("203.0.113.15")');
     fixture.cleanResponse = { ok: true, poolKey: 'ip_pool_002', checked: 1, kept: 1, trashed: 0, unknown: 1, skipped: true };
     await read('window.__poolConfirm = window.confirm; window.confirm = () => true');
-    await button('洗库（写库与入桶）');
-    await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("洗库跳过")');
+    await button('检测并清理');
+    await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("未清理")');
     assert.ok(await read('document.querySelector(".pool-table").textContent.includes("203.0.113.15")'), '跳过洗库丢失快照');
     await click('[data-pool-mode=import]');
-    assert.ok(await read('document.querySelector(".pool-import").textContent.includes("服务端规范化") && document.querySelector(".pool-import").textContent.includes("无效原始行无法恢复")'), '远程导入缺少已有规范化限制说明');
+    assert.ok(await read('document.querySelector(".pool-import").textContent.includes("自动忽略无效行")'), '远程导入缺少已有规范化限制说明');
+    await click('.pool-remote-help > summary');
     await setValue('#remote-url', 'https://example.test/pool.txt'); fixture.remoteFailures = 1;
     await click('[aria-label="从远程 URL 加载"]');
     await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("模拟远程加载失败")');
@@ -193,7 +195,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await click('[data-pool-mode=manage]'); await click('[data-action=read-pool]');
     await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled');
     assert.equal(await read('document.querySelector("#pool-count").textContent'), '0', '删除后复用相同 key 恢复了旧确认数量');
-    assert.equal(await read('document.querySelectorAll(".pool-table tbody tr").length'), 0, '新建空池仍显示已删除容器地址');
+    assert.equal(await read('document.querySelectorAll(".pool-table tbody strong").length'), 0, '新建空池仍显示已删除容器地址');
     assert.ok(await read('document.documentElement.scrollWidth <= innerWidth'), 'IP 库操作造成页面溢出');
   } catch (error) { failures.push('pool-flow: ' + error.message); }
   finally { Object.assign(fixture, original); }
@@ -213,8 +215,9 @@ export async function auditCompactPoolFlow(cdp, sessionId, base, requests, fixtu
     fixture.poolContents.ip_pool_default = content;
     await cdp.send('Page.navigate', { url: base }, sessionId);
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled');
     const start = requests.length;
-    await click('[data-pool-mode=manage]');
+    await click('[data-action=read-pool]');
     await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'GET', 200);
     await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled && Boolean(document.querySelector(".pool-table"))');
     await settle();
@@ -233,7 +236,7 @@ export async function auditCompactPoolFlow(cdp, sessionId, base, requests, fixtu
       await read('[...document.querySelectorAll(".dashboard-pool-card button")].find(button => button.textContent.trim() === "后一页").click()');
       await cdp.until(sessionId, 'document.querySelectorAll(".pool-table tbody tr").length === 1');
       assert.ok(await read('document.querySelector(".pool-table tbody").textContent.includes("10.2.0.51:443")'), '未到达第二页最后条目');
-      await click('.pool-table input');
+      await click('.pool-table tbody input');
       const start = requests.length;
       await click('[data-action=remove-selected]');
       await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
@@ -259,24 +262,24 @@ export async function auditCompactPoolFlow(cdp, sessionId, base, requests, fixtu
       const before = entries(3), after = before.replace('10.2.0.1:443,AS64500,US', '10.2.0.1:443,AS64500,JP');
       await open(before);
       await read(`(() => { const input = document.querySelector('#universal-filter'); input.value = 'country:US'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-      await settle(); await click('.pool-table input');
-      assert.equal(await read('document.querySelectorAll(".pool-table input:checked").length'), 1, '慢读取前未建立选择');
+      await settle(); await click('.pool-table tbody input');
+      assert.equal(await read('document.querySelectorAll(".pool-table tbody input:checked").length'), 1, '慢读取前未建立选择');
       fixture.poolReadDelay = 1200; fixture.poolReadOverride = after; fixture.poolContents.ip_pool_default = after;
       const start = requests.length;
       await click('[data-action=read-pool]'); await settle();
-      const atStart = await read('({ checked: document.querySelectorAll(".pool-table input:checked").length, removeDisabled: document.querySelector("[data-action=remove-selected]").disabled })');
+      const atStart = await read('({ checked: document.querySelectorAll(".pool-table tbody input:checked").length, removeDisabled: document.querySelector("[data-action=remove-selected]").disabled })');
       const during = await read(`(() => {
-        const rows = [...document.querySelectorAll('.pool-table input')];
-        const selectAll = [...document.querySelectorAll('.dashboard-pool-card button')].find(button => button.textContent.trim() === '选择当前筛选结果');
+        const rows = [...document.querySelectorAll('.pool-table tbody input')];
+        const selectAll = [...document.querySelectorAll('.dashboard-pool-card button')].find(button => button.textContent.trim() === '全选匹配结果');
         const state = { reading: document.querySelector('[data-action=read-pool]').disabled, rowDisabled: rows.every(input => input.disabled), selectAllDisabled: selectAll.disabled };
         rows[0].click(); selectAll.click(); return state;
       })()`);
       await settle();
-      during.checked = await read('document.querySelectorAll(".pool-table input:checked").length');
+      during.checked = await read('document.querySelectorAll(".pool-table tbody input:checked").length');
       during.removeDisabled = await read('document.querySelector("[data-action=remove-selected]").disabled');
       await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'GET', 200);
       await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled && document.querySelectorAll(".pool-table tbody tr").length === 2');
-      const completed = await read(`({ checked: document.querySelectorAll('.pool-table input:checked').length,
+      const completed = await read(`({ checked: document.querySelectorAll('.pool-table tbody input:checked').length,
         summary: document.querySelector('#filter-preview').textContent, removeDisabled: document.querySelector('[data-action=remove-selected]').disabled,
         hiddenAddressAbsent: !document.querySelector('.pool-table tbody').textContent.includes('10.2.0.1:443') })`);
       // Native clicks respect disabled controls. If a stale selection opens a real preview,

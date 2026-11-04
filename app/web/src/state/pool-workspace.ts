@@ -69,7 +69,7 @@ export class PoolWorkspace {
     try {
       const result = await this.client.readPool(key, controller.signal);
       if (generation !== this.readGeneration || key !== this.key || controller.signal.aborted) return;
-      if (result.key !== key) throw new Error('读取快照的池与请求不符');
+      if (result.key !== key) throw new Error('返回的 IP 池与请求不符');
       const confirmed = this.confirmed.get(key);
       this.divergent = confirmed && confirmed.content !== result.content ? result.content : undefined;
       if (!confirmed) this.content = result.content;
@@ -117,11 +117,11 @@ export class PoolWorkspace {
       if (receipt?.written) {
         this.confirmed.set(plan.poolKey, { content: receipt.content, count: result.count });
         if (this.key === plan.poolKey) { this.content = receipt.content; this.divergent = undefined; }
-        this.message = '本次操作已确认 · ' + result.count + ' 条地址（不代表全球最新值）';
+        this.message = '已保存 · ' + result.count + ' 条地址';
       } else if (receipt) {
         if (!this.confirmed.has(plan.poolKey) && this.key === plan.poolKey) this.content = receipt.content;
-        this.message = '读取快照无变化，未执行新写入；保留已有确认值';
-      } else this.message = '请求成功，但未提供回执；保留当前显示，可显式读取快照';
+        this.message = '内容没有变化，未执行新写入';
+      } else this.message = '请求成功，但未提供回执；请刷新列表核对';
       if (this.preview === plan) this.preview = undefined;
       return true;
     } catch (error) {

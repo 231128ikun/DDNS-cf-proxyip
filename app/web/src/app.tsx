@@ -286,6 +286,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   /** 只读地把当前记录复制到池工作台，不在 DNS 层做任何写入。 */
   const handleCopyToInput = (address: string): void => {
+    if (batchState.checkingBatch || !poolLeaveGuard.current()) return;
     const lines = ipText.split('\n').map((line) => line.trim()).filter(Boolean);
     if (lines.includes(address)) {
       notify('该地址已在输入框中', 'error');

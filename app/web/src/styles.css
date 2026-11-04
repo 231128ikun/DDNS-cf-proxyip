@@ -879,7 +879,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
         textarea.ip-input {
             border-radius: var(--radius-lg);
             font-family: 'SF Mono', monospace;
-            font-size: var(--font-size-xs);
+            font-size: var(--font-size-field);
         }
         .config-details {
             overflow: hidden;
@@ -1240,11 +1240,11 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
         }
 
 .pool-modes, .pool-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-.pool-buttons > .btn { min-height: var(--control-height-compact); white-space: normal; }
+.pool-buttons > .btn { white-space: normal; }
 .pool-summary, .pool-feedback { overflow-wrap: anywhere; }
 .pool-remote { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; margin-bottom: var(--space-3); }
 .pool-management { gap: var(--space-3); }
-.pool-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-data); margin: var(--space-2) 0; }
+.pool-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-field); margin: var(--space-2) 0; }
 .pool-remote-help { margin-bottom: var(--space-3); }
 .pool-remote-help summary { min-height: var(--control-height-compact); line-height: var(--control-height-compact); cursor: pointer; }
 .pool-remote-help p { margin: var(--space-2) 0; }
@@ -1253,23 +1253,25 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .pool-view-switch .btn[aria-pressed="true"], .pool-report .btn[aria-pressed="true"] { background: var(--color-info-soft); color: var(--color-primary); border-color: var(--color-primary); }
 .pool-data-body { height: var(--pool-content-height); min-height: 0; margin-bottom: var(--space-3); }
 .pool-data-body #ip-input { height: 100%; min-height: 0; resize: none; margin: 0; }
-.pool-data-body > textarea[hidden], .pool-data-body > .pool-report[hidden] { display: none; }
 .pool-report { display: flex; flex-direction: column; min-height: 0; height: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: var(--space-3); }
 .pool-result-list, .pool-change-list { padding-left: var(--space-7); max-height: var(--order-list-max-height); overflow-y: auto; overflow-wrap: anywhere; }
 .pool-report .pool-result-list { flex: 1; min-height: 0; max-height: none; margin: 0 0 var(--space-2); }
 .pool-report .pool-buttons { margin-bottom: var(--space-2); }
 .pool-report .pool-buttons:last-child { margin-bottom: 0; }
-.pool-result-list li, .pool-change-list li { margin-bottom: var(--space-3); font-size: var(--font-size-data); }
+.pool-result-list li, .pool-change-list li { margin-bottom: var(--space-3); font-size: var(--font-size-field); }
 .pool-result-list span, .pool-table small { display: block; color: var(--color-field-help); }
 .pool-result-list .pool-diagnostic { color: var(--color-warning-strong); white-space: pre-wrap; }
+.pool-table-wrap { height: var(--pool-content-height); }
 .pool-table-wrap, .pool-invalid .pool-text { max-height: var(--pool-content-height); overflow-y: auto; }
-.pool-table { table-layout: fixed; }
+.pool-table { table-layout: fixed; font-size: var(--font-size-field); }
 .pool-table th:first-child { width: calc(var(--control-height-compact) + var(--space-3) * 2); }
-.pool-table th:last-child { width: calc(var(--control-height-compact) * 2); }
-.pool-table th:first-child, .pool-table th:last-child, .pool-table td:last-child { white-space: nowrap; }
+.pool-trash-table th:last-child { width: calc(var(--control-height-compact) * 2); }
+.pool-trash-table :is(th,td):last-child { white-space: nowrap; }
 .pool-table td { overflow-wrap: anywhere; }
-.pool-table input { display: block; margin: 0; width: var(--control-height-compact); height: var(--control-height-compact); }
+.pool-table label { display: grid; place-items: center; width: var(--control-height-compact); height: var(--control-height-compact); }
+.pool-table input { margin: 0; width: var(--space-8); height: var(--space-8); }
+.pool-table th { text-align: left; }
 .pool-preview-modal { max-width: var(--order-modal-width); max-height: var(--order-list-max-height); overflow-y: auto; overflow-wrap: anywhere; }
-@media (max-width: 768px) {
-  .pool-remote { grid-template-columns: minmax(0, 1fr); }
-}
+
+.pool-table thead { position: sticky; top: 0; background: var(--color-surface); z-index: 1; }
+.pool-management > * { margin-bottom: 0; }
