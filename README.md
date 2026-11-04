@@ -166,13 +166,16 @@ IPv6 带端口必须加方括号。标准池格式为 `ip:port,asn,country,stack
 ### 操作提醒
 
 - **失败与未知**：候选连接、TLS、目标 HTTP、出口 JSON 失败或候选超时，复检仍失败时按失效处理，洗库和维护可移入垃圾桶；检测运行异常、备用 API 自身的网络、非 2xx、坏响应或显式异常仍为未知。普通检测和解析实况刷新不改库，出口筛选不匹配也不当作死节点。
-- “删除选中”只删除勾选地址；编辑全部内容保存为空时，需要再次确认。人工删除不进入垃圾桶。
+- IP 库直接以文本查看和编辑；添加只追加并去重，覆盖修改先展示差异，清空全部地址需要再次确认。人工删除不进入垃圾桶。
 - 服务端“一键洗库”单次最多 200 个不同有效地址；更大的池可使用面板逐地址批量检测。
+- 原生检测显式发送 SNI 并校验证书链，使用 TLS 1.3；信任库来自 Mozilla CA 数据（curl.se），在当前运行实例内缓存一天，加载失败报告检测异常。默认出口探针无需配置，自定义覆盖收纳在高级设置中。
+- 鼠标悬停版本号、键盘聚焦或点击版本号可查看更新记录，记录来源为 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 参考与许可
 
 - [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 - [CF-Workers-DD2D](https://github.com/cmliu/CF-Workers-DD2D)
 - [CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)
+- [subtls](https://github.com/jawj/subtls)（MIT，显式 SNI 与 TLS 1.3 证书校验）
 
 [MIT License](./LICENSE)

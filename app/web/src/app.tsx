@@ -16,6 +16,7 @@ import {
 } from './components/dashboard-page';
 import { PoolPanel } from './components/pool-panel';
 import { Hero } from './components/hero';
+import { VersionHistory } from './components/version-history';
 import type { GlobalSettingKey } from './components/config-page';
 import { TopNav, type AppPage } from './components/top-nav';
 import { Modal } from './components/modal';
@@ -24,7 +25,7 @@ import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
-import { formatProbeLog, formatDnsSnapshot, shouldLogProbe } from './components/probe-log';
+import { formatProbeLog } from './components/probe-log';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -55,7 +56,9 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [configBusy, setConfigBusy] = useState(false);
   const configWritePending = useRef(false);
   const bindingWritePending = useRef(false);
-  const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
+  const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>(() => [{
+    id: 0, time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), tone: 'info', message: '[系统] 正在加载配置…',
+  }]);
   const [toast, setToast] = useState<Toast | null>(null);
   const logSequence = useRef(0);
   const activeLookup = useRef<AbortController | null>(null);
@@ -68,7 +71,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const orderModule = useRef<OrderDialogModule | null>(null);
   const OrderDialog = orderModule.current?.OrderDialog;
   const startupLogged = useRef(false);
-  const loggedProbeDiagnostics = useRef(new Map<string, string>());
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -143,38 +145,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!configuredTargets) return;
     resetLookup();
     const controller = new AbortController();
-    loggedProbeDiagnostics.current.clear();
     void refreshTargetStatuses(controller.signal);
     void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
     return () => controller.abort();
   }, [configuredTargets, refreshTargetStatuses, resetLookup]);
 
-  /** 解析实况也是检测入口；异常逐项进工作台，同一加载过程不重复打印。 */
-  useEffect(() => {
-    if (targetStatuses.status !== 'ready') return;
-    for (const [key, state] of Object.entries(targetStatuses.data.byKey)) {
-      if (state.status === 'error') {
-        if (loggedProbeDiagnostics.current.get(key) !== state.message) {
-          loggedProbeDiagnostics.current.set(key, state.message);
-          appendConsoleLog('[解析 ' + key + '] ' + state.message, 'error');
-        }
-      } else if (state.status === 'ready') {
-        const snapshot = formatDnsSnapshot(state.data);
-        if (loggedProbeDiagnostics.current.get(key + ':dns') !== snapshot) {
-          loggedProbeDiagnostics.current.set(key + ':dns', snapshot);
-          appendConsoleLog('[解析] ' + snapshot);
-        }
-        for (const item of state.data.probes) {
-          if (!shouldLogProbe(item)) continue;
-          const identity = key + ':' + item.address;
-          const message = formatProbeLog(item);
-          if (loggedProbeDiagnostics.current.get(identity) === message) continue;
-          loggedProbeDiagnostics.current.set(identity, message);
-          appendConsoleLog('[解析 ' + key + '] ' + item.address + ' · ' + message, item.status === 'dead' ? 'error' : 'warning');
-        }
-      }
-    }
-  }, [targetStatuses, appendConsoleLog]);
 
   /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
   useLayoutEffect(() => {
@@ -209,6 +184,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready' || pools.status !== 'ready' || !confirmedBindings) return;
     if (targetChoices.length && !selectedTargetKey) return;
     startupLogged.current = true;
+    appendConsoleLog('[配置] 已加载' + (config.data.source === 'kv' ? ' KV 配置' : '环境配置'), 'success');
     appendConsoleLog(targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加', targetChoices.length ? 'success' : 'warning');
   }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices]);
 
@@ -265,8 +241,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleRefresh = (): void => {
     resetLookup();
-    loggedProbeDiagnostics.current.clear();
-    appendConsoleLog('[系统] 正在并发刷新全部域名解析');
+    appendConsoleLog('[解析] 刷新实况');
     void refreshTargetStatuses();
   };
 
@@ -555,7 +530,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       </div>
 
       <footer class="container text-center text-secondary small">
-        DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
+        <VersionHistory version={health.status === 'ready' ? health.data.version : 'unknown'} />
       </footer>
       {orderRequest && OrderDialog && !batchInterrupt && <OrderDialog {...orderRequest}
         onSave={order => orderModule.current!.saveOrder(orderRequest.kind, order,

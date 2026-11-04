@@ -3,6 +3,7 @@ import {
   MAX_TARGETS,
   MAX_ZONES,
   SETTINGS_LIMITS,
+  createDefaultConfig,
   parseAppConfig,
   type ConfigResponse,
   type ConfigUpdateRequest,
@@ -315,14 +316,20 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
           </fieldset>
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
           <div class="config-grid config-group">
-            <TextField id="cfg-probe-ipv4" label="IPv4 出口接口" help="原生检测经候选 IP 访问，需返回含 ip 的 JSON。" value={form.probeIpv4Url} placeholder="https://ipv4.090227.xyz/" onValue={(value) => patch({ probeIpv4Url: value })} />
-            <TextField id="cfg-probe-ipv6" label="IPv6 出口接口" help="验证 IPv6 出口；留空关闭该检测分支。" value={form.probeIpv6Url} placeholder="https://ipv6.090227.xyz/" onValue={(value) => patch({ probeIpv6Url: value })} />
             <TextField id="cfg-check-api-backup" label="备用检测 API" help="原生失败时复检；留空则原生重试。支持 {proxyip} 占位符。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
             <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
           </div>
+          <details class="config-group">
+            <summary>高级：覆盖内置出口探针</summary>
+            <p class="small text-secondary">默认使用内置探针，无需配置。仅在需要自定义时填写 HTTPS JSON 接口，留空恢复内置。</p>
+            <div class="config-grid">
+              <TextField id="cfg-probe-ipv4" label="IPv4 自定义探针" help="可选，返回包含 ip 的 JSON。" value={form.probeIpv4Url === createDefaultConfig().probeIpv4Url ? '' : form.probeIpv4Url} placeholder="留空使用内置 IPv4 探针" onValue={value => patch({ probeIpv4Url: value || createDefaultConfig().probeIpv4Url })} />
+              <TextField id="cfg-probe-ipv6" label="IPv6 自定义探针" help="可选，返回包含 ip 的 JSON。" value={form.probeIpv6Url === createDefaultConfig().probeIpv6Url ? '' : form.probeIpv6Url} placeholder="留空使用内置 IPv6 探针" onValue={value => patch({ probeIpv6Url: value || createDefaultConfig().probeIpv6Url })} />
+            </div>
+          </details>
           <section class="config-group" aria-labelledby="config-runtime-title">
             <h3 id="config-runtime-title">运行参数</h3>
             <div class="config-grid config-runtime-grid">
