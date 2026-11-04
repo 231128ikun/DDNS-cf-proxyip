@@ -20,7 +20,7 @@ describe('Telegram maintenance message', () => {
     });
 
     expect(message).toContain('🔧 <b>DDNS 手动维护报告</b>');
-    expect(message).toContain('━━━━━━━━━━━━━━━━━━');
+    expect(message).not.toMatch(/[━─—]{2}/u);
     expect(message).toContain('⏰ ');
     expect(message).toContain('<a href="https://panel.example">打开管理面板</a>');
   });

@@ -27,7 +27,7 @@ async function fixture(failAdd = false) {
   const dns: DnsRepository = { listAddressRecords: async () => records, listTxtRecords: async () => [], addAddressRecord: add,
     deleteRecord: async () => undefined, upsertTxtRecord: async () => { throw new Error('Unused'); } };
   const pools: PoolRepository = { load: async () => '203.0.113.12:443', save: async () => undefined, addToTrash: async () => undefined };
-  const probe: ProbeAdapter = { name: 'fixture', probe: async address => alive(address, { exitFamily: 'ipv4', latencyMs: 12,
+  const probe: ProbeAdapter = { name: 'fixture', probe: async address => alive(address, { exitFamily: 'ipv4', latencyMs: 12, colo: 'ICN',
     exits: [{ family: 'ipv4', ip: '198.51.100.42', country: 'JP', asn: '64500' }] }) };
   const data = { zones: [], targets: [{ target, zoneIndex: null, enabled: true }], poolMapping: {}, poolNames: { ip_pool_default: '默认池' } };
   const zone = { zoneId: 'fixture-zone', apiToken: 'fixture-private-token' };
@@ -39,6 +39,62 @@ async function fixture(failAdd = false) {
 }
 
 describe('complete and concise maintenance output', () => {
+  it('groups domains without wrapping decorative rules and keeps address metadata compact', async () => {
+    const { run } = await fixture();
+    const message = buildTelegramMaintenanceMessage(run, { isManual: true, now: new Date('2026-11-04T04:00:00Z') });
+    expect(message).not.toMatch(/[━─—]{2}/u);
+    expect(message).toContain('<b>edge.example.com</b>\nA/AAAA');
+    expect(message).toContain('端口 443');
+    expect(message).toContain('最小活跃数 3');
+    expect(message).toContain('活跃：3/3');
+    for (const last of ['10', '11', '12']) {
+      expect(message).toContain('✅ <code>203.0.113.' + last + '</code>' + (last === '12' ? ' [新增]' : '')
+        + '\n   JP · AS64500 · ICN · 12ms');
+    }
+  });
+
+  it('escapes domain-group labels and keeps pool inventories readable', async () => {
+    const { run } = await fixture();
+    const result = run.results[0]!;
+    const named = { ...run, results: [{ ...result, poolName: 'A&B <pool>' }], poolStats: { ...run.poolStats,
+      pools: [{ key: result.poolKey, name: 'A&B <pool>', count: 1 }] } };
+    const message = buildTelegramMaintenanceMessage(named, { isManual: true });
+    expect(message).toContain('A&amp;B &lt;pool&gt;');
+    expect(message).not.toContain('A&B <pool>');
+    expect(message).toContain('IP 池库存');
+    expect(message).toContain('：1');
+  });
+
+  it('preserves TXT ports, IPv6 and unknown diagnostics in domain groups', async () => {
+    const { run } = await fixture();
+    const original = run.results[0]!;
+    const report = original.report!;
+    const target = normalizeManagedTarget({ mode: 'TXT', domain: 'proxy.example.com', port: 'any', minActive: 2 })!;
+    const values = ['203.0.113.10:443', '[2001:db8::10]:8443'];
+    const template = report.plan.current[0]!;
+    const current = values.map((value, index) => ({ ...template, item: { ...template.item, value, address: value,
+      result: index === 0 ? alive(parseProxyTarget(value)!, { exitFamily: 'ipv4', latencyMs: 12, colo: 'ICN',
+        exits: [{ family: 'ipv4', country: 'JP', asn: '64500' }] }) : {
+        status: 'unknown' as const, target: parseProxyTarget(value)!, exitFamily: 'unknown' as const,
+        exits: [], code: 'INVALID_RESPONSE', message: '检测接口返回坏 JSON',
+      } } }));
+    const changed = { ...run, insufficient: true, probeErrors: 1, results: [{ ...original, target, report: {
+      ...report, target, added: 0, deleted: 0, activeCount: 1, probeErrors: 1, dnsUpdated: false,
+      dns: { before: values, after: values, added: [], removed: [] }, candidateResults: [],
+      plan: { ...report.plan, current, activeCount: 1, dnsValues: values, additions: [], trash: [] },
+    } }] };
+    const message = buildTelegramMaintenanceMessage(changed, { isManual: true });
+    expect(message).toContain('<b>proxy.example.com</b>\nTXT · 最小活跃数 2');
+    expect(message).toContain('✅ <code>203.0.113.10:443</code>');
+    expect(message).toContain('⚠️ <code>[2001:db8::10]:8443</code>');
+    expect(message).toContain('未判定 · [INVALID_RESPONSE] 检测接口返回坏 JSON');
+    expect(message).toContain('活跃：1/2');
+    expect(message).toContain('未达到最小活跃数');
+    expect(message).not.toContain('端口 443');
+    expect(message).toContain('检测异常 1 次（未计为失效）');
+    expect(message).not.toContain('❌ <code>[2001:db8::10]:8443</code>');
+  });
+
   it('includes every final DNS address, actual active count and successful additions', async () => {
     const { run } = await fixture();
     const message = buildTelegramMaintenanceMessage(run, { isManual: true, now: new Date('2026-11-03T00:00:00Z') });

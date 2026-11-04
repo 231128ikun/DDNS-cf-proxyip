@@ -15,7 +15,6 @@ export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, optio
   const title = options.isManual ? 'DDNS 手动维护报告' : 'DDNS 自动维护报告';
   const lines = [
     (options.isManual ? '🔧' : '⚙️') + ' <b>' + title + '</b>',
-    '━━━━━━━━━━━━━━━━━━',
     '⏰ ' + formatBeijingTimestamp(options.now ?? new Date()),
   ];
   if (run.errors.length) lines.push('⚠️ 执行错误 ' + run.errors.length + ' 项');
@@ -45,7 +44,7 @@ export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, optio
 
 function formatTarget(result: MaintenanceRunResult): string[] {
   const mode = result.mode === 'A' ? 'A/AAAA' + (result.port ? ' · 端口 ' + result.port : '') : 'TXT';
-  const lines = ['━━ <code>' + escapeHtml(result.domain) + '</code> ━━', mode + ' · 最小活跃数 ' + (result.minActive ?? 0),
+  const lines = ['<b>' + escapeHtml(result.domain) + '</b>', mode + ' · 最小活跃数 ' + (result.minActive ?? 0),
     '📦 使用池：<b>' + escapeHtml(result.poolName) + '</b>'];
   if (!result.dns) {
     lines.push('❌ 维护失败：' + escapeHtml(result.error ?? '未取得解析结果'));
@@ -96,7 +95,9 @@ function checkDetails(check: MaintenanceAddressCheck | undefined): string {
   if (!check) return '未确认';
   const status = check.status === 'alive' ? check.matchesTarget ? '可用' : '筛选不匹配'
     : check.status === 'dead' ? '失效' : '未判定';
-  return status + (check.details ? ' · ' + check.details : '')
+  const details = check.details?.replace(/耗时 (?=\d+(?:\.\d+)?ms$)/, '') ?? '';
+  const label = check.status === 'alive' && check.matchesTarget && details ? '' : status;
+  return label + (details ? (label ? ' · ' : '') + details : '')
     + (check.status !== 'alive' && check.message ? ' · ' + (check.code ? '[' + check.code + '] ' : '') + check.message : '');
 }
 

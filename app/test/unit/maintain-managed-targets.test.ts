@@ -325,7 +325,7 @@ describe('runMaintenanceJob', () => {
 
     expect(result.notification).toEqual({ sent: true, reason: 'sent' });
     expect(job.notifier.messages[0]).toContain('DDNS 自动维护报告');
-    expect(job.notifier.messages[0]).toContain('<code>edge.example.com</code>');
+    expect(job.notifier.messages[0]).toContain('<b>edge.example.com</b>');
   });
 
   it('notifies and reports the failure reason when every target throws', async () => {
