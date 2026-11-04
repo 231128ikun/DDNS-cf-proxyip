@@ -19,6 +19,20 @@ const success = (written: boolean | undefined, content = '1.1.1.1:443\n2.2.2.2:4
   ...(written === undefined ? {} : { receipt: { poolKey: 'ip_pool_default', content, written } }) });
 
 describe('pool workspace command/query boundary', () => {
+  it('forgets only the confirmed container identity that was deleted or recreated, so empty reused keys read empty', async () => {
+    const { model } = setup((path, init) => {
+      const key = path.split('/')[3]!;
+      if (path.endsWith('/preview')) return { ...preview, poolKey: key };
+      if (init.method === 'PUT') return { ...success(true), receipt: { poolKey: key, content: '1.1.1.1:443', written: true } };
+      return { key, content: '' };
+    });
+    await model.prepare('1.1.1.1', 'append'); await model.save();
+    model.select('ip_pool_002'); await model.prepare('1.1.1.1', 'append'); await model.save();
+    model.forgetPool('ip_pool_002'); model.select('ip_pool_default'); model.select('ip_pool_002'); await model.read();
+    expect(model.content).toBe(''); expect(model.divergent).toBeUndefined();
+    expect(model.confirmed.has('ip_pool_002')).toBe(false);
+    expect(model.confirmed.get('ip_pool_default')?.content).toBe('1.1.1.1:443');
+  });
   it('binds preview and write to identical explicit content/mode and requests a receipt without a GET', async () => {
     const { model, calls } = setup((path, init) => path.endsWith('/preview') ? preview : init.method === 'PUT' ? success(true) : {});
     await model.prepare('1.1.1.1:443', 'append');

@@ -28,14 +28,16 @@ interface PoolPanelProps {
   readonly configReady: boolean;
   readonly probeConfigured: boolean;
   readonly leaveGuard: { current: () => boolean };
+  readonly containerChanged: { current: (key: string) => void };
   readonly log: (message: string, tone?: ConsoleTone) => void;
 }
 
 /** The pool card owns drafts and queries; only explicit commands can write. */
 export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools,
-  batch, configReady, probeConfigured, leaveGuard, log }: PoolPanelProps) {
+  batch, configReady, probeConfigured, leaveGuard, containerChanged, log }: PoolPanelProps) {
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
+  containerChanged.current = key => model.forgetPool(key);
   const [mode, setMode] = useState<'import' | 'manage'>('import');
   const [edit, setEdit] = useState<{ poolKey: string; original: string; text: string } | null>(null);
   const [sourcePool, setSourcePool] = useState<string | null>(null);
@@ -186,6 +188,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         <input id="remote-url" class="form-control form-control-sm" type="url" aria-label="远程 TXT URL" placeholder="远程 TXT URL" value={url} disabled={remoteBusy || batch.checkingBatch || busy} onInput={event => setUrl(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') void loadRemote(); }} />
         <button type="button" class="btn btn-sm btn-outline-primary" aria-label="从远程 URL 加载" disabled={remoteBusy || batch.checkingBatch || busy} onClick={() => void loadRemote()}><Icon name="download" />{remoteBusy ? '加载中…' : '加载'}</button>
       </div>
+      <p class="small text-secondary">远程内容由服务端规范化，无效原始行无法恢复；粘贴草稿保留原文并校验。</p>
       <label class="small" for="ip-input">导入草稿（尚未保存）</label>
       <textarea id="ip-input" class="form-control ip-input mb-2" rows={6} value={batch.ipText} readOnly={batch.checkingBatch || remoteBusy || busy} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder="IPv4、[IPv6]:port、域名及已有元数据和备注" />
       {invalid.length > 0 && <details class="kv-alert compact" open><summary>格式无效 {invalid.length} 条，请修正后直接追加</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
@@ -263,7 +266,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     </div>}
     {model.previewing && <p role="status" class="small text-secondary">正在读取变更预览…</p>}
     {model.preview && <Modal id="pool-preview-title" title={`变更预览 · ${targetName}`} className="pool-preview-modal" onClose={() => { if (!model.writing) model.invalidate(); }}>
-      <p>操作：{({ append: '追加', replace: '覆盖', remove: '删除选择' })[model.preview.mode]} · {model.preview.poolKey}</p>
+      <p>操作：{({ append: '追加', replace: '覆盖', remove: '删除选择' })[model.preview.mode]}</p>
       <p>地址 {model.preview.data.currentCount} → {model.preview.data.count} · 新增 {model.preview.data.added} / 更新 {model.preview.data.updated} / 移除 {model.preview.data.removed}</p>
       <p>无法识别行 {model.preview.data.unrecognized.before} → {model.preview.data.unrecognized.after} · 独立备注 {model.preview.data.standaloneComments.before} → {model.preview.data.standaloneComments.after}</p>
       <p class="small text-secondary">预览基于读取快照，不会检测或加锁。{({ replace: '覆盖替换整个文本，独立备注也可能改变；下方是逐地址差异。', append: '追加不会清理原池中的失效地址。', remove: '仅删除明确选择的地址，不自动移入垃圾桶。' })[model.preview.mode]}</p>

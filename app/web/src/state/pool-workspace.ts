@@ -24,6 +24,14 @@ export class PoolWorkspace {
   private readController?: AbortController;
   private previewController: AbortController | undefined;
   constructor(private readonly client: ApiClient, private readonly changed = () => {}) {}
+  forgetPool(key: string): void {
+    this.confirmed.delete(key);
+    if (key === this.key) {
+      this.cancelRead(); this.invalidate();
+      this.content = undefined; this.divergent = undefined; this.message = '';
+    }
+    this.changed();
+  }
   select(key: string): void {
     if (key === this.key) return;
     this.cancelRead();

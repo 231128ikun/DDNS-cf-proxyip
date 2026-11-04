@@ -11,19 +11,20 @@ export async function auditBatchLifecycle(cdp, sessionId) {
       import { h, render } from 'preact';
       import { useBatchCheck } from './web/src/state/use-batch-check';
       import { ApiClient } from './web/src/api/client';
-      let hook, interrupt = true;
+      let hook, interrupt = true, rateScenario = false;
       const requests = [];
       class Client extends ApiClient {
         checkBatch(text, signal, progress, concurrency) {
           return super.checkBatch(text, signal, event => {
             progress(event);
-            if (interrupt && !event.sourceComplete) { interrupt = false; hook.handleStopBatch(); }
+            if (interrupt && (rateScenario ? event.sourceComplete : !event.sourceComplete)) { interrupt = false; hook.handleStopBatch(); }
           }, concurrency);
         }
       }
       const client = new Client({ fetchImpl: async (_url, init) => {
         const address = JSON.parse(init.body).proxyip; requests.push(address);
-        const addresses = address === 'multi.example.com' ? ['2.2.2.2:443', '3.3.3.3:443'] : [address];
+        const addresses = address === 'multi.example.com' ? ['2.2.2.2:443', '3.3.3.3:443']
+          : address === 'three.example.com' ? ['5.5.5.5:443', '6.6.6.6:443', '7.7.7.7:443'] : [address];
         return Response.json({ ok: true, input: address, source: { kind: 'direct' }, skipped: [],
           items: addresses.map(address => ({ address, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } })) });
       } });
@@ -34,6 +35,7 @@ export async function auditBatchLifecycle(cdp, sessionId) {
         return h('p', {}, 'batch lifecycle ready');
       }
       render(h(Harness), document.body);
+      window.startRateScenario = () => { rateScenario = true; interrupt = true; hook.replaceIpText('three.example.com\\n4.4.4.4:443'); };
     ` } });
   const server = createServer((request, response) => {
     response.setHeader('content-type', request.url === '/test.js' ? 'text/javascript' : 'text/html');
@@ -58,6 +60,15 @@ export async function auditBatchLifecycle(cdp, sessionId) {
       source: '1.1.1.1:443\nmulti.example.com', addresses: ['1.1.1.1:443', '2.2.2.2:443', '3.3.3.3:443'],
       alive: 3, progress: { completed: 3, total: 3 }, incomplete: [] },
     '续检未完成的多结果源时重复保留部分结果，或重复检测已完成源/虚增计数');
+    await read('window.startRateScenario()');
+    await cdp.until(sessionId, 'window.batchHook.ipText.startsWith("three.example.com")');
+    await read('window.batchHook.handleCheckBatch()');
+    await cdp.until(sessionId, 'Boolean(window.batchHook.batchInterrupt)');
+    const stats = await read('window.batchHook.batchInterrupt');
+    assert.equal(stats.checked, 1, '完成源数量错误');
+    assert.equal(stats.total, 2, '总源数量错误');
+    assert.equal(stats.valid, 3, '可用地址结果数量错误');
+    assert.equal(stats.rate, '100.0', '已检测地址结果全可用时有效率不应以源行数为分母');
   } finally { await new Promise(resolve => server.close(resolve)); }
 }
 

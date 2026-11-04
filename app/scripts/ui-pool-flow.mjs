@@ -158,6 +158,7 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("洗库跳过")');
     assert.ok(await read('document.querySelector(".pool-table").textContent.includes("203.0.113.15")'), '跳过洗库丢失快照');
     await click('[data-pool-mode=import]');
+    assert.ok(await read('document.querySelector(".pool-import").textContent.includes("服务端规范化") && document.querySelector(".pool-import").textContent.includes("无效原始行无法恢复")'), '远程导入缺少已有规范化限制说明');
     await setValue('#remote-url', 'https://example.test/pool.txt'); fixture.remoteFailures = 1;
     await click('[aria-label="从远程 URL 加载"]');
     await cdp.until(sessionId, 'document.querySelector(".pool-feedback")?.textContent.includes("模拟远程加载失败")');
@@ -177,6 +178,19 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     await cdp.until(sessionId, 'document.querySelector(".pool-report")?.textContent.includes("可用 1") && !document.querySelector("[aria-label=停止批量检测]")');
     assert.ok(await read('document.querySelector(".pool-report").textContent.includes("PARTIAL_EXIT") && document.querySelector(".pool-report").textContent.includes("IPv6 target HTTP 502")'), '部分出口异常没有在可用分类直接警示');
     await read('window.confirm = window.__poolConfirm');
+    fixture.poolContents.ip_pool_002 = '';
+    await click('[data-action=append-alive]'); await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
+    await click('[data-action=confirm-pool]'); await cdp.until(sessionId, '!document.querySelector("#pool-preview-title")');
+    assert.equal(await read('document.querySelector("#pool-count").textContent'), '1', '复用测试未建立原容器的确认值');
+    await read('window.confirm = () => true; window.prompt = () => "复用编号的新池"');
+    await click('#pool-action-trigger'); await click('.action-menu-item:last-child');
+    await cdp.until(sessionId, 'document.querySelector("#pool-selector").value === "ip_pool_default" && !document.querySelector("#pool-selector").disabled');
+    await click('#pool-action-trigger'); await click('.action-menu-item:first-child');
+    await cdp.until(sessionId, 'document.querySelector("#pool-selector").value === "ip_pool_002" && !document.querySelector("#pool-selector").disabled');
+    await click('[data-pool-mode=manage]'); await click('[data-action=read-pool]');
+    await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled');
+    assert.equal(await read('document.querySelector("#pool-count").textContent'), '0', '删除后复用相同 key 恢复了旧确认数量');
+    assert.equal(await read('document.querySelectorAll(".pool-table tbody tr").length'), 0, '新建空池仍显示已删除容器地址');
     assert.ok(await read('document.documentElement.scrollWidth <= innerWidth'), 'IP 库操作造成页面溢出');
   } catch (error) { failures.push('pool-flow: ' + error.message); }
   finally { Object.assign(fixture, original); }

@@ -48,6 +48,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   });
   const initialOrderPending = useRef(true);
   const poolLeaveGuard = useRef<() => boolean>(() => true);
+  const poolContainerChanged = useRef<(key: string) => void>(() => {});
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [bindingBusy, setBindingBusy] = useState(false);
@@ -349,6 +350,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!name) return;
     void runPoolAction('pool-edit', async () => {
       const created = await client.createPool(name);
+      poolContainerChanged.current(created.key);
       patchPools(current => ({ pools: [
         ...current.pools.filter(pool => pool.key !== TRASH_POOL_KEY && pool.key !== created.key),
         { key: created.key, name: created.displayName, count: 0 },
@@ -399,6 +401,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!window.confirm(`确认删除 ${poolKey}？池内 IP 将一并删除，已绑定的域名会回退到默认池。`)) return;
     void runPoolAction('pool-edit', async () => {
       await client.removePool(poolKey);
+      poolContainerChanged.current(poolKey);
       setPoolKey(DEFAULT_POOL_KEY);
       return `已删除 ${poolKey}`;
     });
@@ -520,7 +523,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
               containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()} batch={batchState}
               configReady={config.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.checkApi || config.data.config.checkApiBackup)}
-              leaveGuard={poolLeaveGuard} log={appendConsoleLog} />}
+              leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} />}
             check={check}
             batch={batch}
             lookup={lookup}
@@ -560,10 +563,10 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       {batchInterrupt && (
         <Modal id="batch-interrupt-title" title="检测已中断">
           <div class="custom-modal-stats">
-            <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
-            <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
-            <div><span class="label">有效率</span><span class="value">{batchInterrupt.rate}%</span></div>
-            <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
+            <div><span class="label">已完成来源</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
+            <div><span class="label">可用地址结果</span><span class="value">{batchInterrupt.valid} 个</span></div>
+            <div><span class="label">已检测地址有效率</span><span class="value">{batchInterrupt.rate}%（{batchInterrupt.valid}/{batchInterrupt.results}）</span></div>
+            <div><span class="label">待检测来源</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
           </div>
           <div class="custom-modal-buttons">
             <button class="btn-abandon" type="button" onClick={handleAbandonBatch}>放弃检测</button>

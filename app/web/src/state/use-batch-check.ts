@@ -14,6 +14,7 @@ interface BatchInterrupt {
   readonly checked: number;
   readonly total: number;
   readonly valid: number;
+  readonly results: number;
   readonly rate: string;
   readonly unchecked: number;
 }
@@ -163,15 +164,17 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     controller.abort();
     activeBatch.current = null;
     setCheckingBatch(false);
-    setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
-    const total = countPoolTextLines(batchSource.current);
+    const report = describeBatch(batchSource.current, batchGroups.current, batchCompleted.current);
+    setBatchReport(report);
     const completed = batchCompleted.current.size;
+    const total = completed + report.incomplete.length;
     setBatchInterrupt({
       checked: completed,
       total,
       valid: aliveSoFar.current,
-      rate: total ? (aliveSoFar.current / total * 100).toFixed(1) : '0.0',
-      unchecked: Math.max(0, total - completed),
+      results: report.items.length,
+      rate: report.items.length ? (aliveSoFar.current / report.items.length * 100).toFixed(1) : '0.0',
+      unchecked: report.incomplete.length,
     });
   };
 
