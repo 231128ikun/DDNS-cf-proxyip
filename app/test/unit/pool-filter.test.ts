@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  countPoolFilterMatches,
-  dedupePoolText,
-  filterPoolText,
   matchesPoolFilter,
   parsePoolFilter,
 } from '../../src/domain/pool-filter';
+import { cleanPoolText } from '../../src/domain/pool-text';
+import { parsePoolText } from '../../src/domain/pool-entry';
 
 function filter(query: string) {
   const parsed = parsePoolFilter(query);
@@ -53,11 +52,12 @@ describe('pool filter', () => {
     expect(matchesPoolFilter('203.0.113.12:443,AS64501,KR,v4', expression)).toBe(false);
   });
 
-  it('filters in keep and exclude modes', () => {
+  it('matches parsed entries by port and country without modifying their metadata', () => {
     const text = '203.0.113.10:443,AS64500,US,v4\n203.0.113.11:8443,AS64501,KR,v4\n\n';
-    expect(filterPoolText(text, filter('port:443'), 'keep')).toBe('203.0.113.10:443,AS64500,US,v4');
-    expect(filterPoolText(text, filter('port:443'), 'exclude')).toBe('203.0.113.11:8443,AS64501,KR,v4');
-    expect(countPoolFilterMatches(text, filter('country:US,KR'))).toBe(2);
+    const lines = parsePoolText(text).map(line => line.raw);
+    expect(lines.filter(line => matchesPoolFilter(line, filter('port:443')))).toEqual(['203.0.113.10:443,AS64500,US,v4']);
+    expect(lines.filter(line => !matchesPoolFilter(line, filter('port:443')))).toEqual(['203.0.113.11:8443,AS64501,KR,v4']);
+    expect(lines.map(line => matchesPoolFilter(line, filter('country:US,KR')))).toEqual([true, true]);
   });
 
   it('deduplicates by canonical address and keeps the later line', () => {
@@ -69,7 +69,7 @@ describe('pool filter', () => {
       'not a target',
     ].join('\n');
 
-    expect(dedupePoolText(text)).toBe([
+    expect(cleanPoolText(text)).toBe([
       '203.0.113.10:443,AS64501,KR,v6 # later',
       '[2001:db8::1]:443,null,null,null # same ipv6',
     ].join('\n'));
@@ -77,8 +77,9 @@ describe('pool filter', () => {
 
   it('filters and deduplicates mixed-separator input as individual entries', () => {
     const text = '203.0.113.10:443,AS64500,US,v4|203.0.113.11:8443,AS64501,KR,v4\t203.0.113.10:443,AS64500,US,v4';
-    expect(filterPoolText(text, filter('port:443'), 'keep')).toBe('203.0.113.10:443,AS64500,US,v4\n203.0.113.10:443,AS64500,US,v4');
-    expect(dedupePoolText(text)).toBe([
+    const matching = parsePoolText(text).map(line => line.raw).filter(line => matchesPoolFilter(line, filter('port:443')));
+    expect(matching).toEqual(['203.0.113.10:443,AS64500,US,v4', '203.0.113.10:443,AS64500,US,v4']);
+    expect(cleanPoolText(text)).toBe([
       '203.0.113.10:443,AS64500,US,v4',
       '203.0.113.11:8443,AS64501,KR,v4',
     ].join('\n'));
@@ -92,6 +93,6 @@ it('rejects an invalid OR group, an empty condition, or an empty OR branch as a 
 });
 
 it('retains earlier valid metadata when deduplicating a later incomplete entry', () => {
-  expect(dedupePoolText('203.0.113.10:443,AS64500,JP,v4 # old\n203.0.113.10:443,null,null,null # new'))
+  expect(cleanPoolText('203.0.113.10:443,AS64500,JP,v4 # old\n203.0.113.10:443,null,null,null # new'))
     .toBe('203.0.113.10:443,AS64500,JP,v4 # new');
 });

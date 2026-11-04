@@ -1,6 +1,5 @@
-import { parsePoolEntry, parsePoolText, normalizePoolStack, type PoolStack } from './pool-entry';
+import { parsePoolEntry, normalizePoolStack, type PoolStack } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
-import { cleanPoolText } from './pool-text';
 
 export interface PortFilterRange {
   readonly start: number;
@@ -16,7 +15,6 @@ export interface PoolFilterCriterion {
 }
 
 export type PoolFilter = readonly PoolFilterCriterion[];
-export type PoolFilterMode = 'keep' | 'exclude';
 
 /** 解析面板筛选表达式；无效端口条件让整次筛选失败，避免产生误导结果。 */
 export function parsePoolFilter(query: string): PoolFilter | null {
@@ -31,21 +29,6 @@ export function parsePoolFilter(query: string): PoolFilter | null {
 
 export function matchesPoolFilter(line: string, filter: PoolFilter): boolean {
   return filter.some((criterion) => matchesCriterion(line, criterion));
-}
-
-export function filterPoolText(text: string, filter: PoolFilter, mode: PoolFilterMode): string {
-  return splitPoolLines(text)
-    .filter((line) => matchesPoolFilter(line, filter) === (mode === 'keep'))
-    .join('\n');
-}
-
-export function countPoolFilterMatches(text: string, filter: PoolFilter): number {
-  return splitPoolLines(text).filter((line) => matchesPoolFilter(line, filter)).length;
-}
-
-/** 重复地址合并有效元数据，备注按显式新值更新；顺序保持首次出现。 */
-export function dedupePoolText(text: string): string {
-  return cleanPoolText(text);
 }
 
 function parseFilterGroup(group: string): PoolFilterCriterion | null {
@@ -135,8 +118,4 @@ function matchesCriterion(line: string, criterion: PoolFilterCriterion): boolean
 
 function splitMetadata(value: string): string[] {
   return value.split(/[\/,，\s]+/).map((item) => item.trim()).filter(Boolean);
-}
-
-function splitPoolLines(text: string): string[] {
-  return parsePoolText(String(text ?? '')).map((line) => line.raw);
 }
