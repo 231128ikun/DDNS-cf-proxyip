@@ -1,19 +1,15 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
-import { TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, type PoolsResponse } from '../../../src/contracts/pool';
+import { useEffect, useRef } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse } from '../../../src/contracts/probe';
-import { countPoolFilterMatches, parsePoolFilter, type PoolFilterMode } from '../../../src/domain/pool-filter';
-import { countPoolTextLines } from '../../../src/domain/pool-text';
 import type { RequestState } from '../state/request-state';
 import type { TargetStatusView } from '../state/target-status';
-import { Icon, type IconName } from './icon';
-import { poolOptions } from '../state/pool-options';
+import { Icon } from './icon';
 import { StatusOverview } from './status-overview';
-import { ResourceFeedback } from './resource-feedback';
 import type { TargetSelectorProps } from './target-selector';
 
 /** 当前忙碌的池写操作。 */
-export type PoolActionKey = 'remote-load' | 'filter' | 'remove-lines' | 'pool-edit' | 'clean-pool' | 'trash';
+export type PoolActionKey = 'pool-edit';
 export type ConsoleTone = 'info' | 'success' | 'warning' | 'error';
 
 export interface ConsoleLogEntry {
@@ -31,44 +27,16 @@ export interface PoolCheckProgressState {
 export interface DashboardActions {
   readonly lookupSubmit: (event: Event) => void;
   readonly refresh: () => void;
-  readonly loadPool: () => void;
-  readonly checkBatch: () => void;
-  readonly stopBatch: () => void;
-  readonly resumeBatch: () => void;
-  readonly abandonBatch: () => void;
-  readonly savePool: () => void;
-  readonly loadRemote: () => void;
-  readonly applyFilter: (mode: PoolFilterMode) => void;
-  readonly dedupe: () => void;
-  readonly removeLines: () => void;
-  readonly createPool: () => void;
-  readonly renamePool: () => void;
-  readonly openPoolOrder: () => void;
-  readonly deletePool: () => void;
-  readonly cleanPool: () => void;
-  readonly restoreTrash: () => void;
-  readonly clearTrash: () => void;
-  readonly refreshPools: () => void;
   readonly addRecord: (value: string) => Promise<boolean>;
   readonly deleteRecord: (recordId: string, address?: string) => void;
   readonly runMaintenance: () => void;
 }
 
 interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'targetChoices' | 'onSelectTarget'> {
+  readonly poolPanel: ComponentChildren;
   readonly check: RequestState<CheckTargetResponse>;
-  readonly pools: RequestState<PoolsResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
   readonly lookup: string;
-  readonly ipText: string;
-  readonly probeConfigured: boolean;
-  readonly configReady: boolean;
-  readonly filterText: string;
-  readonly remoteUrl: string;
-  readonly poolKey: string;
-  readonly loadingPool: boolean;
-  readonly checkingBatch: boolean;
-  readonly savingPool: boolean;
-  readonly poolBusy: PoolActionKey | null;
   readonly consoleLogs: readonly ConsoleLogEntry[];
   readonly batchProgressState: PoolCheckProgressState | null;
   readonly targetStatus: RequestState<TargetStatusView>;
@@ -79,28 +47,14 @@ interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'tar
   readonly onCopyToInput: (address: string) => void;
   readonly onCopyAddress: (address: string) => void;
   readonly onLookupChange: (value: string) => void;
-  readonly onIpTextChange: (value: string) => void;
-  readonly onFilterChange: (value: string) => void;
-  readonly onRemoteUrlChange: (value: string) => void;
-  readonly onPoolChange: (key: string) => void;
 }
 
 
 export function DashboardPage({
+  poolPanel,
   check,
-  pools,
   batch,
   lookup,
-  ipText,
-  probeConfigured,
-  configReady,
-  filterText,
-  remoteUrl,
-  poolKey,
-  loadingPool,
-  checkingBatch,
-  savingPool,
-  poolBusy,
   consoleLogs,
   batchProgressState,
   targetStatus,
@@ -114,14 +68,7 @@ export function DashboardPage({
   onCopyToInput,
   onCopyAddress,
   onLookupChange,
-  onIpTextChange,
-  onFilterChange,
-  onRemoteUrlChange,
-  onPoolChange,
 }: DashboardPageProps) {
-  const [filterHelpOpen, setFilterHelpOpen] = useState(false);
-  const busy = poolBusy !== null || checkingBatch;
-  const inTrash = poolKey === TRASH_POOL_KEY;
 
   return (
     <div id="page-dashboard" class="page-panel active" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -135,175 +82,7 @@ export function DashboardPage({
 
 
       <div class="dashboard-core-row">
-          <div class="card p-4 dashboard-card dashboard-pool-card">
-            <div class="dashboard-card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-              <div>
-                <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
-              </div>
-              <div class="pool-tools">
-                <select
-                  id="pool-selector"
-                  class="form-select form-select-sm"
-                  value={poolKey}
-                  disabled={checkingBatch}
-                  aria-label="选择 IP 池"
-                  onChange={(event) => onPoolChange(event.currentTarget.value)}
-                >
-                  {poolOptions(pools, poolKey).map((pool) => (
-                    <option key={pool.key} value={pool.key}>
-                      {pool.name}
-                    </option>
-                  ))}
-                </select>
-                <PoolActionMenu busy={busy} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} />
-              </div>
-            </div>
-
-            <ResourceFeedback state={pools} id="retry-pools" onRetry={actions.refreshPools} />
-            <div class="ip-content-area">
-              <div class="toolbar-row mb-2">
-                <input
-                  type="text"
-                  id="remote-url"
-                  class="form-control form-control-sm flex-grow-1"
-                  placeholder="远程TXT URL"
-                  aria-label="远程 TXT URL"
-                  value={remoteUrl}
-                  disabled={checkingBatch}
-                  onInput={(event) => onRemoteUrlChange(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') actions.loadRemote();
-                  }}
-                />
-                <button
-                  class="btn btn-sm btn-outline-primary text-nowrap"
-                  type="button"
-                  title="从远程URL加载"
-                  aria-label="从远程 URL 加载"
-                  disabled={poolBusy === 'remote-load' || checkingBatch}
-                  onClick={actions.loadRemote}
-                >
-                  <Icon name="download" /> {poolBusy === 'remote-load' ? '加载中…' : '加载'}
-                </button>
-                <button
-                  class="btn btn-sm btn-outline-secondary"
-                  type="button"
-                  disabled={loadingPool || checkingBatch}
-                  onClick={actions.loadPool}
-                >
-                  <Icon name="folder" /> {loadingPool ? '读取中…' : '从库'}
-                </button>
-                <button
-                  class="btn btn-sm btn-outline-danger text-nowrap"
-                  type="button"
-                  disabled={checkingBatch}
-                  onClick={() => onIpTextChange('')}
-                >
-                  <Icon name="trash" /> 清空
-                </button>
-              </div>
-
-              <textarea
-                id="ip-input"
-                class="form-control ip-input mb-2"
-                rows={6}
-                value={ipText}
-                readOnly={checkingBatch}
-                aria-busy={checkingBatch}
-                aria-label="IP 池文本"
-                onInput={(event) => onIpTextChange(event.currentTarget.value)}
-                placeholder={`支持格式：\n1.2.3.4:443\n1.2.3.4 (默认443端口)\nexample.com:8443 (检测时解析为IP)\n1.2.3.4:443 #HK 香港节点 (带注释)`}
-              />
-
-              {!probeConfigured && (
-                <div class="kv-alert compact">
-                  尚未配置主复检或备用复检接口。检测会返回“探针异常”，请先在配置中心保存检测接口。
-                </div>
-              )}
-
-              <div class="mb-2 filter-toolbar">
-                <div class="filter-line">
-                  <input
-                    type="text"
-                    id="universal-filter"
-                    class="form-control form-control-sm"
-                    placeholder="筛选"
-                    aria-label="筛选条件"
-                    value={filterText}
-                    disabled={checkingBatch}
-                    onInput={(event) => onFilterChange(event.currentTarget.value)}
-                  />
-                  <button
-                    class="filter-help-btn"
-                    type="button"
-                    title="筛选用法"
-                    aria-label="查看筛选用法"
-                    aria-expanded={filterHelpOpen}
-                    onClick={() => setFilterHelpOpen((open) => !open)}
-                  >
-                    <Icon name="help" />
-                  </button>
-                  <button class="btn btn-sm btn-outline-success" type="button" title="保留匹配的IP" disabled={busy} onClick={() => actions.applyFilter('keep')}>保留</button>
-                  <button class="btn btn-sm btn-outline-danger" type="button" title="排除匹配的IP" disabled={busy} onClick={() => actions.applyFilter('exclude')}>排除</button>
-                  <button class="btn btn-sm btn-outline-secondary" type="button" disabled={busy} onClick={actions.dedupe}>去重</button>
-                </div>
-                <div id="filter-help" class="filter-help" hidden={!filterHelpOpen}>
-                  支持空格分隔条件：<code>port:443</code>、<code>port:443-2053</code>、<code>country:国家代码</code>、<code>asn:ASN编号</code>、<code>stack:v4</code>、<code>stack:v6</code>、<code>stack:dual</code>（双栈，等同 v4/v6）、普通关键词。<br />
-                  空格表示“且”；逗号表示同一条件内“或”（如 <code>country:US,KR</code> 即美国或韩国）；竖线 <code>|</code> 表示整段之间“或”，优先级最低（先算空格和逗号，最后算 <code>|</code>）。<br />
-                  例如：<code>country:US,KR stack:v4</code>（美国或韩国，且出口为IPv4）；<code>country:KR asn:AS4766 | country:US</code>（韩国且ASN为AS4766，或者美国，两者满足其一即可）。
-                </div>
-                <div id="filter-preview" class="filter-preview">{filterPreviewText(ipText, filterText)}</div>
-                <span class="text-secondary small pool-stat" title="当前池中IP数量" aria-label={`当前池中共 ${currentPoolCount(pools, poolKey)} 条地址`}>
-                  <Icon name="dashboard" /><span id="pool-count">{currentPoolCount(pools, poolKey)}</span>
-                </span>
-              </div>
-            </div>
-
-            <div class="ip-actions-area mt-auto">
-              <div class="primary-actions" id="main-actions">
-                <button
-                  class={checkingBatch ? 'btn btn-danger' : 'btn btn-primary'}
-                  type="button"
-                  aria-label={checkingBatch ? '停止批量检测' : '批量检测清洗输入框中的 IP'}
-                  disabled={!checkingBatch && !configReady}
-                  onClick={checkingBatch ? actions.stopBatch : actions.checkBatch}
-                >
-                  <Icon name={checkingBatch ? 'stop' : 'activity'} /> {checkingBatch ? '停止检测' : '检测'}
-                </button>
-                <button
-                  class="btn btn-success"
-                  type="button"
-                  aria-label="将输入框内容保存到当前 IP 池"
-                  title={inTrash ? '垃圾桶只能由维护和洗库流程写入' : undefined}
-                  disabled={savingPool || inTrash || checkingBatch}
-                  onClick={actions.savePool}
-                >
-                  <Icon name="save" /> {savingPool ? '保存中…' : '入库'}
-                </button>
-                <button
-                  class="btn btn-outline-secondary btn-sm"
-                  type="button"
-                  disabled={busy}
-                  onClick={actions.removeLines}
-                >
-                  从库中移除
-                </button>
-              </div>
-
-              {inTrash && (
-                <div id="trash-actions" class="mt-2">
-                  <div class="row g-2">
-                    <div class="col-6">
-                      <button class="btn btn-outline-success btn-sm w-100" type="button" aria-label="恢复输入框中的地址" disabled={busy} onClick={actions.restoreTrash}><Icon name="recycle" /> 恢复选中</button>
-                    </div>
-                    <div class="col-6">
-                      <button class="btn btn-outline-danger btn-sm w-100" type="button" disabled={busy} onClick={actions.clearTrash}><Icon name="trash" /> 清空垃圾桶</button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          {poolPanel}
 
           <div class="card p-4 dashboard-card dashboard-console-card">
             <div class="dashboard-card-header">
@@ -335,83 +114,6 @@ export function DashboardPage({
   );
 }
 
-function PoolActionMenu({
-  busy,
-  inTrash,
-  canDelete,
-  actions,
-}: {
-  readonly busy: boolean;
-  readonly inTrash: boolean;
-  readonly canDelete: boolean;
-  readonly actions: DashboardActions;
-}) {
-  const [open, setOpen] = useState(false);
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPointerDown = (event: MouseEvent): void => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-
-  const run = (action: () => void): void => {
-    setOpen(false);
-    action();
-  };
-
-  // 元组：图标、文案、禁用、危险、动作。
-  const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
-    ['plus', '新建池', false, false, actions.createPool],
-    ['pencil', '重命名当前池', inTrash, false, actions.renamePool],
-    ['sort', '自定义池排序', false, false, actions.openPoolOrder],
-    ['broom', '一键洗库', inTrash, false, actions.cleanPool],
-    ['trash', '删除当前池', !canDelete, true, actions.deletePool],
-  ];
-
-  return (
-    <div class="action-menu" ref={container}>
-      <button
-        id="pool-action-trigger"
-        class="btn btn-sm btn-outline-secondary action-menu-trigger"
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span><Icon name="database" /> 池操作</span> <span class="action-menu-caret">▾</span>
-      </button>
-      {open && (
-        <div class="action-menu-panel" role="menu" aria-label="池操作">
-          {items.map(([icon, label, disabled, danger, action]) => (
-            <button
-              key={label}
-              class={`action-menu-item${danger ? ' danger' : ''}`}
-              type="button"
-              role="menuitem"
-              disabled={busy || disabled}
-              onClick={() => run(action)}
-            >
-              <Icon name={icon} /> {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
 function Console({ logs }: {
   readonly logs: readonly ConsoleLogEntry[];
 }) {
@@ -433,18 +135,6 @@ function Console({ logs }: {
       </div>
     </div>
   );
-}
-
-function filterPreviewText(ipText: string, filterText: string): string {
-  if (!filterText.trim()) return '输入条件后会显示匹配数量。';
-  const filter = parsePoolFilter(filterText);
-  if (!filter) return '筛选条件无效：端口需为 1-65535 的数字或范围。';
-  return `匹配 ${countPoolFilterMatches(ipText, filter)} 条，输入框内共 ${countPoolTextLines(ipText)} 条。`;
-}
-
-function currentPoolCount(state: RequestState<PoolsResponse>, key: string): number | string {
-  if (state.status !== 'ready') return '—';
-  return state.data.pools.find((pool) => pool.key === key)?.count ?? 0;
 }
 
 function batchProgress(

@@ -25,7 +25,7 @@ export async function auditBatchResume(cdp, sessionId, base, requests, fixture, 
 
     assert(await read('document.querySelector("#ip-input").readOnly'), '批量检测期间仍可编辑源输入，会破坏续检状态');
     assert(await read('document.querySelector("#pool-selector").disabled'), '批量检测期间仍可切换目标 IP 池');
-    assert(await read('[...document.querySelectorAll("#page-dashboard textarea, #page-dashboard .toolbar-row button")].every(element => element.readOnly || element.disabled)'),
+    assert(await read('[...document.querySelectorAll("#page-dashboard textarea, #page-dashboard .pool-remote button, #main-actions button:not(:first-child)")].every(element => element.readOnly || element.disabled)'),
       '批量检测期间仍有会改写输入框的控件可用');
 
     const completedBefore = new Set(requests.slice(start)
@@ -47,8 +47,10 @@ export async function auditBatchResume(cdp, sessionId, base, requests, fixture, 
     }
     assert(await read('document.querySelector("#ip-input").value.trim().split("\\n").length === 12'),
       '继续检测完成后没有保留完整输入数量');
-    assert(await read(`document.querySelector("#ip-input").value.trim() === ${JSON.stringify(addresses.map(address => `${address},AS64500,US,v4`).join('\n'))}`),
-      '继续检测完成后已完成和未完成项没有统一规范');
+    assert(await read(`document.querySelector("#ip-input").value === ${JSON.stringify(addresses.join('\n'))}`),
+      '继续检测完成后改写了原始草稿，报告必须独立保存');
+    assert(await read('document.querySelector(".pool-report")?.textContent.includes("可用 12")'),
+      '续检结果没有在独立报告中展示完整可用数量');
     assert(await read('![...document.querySelectorAll("#log-window .console-event")].some(entry => entry.textContent.includes("[批量 1/") || entry.textContent.includes("[批量 2/"))'), '普通成功进度不应逐地址刷入日志');
     await capture?.('batch-resume');
   } catch (error) {

@@ -9,6 +9,8 @@ import { auditOrderFlow, auditOrderEdges } from './ui-order-flow.mjs';
 import { auditConfigTiming } from './ui-config-timing.mjs';
 import { auditOrderRecovery } from './ui-order-recovery.mjs';
 import { auditPoolTiming } from './ui-pool-timing.mjs';
+import { auditPoolFlow } from './ui-pool-flow.mjs';
+import { auditBatchLifecycle } from './ui-batch-lifecycle.mjs';
 import { auditBatchResume } from './ui-batch-resume.mjs';
 import { auditAuthGate } from './ui-auth.mjs';
 
@@ -43,11 +45,11 @@ const measure = (selectors) => {
     settingsIds: [...document.querySelectorAll('.config-details-body input[type="number"]')].map((input) => input.id),
     editorLabels: [...document.querySelectorAll('.config-edit-panel.active .field > span:first-child')].map((element) => element.textContent.trim()),
     panelHeadingTops: [...document.querySelectorAll('.dashboard-card-header .card-title')].map(element => element.getBoundingClientRect().top + scrollY),
-    toolbarCenters: [...document.querySelectorAll('.toolbar-row > *')].map((element) => {
+    toolbarCenters: [...document.querySelectorAll('.pool-remote > *, .toolbar-row > *')].map((element) => {
       const box = element.getBoundingClientRect();
       return box.y + box.height / 2;
     }),
-    statusTables: document.querySelectorAll('#page-dashboard table:not(.domain-binding-table-wrap table)').length };
+    statusTables: document.querySelectorAll('#status-display table').length };
 };
 
 function differences(reference, current, width) {
@@ -57,7 +59,7 @@ function differences(reference, current, width) {
   if (current.statusTables !== reference.statusTables) failures.push(`解析实况有 ${current.statusTables} 个展示表，应共用基准页面的 ${reference.statusTables} 个表`);
   if (current.statusCellDisplay !== reference.statusCellDisplay || current.statusHeadingWidth < 100) failures.push('解析实况未保留基准页面的行列表格与可见表头');
   if (Math.abs(reference.boxes.overview.height - current.boxes.overview.height) > 40) failures.push(`解析实况卡片高度偏差 ${Math.round(current.boxes.overview.height - reference.boxes.overview.height)}px`);
-  if (current.toolbarCenters.length !== 4 || Math.max(...current.toolbarCenters) - Math.min(...current.toolbarCenters) > 2) failures.push('远程加载输入框与操作按钮没有保留在同一行');
+  if (current.toolbarCenters.length !== 2 || (width <= 768 ? current.toolbarCenters[0] >= current.toolbarCenters[1] : Math.abs(current.toolbarCenters[0] - current.toolbarCenters[1]) > 2)) failures.push('远程导入的 URL 和加载动作未按屏幕宽度排列');
   for (const key of ['workbench', 'bindings', 'consoleCard']) {
     const expected = reference.boxes[key];
     const actual = current.boxes[key];
@@ -88,6 +90,7 @@ function workspaceFailures(current, width) {
   const { overview, workbench, consoleCard } = current.boxes;
   if (current.overflow) failures.push('页面横向溢出');
   if (!overview || !workbench || !consoleCard) return [...failures, '工作区卡片缺失'];
+  if (current.statusTables !== 1 || current.statusCellDisplay !== 'table-cell' || current.statusHeadingWidth < 100) failures.push('解析实况必须保留单一表格、可见表头和行列单元格');
   if (current.boxes.console?.height < 280) failures.push('工作台日志区域高度不足');
   if (width >= 992) {
     if (workbench.height < 480) failures.push('IP 管理和工作台高度不足');
@@ -96,13 +99,13 @@ function workspaceFailures(current, width) {
     if (Math.abs(workbench.y - consoleCard.y) > 1) failures.push('工作区卡片顶端未对齐');
     if (current.panelHeadingTops.length !== 2 || Math.abs(current.panelHeadingTops[0] - current.panelHeadingTops[1]) > 1) failures.push('工作区标题未对齐');
   }
-  const centers = width <= 768 ? current.toolbarCenters.slice(1) : current.toolbarCenters;
-  if (current.toolbarCenters.length !== 4 || Math.max(...centers) - Math.min(...centers) > 2) failures.push('加载栏操作按钮未居中对齐');
-  if (width <= 768 && current.toolbarCenters[0] >= current.toolbarCenters[1]) failures.push('窄屏加载地址没有独占上方一行');
+  if (current.toolbarCenters.length !== 2) failures.push('远程导入必须有且仅有 URL 输入与加载动作');
+  else if (width <= 768 ? current.toolbarCenters[0] >= current.toolbarCenters[1] : Math.abs(current.toolbarCenters[0] - current.toolbarCenters[1]) > 2) failures.push('远程输入/加载未按屏幕宽度对齐');
   return failures;
 }
 
 async function capture(cdp, session, width, state, failures) {
+  await cdp.evaluate(session.sessionId, 'Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {})))');
   await cdp.evaluate(session.sessionId, "window.scrollTo({top: 0, behavior: 'instant'}); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
   const metrics = await cdp.send('Page.getLayoutMetrics', {}, session.sessionId);
   const size = metrics.cssContentSize;
@@ -281,6 +284,8 @@ async function run() {
             failures.push(`${session.name} 配置流程：${error.message}; ${state}`);
           }
           if (session.name === 'current') {
+            try { await auditBatchLifecycle(cdp, session.sessionId); }
+            catch (error) { failures.push('current 多结果源续检：' + error.message); }
             try {
               const authFailures = await auditAuthGate(cdp, session.sessionId, server.base, server.fixture,
                 state => capture(cdp, session, width, state, failures));
@@ -296,6 +301,11 @@ async function run() {
                 state => capture(cdp, session, width, state, failures));
               failures.push(...timingFailures.map(message => `current 配置时序：${message}`));
             } catch (error) { failures.push(`current 配置时序：${error.message}`); }
+            try {
+              const poolFlowFailures = await auditPoolFlow(cdp, session.sessionId, server.base, server.requests, server.fixture,
+                state => capture(cdp, session, width, state, failures));
+              failures.push(...poolFlowFailures.map(message => 'current IP池流程：' + message));
+            } catch (error) { failures.push('current IP池流程：' + error.message); }
             try {
               const poolFailures = await auditPoolTiming(cdp, session.sessionId, server.base, server.requests, server.fixture,
                 state => capture(cdp, session, width, state, failures));

@@ -6,7 +6,7 @@ import type { ApiClient } from '../api/client';
 import { errorMessage, isAbort } from '../api/errors';
 import type { ConsoleTone, PoolCheckProgressState } from '../components/dashboard-page';
 import type { RequestState } from './request-state';
-import { mergeBatchProgress, remainingBatch } from './batch-resume';
+import { describeBatch, remainingBatch } from './batch-resume';
 import { formatProbeLog, shouldLogProbe } from '../components/probe-log';
 
 /** 批量检测中断时的进度摘要。 */
@@ -33,6 +33,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
   const [batch, setBatch] = useState<RequestState<PoolCheckResponse>>({ status: 'idle' });
   const [checkingBatch, setCheckingBatch] = useState(false);
   const [batchProgressState, setBatchProgressState] = useState<PoolCheckProgressState | null>(null);
+  const [batchReport, setBatchReport] = useState<ReturnType<typeof describeBatch> | null>(null);
   const [batchInterrupt, setBatchInterrupt] = useState<BatchInterrupt | null>(null);
   const activeBatch = useRef<AbortController | null>(null);
   const aliveSoFar = useRef(0);
@@ -50,6 +51,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     setCheckingBatch(false);
     setIpText(value);
     setBatch({ status: 'idle' });
+    setBatchReport(null);
     setBatchProgressState(null);
     setBatchInterrupt(null);
     batchSource.current = '';
@@ -63,10 +65,11 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       notify(config.status === 'error' ? config.message : '正在读取配置，请稍后检测', 'error');
       return;
     }
-    const sourceText = resume ? batchSource.current : ipText.trim();
+    if (activeBatch.current) return;
+    const sourceText = resume ? batchSource.current : ipText;
     const resumed = resume ? remainingBatch(sourceText, batchCompleted.current) : null;
     const text = resumed?.text ?? sourceText;
-    if (!text) {
+    if (!text.trim()) {
       notify(resume ? '没有未完成的检测项' : '请先输入或从库加载 IP', 'error');
       return;
     }
@@ -76,19 +79,28 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       batchGroups.current.clear();
       batchSourceMap.current = null;
       aliveSoFar.current = 0;
+      setBatchReport(describeBatch(sourceText, batchGroups.current, batchCompleted.current));
     }
-    if (resumed) batchSourceMap.current = resumed.sourceIndices;
-    activeBatch.current?.abort();
+    if (resumed) {
+      // An unfinished source is retried as a whole; its partial group must be replaced.
+      for (const index of batchGroups.current.keys()) {
+        if (!batchCompleted.current.has(index)) batchGroups.current.delete(index);
+      }
+      aliveSoFar.current = [...batchGroups.current.values()].flat().filter(item => item.status === 'alive').length;
+      batchSourceMap.current = resumed.sourceIndices;
+      setBatchReport(describeBatch(sourceText, batchGroups.current, batchCompleted.current));
+    }
+    const retained = [...batchGroups.current.values()].flat().length;
     const controller = new AbortController();
     activeBatch.current = controller;
     setCheckingBatch(true);
     setBatch({ status: 'loading' });
     const total = countPoolTextLines(text);
-    setBatchProgressState({ completed: 0, total });
+    setBatchProgressState({ completed: retained, total: retained + total });
     appendConsoleLog(`[批量] ${resume ? '继续检测未完成项' : '开始检测清洗'} · ${total} 个地址`);
     client.checkBatch(text, controller.signal, (event: PoolCheckProgressEvent) => {
       if (activeBatch.current !== controller) return;
-      setBatchProgressState({ completed: event.completed, total: event.total });
+      setBatchProgressState({ completed: retained + event.completed, total: retained + event.total });
       if (event.item.status === 'alive') aliveSoFar.current += 1;
       const sourceIndex = batchSourceMap.current?.[event.sourceIndex] ?? event.sourceIndex;
       const group = batchGroups.current.get(sourceIndex) ?? [];
@@ -114,8 +126,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         };
         setBatchProgressState({ completed: items.length, total: items.length });
         setBatch({ status: 'ready', data: combined });
-        // 可用项写成标准格式，未知/无效项保留原文，失效项移除。
-        setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+        setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
         batchSource.current = '';
         batchCompleted.current.clear();
         batchGroups.current.clear();
@@ -133,7 +144,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         if (isAbort(error) || activeBatch.current !== controller) return;
         activeBatch.current = null;
         setCheckingBatch(false);
-        setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+        setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
         batchSource.current = '';
         batchCompleted.current.clear();
         batchGroups.current.clear();
@@ -152,7 +163,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     controller.abort();
     activeBatch.current = null;
     setCheckingBatch(false);
-    setIpText(mergeBatchProgress(batchSource.current, batchGroups.current));
+    setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
     const total = countPoolTextLines(batchSource.current);
     const completed = batchCompleted.current.size;
     setBatchInterrupt({
@@ -181,6 +192,6 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     appendConsoleLog('[批量] 已放弃，保留已完成检测结果', 'warning');
   };
 
-  return { ipText, batch, checkingBatch, batchProgressState, batchInterrupt, replaceIpText,
+  return { ipText, batch, batchReport, checkingBatch, batchProgressState, batchInterrupt, replaceIpText,
     handleCheckBatch, handleStopBatch, handleResumeBatch, handleAbandonBatch };
 }

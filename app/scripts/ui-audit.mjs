@@ -105,7 +105,7 @@ const auditProbe = () => {
     const region = el.closest('#page-dashboard, #page-config, .hero, .top-nav, footer');
     const area = region?.id || (region?.matches('footer') ? 'footer' : region?.matches('.hero') ? 'hero' : region?.matches('.top-nav') ? 'top-nav' : 'document');
     const anchors = ['#manual-add-section', ':has(> #lookup-domain)', '#status-display', '.domain-binding-card',
-      '.toolbar-row', '.filter-line', '.hero-actions', '.domain-selector', '.config-details', '.config-card-grid', '#log-window'];
+      '.pool-remote', '.pool-modes', '.pool-buttons', '.hero-actions', '.domain-selector', '.config-details', '.config-card-grid', '#log-window'];
     const feature = el.closest(anchors.join(','));
     const anchor = anchors.find(selector => feature?.matches(selector)) || 'content';
     return `${area}:${anchor}:${area === 'footer' ? 'footer' : textKey(text) || text.trim()}`;
@@ -317,7 +317,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
           return null;
         };
         const input = await waitFor(() => document.querySelector("#ip-input"));
-        const button = await waitFor(() => document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]'));
+        const button = await waitFor(() => document.querySelector('button[aria-label="批量检测导入草稿"]'));
         if (!input || !button) return { failures: ["检测控件未渲染"] };
 
         const failures = [];
@@ -334,16 +334,15 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         await new Promise((resolve) => setTimeout(resolve, 50));
         button.click();
 
-        const cleaned = await waitFor(() => {
-          const idleButton = document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]');
-          const value = document.querySelector("#ip-input")?.value ?? "";
-          // 检测结束的标志：清洗按钮重新出现，且输入框已被清洗逻辑重写。
-          return idleButton && value !== original ? value : null;
+        const report = await waitFor(() => {
+          const idle = document.querySelector('button[aria-label="批量检测导入草稿"]');
+          return idle && document.querySelector('.pool-report')?.textContent.includes('未知 1') ? document.querySelector('.pool-report').textContent : null;
         });
-        if (cleaned !== "203.0.113.10:443,null,null,v4\\n203.0.113.11:443") {
-          failures.push("检测清洗没有把可用项标准化、未知项保留原文、失效项剔除");
-        }
-        if (document.querySelector('[data-testid="batch-results"]')) failures.push("批量检测后仍出现旧结果面板");
+        if (!report || !report.includes('可用 1') || input.value !== original) failures.push('检测报告没有独立保留可用/未知数量与原始草稿');
+        const unknown = [...document.querySelectorAll('.pool-report button')].find(button => button.textContent.trim() === '未知 1');
+        unknown?.click();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (!document.querySelector('.pool-result-list')?.textContent.includes('检测超时')) failures.push('未知检测结果缺少具体原因');
 
         window.__batchDelayMs = 250;
         input.value = original;
@@ -360,23 +359,16 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         abandon?.click();
         await new Promise((resolve) => setTimeout(resolve, 400));
         window.__batchDelayMs = 0;
-        if (!(await waitFor(() => document.querySelector('button[aria-label="批量检测清洗输入框中的 IP"]')))) {
+        if (!(await waitFor(() => document.querySelector('button[aria-label="批量检测导入草稿"]')))) {
           failures.push("中止检测后没有回到清洗按钮");
         }
         if (input.value !== original) failures.push("放弃后未完成输入被旧请求覆盖");
 
-        const dedupeButton = await waitFor(() =>
-          [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "去重")
-        );
-        if (!dedupeButton) failures.push("找不到去重操作");
+        const clear = [...document.querySelectorAll('#main-actions button')].find(button => button.textContent.trim() === '清空输入');
+        if (!clear) failures.push('找不到清空输入动作');
         else {
-          const duplicate = "203.0.113.10:443\\n203.0.113.10:443";
-          input.value = duplicate;
-          input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: duplicate }));
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          dedupeButton.click();
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          if (input.value !== "203.0.113.10:443,null,null,null") failures.push("去重后输入框内容不正确");
+          clear.click(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          if (input.value !== '' || document.querySelector('.pool-report')) failures.push('清空输入没有同时使派生报告失效');
         }
         return { failures };
       })()`,

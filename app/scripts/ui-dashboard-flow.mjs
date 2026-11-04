@@ -36,25 +36,11 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
       check(await read('!document.querySelector(".maintenance-summary, .maintenance-result")'), '工作台外仍保留另一套维护日志');
       check(await read('Math.abs(document.querySelector("#log-window").scrollHeight - document.querySelector("#log-window").clientHeight - document.querySelector("#log-window").scrollTop) < 2'), '工作台日志没有自动滚动到最新结果');
     } finally { fixture.maintenanceResponse = null; }
-    const remove = '#main-actions button:last-child';
-    const canRemove = await read(`!document.querySelector('${remove}').disabled`);
-    check(canRemove, '空输入应允许点击移除，并在本地提示');
-    if (canRemove) {
-      await click(remove);
-      await flush();
-      check(await read('document.querySelector("#log-window").textContent.includes("输入为空，未移除地址")'), '空输入缺少明确操作提示');
-      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '空输入不应发起池写请求');
-      await setValue('#ip-input', '203.0.113.10:443');
-      await Promise.all([
-        (async () => {
-          await cdp.wait(sessionId, 'Page.javascriptDialogOpening');
-          await cdp.send('Page.handleJavaScriptDialog', { accept: false }, sessionId);
-        })(), click(remove),
-      ]);
-      check(await read('document.querySelector("#ip-input").value === "203.0.113.10:443"'), '取消移除不应改变输入');
-      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '取消移除不应发起池写请求');
-      await setValue('#ip-input', '');
-    }
+    check(await read('document.querySelector("[data-action=append-input]").disabled'), '空草稿不应发起直接追加');
+    check(await read('document.querySelector("[data-action=append-alive]").disabled'), '没有检测报告不应追加可用');
+    await setValue('#ip-input', '203.0.113.10:443');
+    check(await read('!document.querySelector("[data-action=append-input]").disabled'), '有效输入必须允许明确的直接追加预览');
+    await setValue('#ip-input', '');
     await click('.action-menu-trigger');
     check(await read('document.querySelector(".action-menu-item:last-child").disabled'), '默认池的删除菜单应禁用');
     await click('.action-menu-trigger');
