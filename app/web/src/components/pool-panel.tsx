@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { MAX_POOL_RESTORE_ITEMS, NUMBERED_POOL_KEY_RE, TRASH_POOL_KEY, type PoolsResponse } from '../../../src/contracts/pool';
+import { DEFAULT_POOL_KEY, MAX_POOL_RESTORE_ITEMS, NUMBERED_POOL_KEY_RE, TRASH_POOL_KEY, type PoolsResponse } from '../../../src/contracts/pool';
 import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { matchesPoolFilter, parsePoolFilter } from '../../../src/domain/pool-filter';
 import { sourcePoolFromTrash } from '../../../src/domain/trash';
@@ -38,10 +38,12 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
   containerChanged.current = key => model.forgetPool(key);
-  const [mode, setMode] = useState<'import' | 'manage'>('manage');
+  const [mode, setMode] = useState<'import' | 'manage'>('import');
   const [edit, setEdit] = useState<{ poolKey: string; original: string; text: string } | null>(null);
   const [sourcePool, setSourcePool] = useState<string | null>(null);
   const [url, setUrl] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [draftFilter, setDraftFilter] = useState('');
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [sideBusy, setSideBusy] = useState(false);
   const sidePending = useRef(false);
@@ -64,10 +66,17 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const currentPage = Math.min(page, pages - 1);
   const shown = rows.slice(currentPage * 50, (currentPage + 1) * 50);
   const report = batch.batchReport;
-  const appendText = report ? report.items.filter(item => item.status === 'alive').map(item => item.line).join('\n') : batch.ipText;
+  const draftQuery = draftFilter.trim() ? parsePoolFilter(draftFilter) : null;
+  const badDraftFilter = Boolean(draftFilter.trim() && !draftQuery);
+  const matchesDraft = (line: string): boolean => !draftFilter.trim() || Boolean(draftQuery && matchesPoolFilter(line, draftQuery));
+  const visibleText = batch.ipText.split(/\r?\n/).filter(matchesDraft).join('\n');
+  const visibleItems = report?.items.filter(item => matchesDraft(item.line)) ?? [];
+  const checkText = report && draftFilter.trim()
+    ? [...visibleItems.map(item => item.line), ...report.incomplete.filter(matchesDraft)].join('\n') : visibleText;
+  const appendText = report ? visibleItems.filter(item => item.status === 'alive').map(item => item.line).join('\n') : visibleText;
   const hasReport = report !== null;
   const resultsVisible = showResults && hasReport;
-  const invalid = useMemo(() => invalidPoolLines(batch.ipText), [batch.ipText]);
+  const invalid = useMemo(() => invalidPoolLines(visibleText), [visibleText]);
   const poolName = (key: string): string => poolOptions(pools, key).find(pool => pool.key === key)?.name ?? key;
   const targetName = poolName(poolKey);
   const count = model.confirmed.get(poolKey)?.count ?? (model.content !== undefined ? snapshot.entries.size
@@ -98,33 +107,42 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
 
   const changeDraft = (text: string): void => { setShowResults(false); model.invalidate(); batch.replaceIpText(text); };
   const checkDraft = (): void => {
-    model.invalidate(); setCategory('alive'); setShowResults(true); batch.handleCheckBatch();
+    if (badDraftFilter) return;
+    model.invalidate(); setCategory('alive'); setShowResults(true); batch.handleCheckBatch(false, checkText);
   };
   const switchMode = (next: 'import' | 'manage'): void => {
     if (mode === next || !leaveGuard.current()) return;
     model.invalidate(); setMode(next); setSelection(new Set());
     if (next === 'manage' && model.content === undefined) void model.read();
   };
-  const checkStored = (): void => {
-    if (model.content === undefined || inputsLocked || model.reading || !configReady) return;
-    if (batch.ipText && !window.confirm('检测库内地址会替换添加区的输入内容，是否继续？')) return;
-    model.invalidate(); setSourcePool(poolKey); setMode('import'); setCategory('alive'); setShowResults(true);
-    batch.handleCheckBatch(false, selection.size ? selectedText() : model.content);
-  };
-  const loadRemote = async (): Promise<void> => {
+  const loadSource = async (load: (signal: AbortSignal) => Promise<string>, label: string, source: string | null = null): Promise<void> => {
     if (remote.current || batch.checkingBatch || busy) return;
-    if (!url.trim()) { model.message = '请输入远程 TXT URL'; render(value => value + 1); return; }
-    if (batch.ipText && !window.confirm('远程加载会替换未提交的导入草稿，确认替换？')) return;
-    model.invalidate(); const revision = model.revision;
+    if (batch.ipText && !window.confirm(`${label}会替换框中的输入内容，确认载入？`)) return;
+    model.invalidate();
     const controller = remote.current = new AbortController(); setRemoteBusy(true);
     try {
-      const result = await client.remoteLoad(url.trim(), controller.signal);
+      const pending = load(controller.signal), revision = model.revision;
+      const text = await pending;
       if (controller.signal.aborted || revision !== model.revision) return;
-      changeDraft(result.content); setSourcePool(null);
-      log(`[IP池] 远程导入 ${result.count} 条（尚未写入池）`);
+      setDraftFilter(''); changeDraft(text); setSourcePool(source);
+      log(`[IP池] ${label}完成 · 尚未入库`);
     } catch (error) {
       if (!controller.signal.aborted) { model.message = errorMessage(error); log('[IP池] ' + model.message, 'error'); }
     } finally { if (remote.current === controller) { remote.current = null; setRemoteBusy(false); } }
+  };
+  const loadRemote = (): void => {
+    if (!url.trim()) { model.message = '请输入远程 TXT URL'; render(value => value + 1); return; }
+    void loadSource(async signal => (await client.remoteLoad(url.trim(), signal)).content, 'URL 载入');
+  };
+  const loadStored = (): void => { void loadSource(async () => {
+    const text = await model.read();
+    if (text === undefined) throw new Error(model.message || '读取 IP 库失败');
+    return text;
+  }, '从库载入', poolKey); };
+  const loadFile = (file: File | undefined): void => {
+    if (!file) return;
+    if (file.size > 1024 * 1024) { model.message = '文件超过 1 MiB，请分批导入'; render(value => value + 1); return; }
+    void loadSource(() => file.text(), '本地文件载入');
   };
   const select = (key: string, checked: boolean): void => {
     if (model.reading) return;
@@ -176,7 +194,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const confirmPreview = async (): Promise<void> => {
     const plan = model.preview;
     if (!plan || (plan.mode === 'replace' && plan.data.currentCount > 0 && plan.data.count === 0 && !window.confirm(`危险操作：确认清空「${targetName}」全部池内容？池容器仍保留。`))) return;
-    if (await model.save()) { setEdit(null); setSelection(new Set()); setMode('manage'); log('[IP池] ' + model.message); refreshPools(); }
+    if (await model.save()) { setEdit(null); setSelection(new Set()); log('[IP池] ' + model.message); refreshPools(); }
     else log('[IP池] ' + model.message, 'error');
   };
   const append = async (): Promise<void> => {
@@ -193,22 +211,22 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
 
   return <section class="card p-4 dashboard-card dashboard-pool-card" aria-label="IP 库管理">
     <div class="dashboard-card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-      <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
+      <h2 class="card-title m-0 fw-bold"><Icon name="database" />{inTrash ? '垃圾桶' : mode === 'manage' ? '管理库存' : 'IP库管理'}</h2>
       <div class="pool-tools">
         <select id="pool-selector" class="form-select form-select-sm" aria-label="选择 IP 池" value={poolKey}
           disabled={inputsLocked} onChange={event => {
             if (leaveGuard.current()) onPoolChange(event.currentTarget.value);
             else event.currentTarget.value = poolKey;
           }}>{poolOptions(pools, poolKey).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}</select>
-        <PoolActionMenu busy={inputsLocked} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} />
+        <PoolActionMenu busy={inputsLocked} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} onManage={() => switchMode('manage')} />
       </div>
     </div>
     <ResourceFeedback state={pools} id="retry-pools" onRetry={refreshPools} />
-    {!inTrash && <div class="pool-modes" role="group" aria-label="IP 池操作模式">
-      {([['manage', '库内地址'], ['import', '添加地址']] as const).map(([value, label]) => <button type="button" class={mode === value ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-secondary'} data-pool-mode={value}
-        aria-pressed={mode === value} disabled={inputsLocked} onClick={() => switchMode(value)}>{label}</button>)}
-    </div>}
-    <p class="small text-secondary pool-summary"><span id="pool-count">{count ?? '—'}</span> 条地址 · {inTrash ? '可恢复到来源池' : mode === 'manage' ? '检测不改库，清理才移除失效地址' : '确认添加后才会写入当前池'}</p>
+    {(inTrash || mode === 'manage') && <div class="pool-buttons"><button type="button" class="btn btn-sm btn-outline-secondary" data-action="return-import" disabled={inputsLocked} onClick={() => {
+      if (inTrash) { if (leaveGuard.current()) { setMode('import'); onPoolChange(DEFAULT_POOL_KEY); } }
+      else switchMode('import');
+    }}>返回输入区</button></div>}
+    <p class="small text-secondary pool-summary">库内 <span id="pool-count">{count ?? '—'}</span> 条 · {inTrash ? '可恢复到来源池' : mode === 'manage' ? '修改或移除文本行后保存写回' : '载入和检测不修改库存'}</p>
     {model.message && <p class="kv-alert compact pool-feedback" role="status">{model.message}</p>}
     {model.divergent !== undefined && <div class="kv-alert compact">
       <p>服务器返回的内容与刚保存的不同，可能尚未同步或已在别处修改。</p>
@@ -218,53 +236,62 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     </div>}
     {!inTrash && mode === 'import' ? <div class="ip-content-area pool-import">
       {sourcePool && <p class="small text-secondary">来源池：{poolName(sourcePool)} · 目标池：{targetName}</p>}
-      <details class="pool-remote-help"><summary>从链接导入</summary><div class="pool-remote">
+      <div class="pool-buttons">
+        <button type="button" class="btn btn-sm btn-outline-primary" data-action="load-pool" disabled={inputsLocked || model.reading} onClick={loadStored}><Icon name="folder" />从库中加载</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="upload-file" disabled={inputsLocked} onClick={() => fileInput.current?.click()}><Icon name="upload" />本地文件</button>
+        <input id="pool-file" ref={fileInput} type="file" accept=".txt,.csv,text/plain" hidden aria-label="上传 IP 文本文件" onChange={event => { loadFile(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
+      </div>
+      <div class="pool-remote">
         <input id="remote-url" class="form-control form-control-sm" type="url" aria-label="远程 TXT URL" placeholder="远程 TXT URL" value={url} disabled={inputsLocked} onInput={event => setUrl(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') void loadRemote(); }} />
         <button type="button" class="btn btn-sm btn-outline-primary" aria-label="从远程 URL 加载" disabled={inputsLocked} onClick={() => void loadRemote()}><Icon name="download" />{remoteBusy ? '加载中…' : '加载'}</button>
-      </div><p class="small text-secondary">读取 TXT 地址列表，自动忽略无效行；不会直接写入 IP 池。</p></details>
+      </div>
       <div class="pool-view-header">
         <label class="small" for="ip-input" hidden={resultsVisible}>输入地址（每行一条）</label>
         <span class="small" hidden={!resultsVisible}>检测结果</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked || !batch.ipText} onClick={() => { setDraftFilter(''); changeDraft(''); setSourcePool(null); }}>清空输入</button>
         <div class="pool-view-switch" hidden={!report} role="group" aria-label="导入内容视图">
           <button type="button" class="btn btn-sm btn-outline-secondary" data-action="view-draft" aria-pressed={!resultsVisible} onClick={() => setShowResults(false)}>输入内容</button>
           <button type="button" class="btn btn-sm btn-outline-secondary" data-action="view-results" aria-pressed={resultsVisible} disabled={!report} onClick={() => setShowResults(true)}>检测结果</button>
         </div>
       </div>
       <div class="pool-data-body">
-      <textarea id="ip-input" class="form-control ip-input" rows={6} hidden={resultsVisible} value={batch.ipText} readOnly={inputsLocked} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder={"例如：203.0.113.10:443\n[2001:db8::1]:443\n支持域名、ASN、国家和备注"} />
+      <textarea id="ip-input" class="form-control ip-input" rows={6} hidden={resultsVisible} value={visibleText} readOnly={inputsLocked || !!draftFilter.trim()} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder={"从库、URL 或本地文件载入，也可直接粘贴\n每行一个地址，保留 ASN、国家和备注"} />
       {report && <div class="pool-report" hidden={!resultsVisible} role="region" aria-label="本次检测结果">
         <div class="pool-buttons" role="group" aria-label="检测结果分类">
           {(['alive', 'dead', 'unknown', 'invalid', 'incomplete'] as const).map(value => {
-            const count = value === 'invalid' ? report.invalid.length : value === 'incomplete' ? report.incomplete.length : report.items.filter(item => item.status === value).length;
+            const count = value === 'invalid' ? report.invalid.filter(matchesDraft).length : value === 'incomplete' ? report.incomplete.filter(matchesDraft).length : visibleItems.filter(item => item.status === value).length;
             const label = { alive: '可用', dead: '失效', unknown: '检测异常', invalid: '格式无效', incomplete: '未完成' }[value];
             return <button type="button" class="btn btn-sm btn-outline-secondary" aria-pressed={category === value} onClick={() => setCategory(value)}>{label} {count}</button>;
           })}
         </div>
         {batch.checkingBatch && <p class="small text-secondary">检测中，请等待或先停止再预览。</p>}
-        <ul class="pool-result-list" tabIndex={0} aria-label="检测结果列表">{category === 'invalid' || category === 'incomplete' ? report[category].map((line, index) => <li key={index}><code>{line}</code></li>)
-          : report.items.filter(item => item.status === category).map((item, index) => <li key={index}>
+        <ul class="pool-result-list" tabIndex={0} aria-label="检测结果列表">{category === 'invalid' || category === 'incomplete' ? report[category].filter(matchesDraft).map((line, index) => <li key={index}><code>{line}</code></li>)
+          : visibleItems.filter(item => item.status === category).map((item, index) => <li key={index}>
             <strong>{item.address} · {probeStatusLabel(item.status, item.code)}</strong>
             <span>{[item.exitIp, item.asn, item.country, item.exitFamily, item.latencyMs === undefined ? '' : `${item.latencyMs}ms`].filter(Boolean).join(' · ')}</span>
             {shouldLogProbe(item) && <span class="pool-diagnostic">{formatProbeLog(item)}</span>}
           </li>)}</ul>
         <div class="pool-buttons">
-          {report.items.some(item => item.status === 'unknown') && <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked || !configReady} onClick={checkDraft}>重新检测</button>}
+          {report.items.some(item => item.status === 'unknown') && <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked || !configReady || badDraftFilter} onClick={checkDraft}>重新检测</button>}
           <button type="button" class="btn btn-sm btn-outline-secondary" onClick={() => download(report.text)}>导出检测文本</button>
         </div>
       </div>}
       </div>
+      <label class="small" for="draft-filter">筛选输入或检测结果</label>
+      <input id="draft-filter" class="form-control form-control-sm" value={draftFilter} disabled={inputsLocked} placeholder="IP、国家、ASN；例如 country:KR 或 port:443" onInput={event => { setDraftFilter(event.currentTarget.value); model.invalidate(); }} />
+      {badDraftFilter ? <p class="kv-alert compact">筛选条件无效，请检查端口或空条件。</p>
+        : draftFilter.trim() && <p class="small text-secondary">当前匹配 {report ? visibleItems.length : readPoolSnapshot(visibleText).entries.size} 条；原始输入保留，清空筛选可继续编辑。</p>}
       {!resultsVisible && invalid.length > 0 && <details class="kv-alert compact pool-invalid"><summary>格式无效 {invalid.length} 条，请修正后直接追加</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
       {!probeConfigured && <p class="kv-alert compact">尚未配置出口接口或备用检测 API，请先到配置中心设置。</p>}
       <div class="pool-buttons" id="main-actions">
-        <button type="button" class={batch.checkingBatch ? 'btn btn-danger' : 'btn btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || inputsLocked)} onClick={() => { if (batch.checkingBatch) { model.invalidate(); batch.handleStopBatch(); } else checkDraft(); }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止检测' : '开始检测'}</button>
-        <button type="button" class="btn btn-success" data-action="append-pool" disabled={inputsLocked || model.previewing || !appendText.trim() || (!report && !!invalid.length)} onClick={() => void append()}><Icon name="plus" />{sideBusy ? '入库中…' : report ? '可用 IP 入库' : '入库'}</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked} onClick={() => { changeDraft(''); setSourcePool(null); }}>清空输入</button>
+        <button type="button" class={batch.checkingBatch ? 'btn btn-danger' : 'btn btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || inputsLocked || badDraftFilter || !checkText.trim())} onClick={() => { if (batch.checkingBatch) { model.invalidate(); batch.handleStopBatch(); } else checkDraft(); }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止检测' : '检测'}</button>
+        <button type="button" class="btn btn-success" data-action="append-pool" disabled={inputsLocked || model.previewing || badDraftFilter || !appendText.trim() || (!report && !!invalid.length)} onClick={() => void append()}><Icon name="plus" />{sideBusy ? '入库中…' : '追加入库'}</button>
+        <button type="button" class="btn btn-outline-danger" data-action="overwrite-input" disabled={inputsLocked || model.previewing || badDraftFilter || !appendText.trim() || (!report && !!invalid.length)} onClick={() => void model.prepare(appendText, 'replace')}>覆盖入库</button>
       </div>
     </div> : <div class="ip-content-area pool-management">
       {inTrash && <p class="small text-secondary">选中地址可恢复到来源池；原池不存在时恢复到默认池。</p>}
       <div class="pool-buttons">
         <button type="button" class="btn btn-sm btn-outline-primary" data-action="read-pool" disabled={model.reading || busy} onClick={() => { if (leaveGuard.current()) { setSelection(new Set()); void model.read(); } }}><Icon name="folder" />{model.reading ? '加载中…' : '读取 IP 库'}</button>
-        {!inTrash && <button type="button" class="btn btn-primary" data-action="check-stored" disabled={model.content === undefined || managementLocked || inputsLocked || !!edit || !configReady || !snapshot.entries.size} onClick={checkStored}><Icon name="activity" />检测{selection.size ? `选中 ${selection.size} 条` : '全库'}</button>}
         <button type="button" class="btn btn-sm btn-outline-secondary" disabled={model.content === undefined} onClick={() => download(selection.size ? selectedText() : model.content!)}>导出{selection.size ? '选中' : '全部'}</button>
       </div>
       {model.content !== undefined && (!inTrash ? <>
@@ -335,11 +362,13 @@ function PoolActionMenu({
   inTrash,
   canDelete,
   actions,
+  onManage,
 }: {
   readonly busy: boolean;
   readonly inTrash: boolean;
   readonly canDelete: boolean;
   readonly actions: PoolContainerActions;
+  readonly onManage: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -367,6 +396,7 @@ function PoolActionMenu({
 
   // 元组：图标、文案、禁用、危险、动作。
   const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
+    ['database', '管理库存', false, false, onManage],
     ['plus', '新建池', false, false, actions.createPool],
     ['pencil', '重命名当前池', inTrash, false, actions.renamePool],
     ['sort', '自定义池排序', false, false, actions.openPoolOrder],
@@ -393,6 +423,7 @@ function PoolActionMenu({
               class={`action-menu-item${danger ? ' danger' : ''}`}
               type="button"
               role="menuitem"
+              data-action={action === onManage ? 'manage-inventory' : undefined}
               disabled={busy || disabled}
               onClick={() => run(action)}
             >

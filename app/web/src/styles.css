@@ -1229,7 +1229,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
             .exit-detail { grid-template-columns: var(--exit-detail-columns-compact); }
         }
 
-.pool-modes, .pool-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.pool-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
 .pool-summary, .pool-feedback { overflow-wrap: anywhere; }
 .pool-remote { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; margin-bottom: var(--space-3); }
 .pool-management { gap: var(--space-3); }

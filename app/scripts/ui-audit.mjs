@@ -105,7 +105,7 @@ const auditProbe = () => {
     const region = el.closest('#page-dashboard, #page-config, .hero, .top-nav, footer');
     const area = region?.id || (region?.matches('footer') ? 'footer' : region?.matches('.hero') ? 'hero' : region?.matches('.top-nav') ? 'top-nav' : 'document');
     const anchors = ['#manual-add-section', ':has(> #lookup-domain)', '#status-display', '.domain-binding-card',
-      '.pool-remote', '.pool-modes', '.pool-buttons', '.hero-actions', '.domain-selector', '.config-details', '.config-card-grid', '#log-window'];
+      '.pool-remote', '.pool-buttons', '.hero-actions', '.domain-selector', '.config-details', '.config-card-grid', '#log-window'];
     const feature = el.closest(anchors.join(','));
     const anchor = anchors.find(selector => feature?.matches(selector)) || 'content';
     return `${area}:${anchor}:${area === 'footer' ? 'footer' : textKey(text) || text.trim()}`;
@@ -316,8 +316,6 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
           }
           return null;
         };
-        const addTab = await waitFor(() => document.querySelector("[data-pool-mode=import]"));
-        addTab?.click();
         const input = await waitFor(() => document.querySelector("#ip-input"));
         const button = await waitFor(() => document.querySelector('button[aria-label="批量检测导入草稿"]'));
         if (!input || !button) return { failures: ["检测控件未渲染"] };
@@ -366,7 +364,7 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         }
         if (input.value !== original) failures.push("放弃后未完成输入被旧请求覆盖");
 
-        const clear = [...document.querySelectorAll('#main-actions button')].find(button => button.textContent.trim() === '清空输入');
+        const clear = [...document.querySelectorAll('.pool-import button')].find(button => button.textContent.trim() === '清空输入');
         if (!clear) failures.push('找不到清空输入动作');
         else {
           clear.click(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));

@@ -15,6 +15,7 @@ try {
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   await cdp.send('Page.enable', {}, sessionId); await cdp.send('Runtime.enable', {}, sessionId);
+  await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true }, sessionId);
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sessionId);
   const read = expression => cdp.evaluate(sessionId, expression);
   const until = expression => cdp.until(sessionId, expression);
@@ -26,16 +27,52 @@ try {
     writeFileSync(join(out, name + '.png'), Buffer.from(data, 'base64'));
   };
   for (const width of [375, 1440]) {
+    const widthStart = server.requests.length;
     Object.assign(server.fixture, createUiFixture());
     server.fixture.poolContents.ip_pool_default = '203.0.113.10:443,AS64500,JP,v4 # 保留备注';
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
     await cdp.send('Page.navigate', { url: server.base }, sessionId);
-    await until('document.querySelector("#pool-editor") && !document.querySelector("[data-action=read-pool]").disabled && document.querySelector("#log-window").textContent.includes("已加载")');
+    await until('document.querySelector("#ip-input") && document.querySelector("#log-window").textContent.includes("已加载") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
     await read('window.__confirmCalls = []; window.__confirmAnswer = true; window.confirm = message => { window.__confirmCalls.push(message); return window.__confirmAnswer; }');
     assert.equal(await read('Boolean(document.querySelector(".pool-table"))'), false, '普通库仍以表格展示');
     const logs = await read('document.querySelector("#log-window").textContent');
-    assert.ok(logs.includes('正在加载配置'));
+    assert.ok(!logs.includes('正在加载配置'), '加载完成后仍保留未结束的配置提示');
     assert.ok(!logs.includes('[解析]') && !logs.includes('203.0.113.10'), '解析实况重复写入日志');
+    assert.equal(await read('Boolean(document.querySelector(".console-progress"))'), false, '空闲进度条仍显示为加载中');
+    assert.equal(await read('Boolean(document.querySelector("#pool-editor, [data-pool-mode]"))'), false, '首页仍有库存编辑或双页切换');
+    assert.equal(await read('document.querySelector("#ip-input").value'), '');
+    assert.ok(await read('[...document.querySelectorAll("#status-table .colo-badge")].every(item => item.textContent === "SJC")'));
+    await read('document.querySelector(".dashboard-pool-card").scrollIntoView({ block: "start", behavior: "instant" })');
+    await capture('input-' + width);
+    await click('[data-action=load-pool]');
+    await until('document.querySelector("#ip-input").value.includes("保留备注") && !document.querySelector("[data-action=load-pool]").disabled');
+    const importFile = join(out, 'import-' + width + '.txt');
+    const originalDraft = '203.0.113.10:443,AS64500,JP,v4 # 本地备注\n203.0.113.20:443,AS64500,US,v4\n203.0.113.30:443,AS64500,KR,v4';
+    writeFileSync(importFile, originalDraft);
+    const chooser = cdp.wait(sessionId, 'Page.fileChooserOpened');
+    await click('[data-action=upload-file]');
+    const { backendNodeId } = await chooser;
+    await cdp.send('DOM.setFileInputFiles', { files: [importFile], backendNodeId }, sessionId);
+    await until('document.querySelector("#ip-input").value.includes("本地备注") && !document.querySelector("[data-action=load-pool]").disabled');
+    await set('#draft-filter', 'country:US');
+    await until('document.querySelector("#ip-input").value.includes("203.0.113.20") && !document.querySelector("#ip-input").value.includes("203.0.113.10")');
+    assert.equal(await read('document.querySelector("#ip-input").readOnly'), true);
+    const checkStart = server.requests.length;
+    await click('#main-actions .btn-primary');
+    await until('document.querySelector(".pool-report")?.textContent.includes("可用 1") && document.querySelector("#main-actions .btn-primary")?.disabled === false');
+    assert.deepEqual(server.requests.slice(checkStart).filter(item => item.path === '/api/check').map(item => item.input.proxyip), ['203.0.113.20:443']);
+    await click('[data-action=view-draft]');
+    await set('#draft-filter', '');
+    await until('document.querySelector("#ip-input").value.includes("本地备注")');
+    assert.equal(await read('document.querySelector("#ip-input").value'), originalDraft, '筛选检测改写了完整原文');
+    server.fixture.remoteContent = '203.0.113.77:443 # URL来源';
+    await set('#remote-url', 'https://list.example.test/ips.txt');
+    await click('[aria-label="从远程 URL 加载"]');
+    await until('document.querySelector("#ip-input").value.includes("URL来源") && !document.querySelector("[data-action=load-pool]").disabled');
+    assert.equal(server.requests.slice(widthStart).filter(item => item.method === 'PUT' && item.path.startsWith('/api/pools/')).length, 0, '导入或筛选检测写了库存');
+    await click('#pool-action-trigger');
+    await click('[data-action=manage-inventory]');
+    await until('Boolean(document.querySelector("#pool-editor")) && !document.querySelector("[data-action=read-pool]").disabled');
     const mutationStart = server.requests.length;
     await set('#pool-editor', '203.0.113.10:443,AS64500,JP,v4 # 保留备注\n203.0.113.20:443');
     await click('[data-action=replace-pool]');
@@ -60,7 +97,8 @@ try {
     await read('document.querySelector(".dashboard-pool-card").scrollIntoView({ block: "start", behavior: "instant" })');
     await capture('pool-' + width);
 
-    await click('[data-pool-mode=import]');
+    await click('[data-action=return-import]');
+    assert.ok(await read('document.querySelector("#ip-input").value.includes("URL来源")'), '库存返回丢失输入内容');
     await set('#ip-input', '203.0.113.99:443');
     const addStart = server.requests.length;
     await click('[data-action=append-pool]');
@@ -75,6 +113,15 @@ try {
     assert.ok(await read('document.querySelector(".pool-report").textContent.includes("可用 1")'));
     assert.equal(await read('document.documentElement.scrollWidth > innerWidth'), false);
     await capture('results-' + width);
+    const replaceStart = server.requests.length;
+    await click('[data-action=overwrite-input]');
+    await until('Boolean(document.querySelector("#pool-preview-title"))');
+    assert.equal(server.requests.slice(replaceStart).filter(item => item.method === 'PUT').length, 0, '覆盖未确认即写入');
+    await click('[data-action=confirm-pool]');
+    await waitForUiRequest(server.requests, replaceStart, '/api/pools/ip_pool_default', 'PUT', 200);
+    await until('!document.querySelector("#pool-preview-title")');
+    assert.equal(server.requests.filter(item => item.method === 'PUT' && item.path === '/api/pools/ip_pool_default').at(-1).input.mode, 'replace');
+    assert.ok(!server.fixture.poolContents.ip_pool_default.includes('203.0.113.10:443'));
 
     await click('[data-page=config]');
     await until('Boolean(document.querySelector("#cfg-probe-ipv4"))');
@@ -96,8 +143,15 @@ try {
     await capture('version-' + width);
     await click('[aria-label="关闭更新历史"]');
     results.push({ width, passed: true });
-    console.log(`PASS ${width}px: text edit, destructive cancellation, one-click append, check, quiet logs, probe override and version history`);
+    console.log(`PASS ${width}px: pool/URL/file imports, lossless filter/check, stock edit and return, append/replace, quiet terminal logs, probe override and history`);
   }
+  Object.assign(server.fixture, createUiFixture(), { poolListFailures: 1 });
+  await cdp.send('Page.navigate', { url: server.base }, sessionId);
+  await until('document.querySelector("#log-window")?.textContent.includes("部分资源加载失败")');
+  assert.ok(await read('document.querySelector("#log-window").textContent.includes("已加载") && !document.querySelector("#log-window").textContent.includes("正在加载配置")'));
+  await click('#retry-pools');
+  await until('document.querySelector("#log-window").textContent.includes("就绪")');
+  console.log('PASS startup resource failure: configuration terminal state and successful retry');
 } catch (error) {
   process.exitCode = 1; results.push({ passed: false, error: error.stack }); console.error(error);
 } finally {

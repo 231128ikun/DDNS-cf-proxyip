@@ -75,7 +75,6 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       return;
     }
     if (!resume) {
-      if (sourceOverride !== undefined) setIpText(sourceOverride);
       setBatchInterrupt(null);
       batchSource.current = sourceText;
       batchCompleted.current.clear();

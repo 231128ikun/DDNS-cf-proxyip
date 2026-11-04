@@ -56,7 +56,7 @@ export class PoolWorkspace {
     this.readController?.abort();
     this.reading = false;
   }
-  async read(): Promise<void> {
+  async read(): Promise<string | undefined> {
     if (this.writing) return;
     this.cancelRead();
     this.invalidate();
@@ -73,6 +73,7 @@ export class PoolWorkspace {
       const confirmed = this.confirmed.get(key);
       this.divergent = confirmed && confirmed.content !== result.content ? result.content : undefined;
       if (!confirmed) this.content = result.content;
+      return this.content;
     } catch (error) {
       if (generation === this.readGeneration && !controller.signal.aborted) this.message = errorMessage(error);
     } finally {
