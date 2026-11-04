@@ -11,6 +11,8 @@ export function architectureViolations(file: string, text: string): string[] {
   const ioForbidden = core || pureUtil || (browser && file !== 'web/src/api/client.ts');
   const dependency = (specifier: string): void => {
     const target = specifier.startsWith('.') ? posix.normalize(posix.join(posix.dirname(file), specifier)) : specifier;
+    // 唯一外部 TLS 实现限制在网络适配器，核心层仍不得依赖它。
+    if (file === 'src/adapters/probe/tls.ts' && target === 'subtls') return;
     if (core || pureUtil || /^src\/(jobs|transport|adapters)\//.test(file)) {
       const layer = file.split('/')[1];
       const allowed = layer === 'application' ? /^src\/(application|domain|contracts|ports)\//

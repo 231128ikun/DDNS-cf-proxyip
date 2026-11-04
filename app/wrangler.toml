@@ -1,6 +1,10 @@
 name = "ddns-cf-proxyip"
 main = "src/index.ts"
 compatibility_date = "2026-09-24"
+minify = true
+
+[alias]
+crypto = "./src/adapters/probe/web-crypto.ts"
 
 [build]
 command = "node scripts/build-worker.mjs"

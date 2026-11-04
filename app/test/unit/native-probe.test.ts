@@ -3,6 +3,10 @@ import { NativeProbeAdapter, type ProbeConnect, type ProbeSocket } from '../../s
 import { parseProxyTarget } from '../../src/domain/proxy-target';
 import { alive, dead, unknown } from '../../src/domain/probe-result';
 
+vi.mock('../../src/adapters/probe/tls', () => ({
+  secureProbeSocket: async (socket: ProbeSocket, hostname: string) => socket.startTls({ expectedServerHostname: hostname }),
+}));
+
 const target = parseProxyTarget('203.0.113.10:8443')!;
 const urls = ['https://ipv4.example/exit?format=json', 'https://ipv6.example/'];
 const encode = (value: string) => new TextEncoder().encode(value);
@@ -34,6 +38,13 @@ function connector(response: (host: string) => Uint8Array | Error = host => http
 }
 
 describe('native candidate probe', () => {
+  it.each([
+    [new Error('connection refused'), 'dead', 'TARGET_CONNECT_ERROR'],
+    [new TypeError('socket API unavailable'), 'unknown', 'PROBE_API_ERROR'],
+  ])('distinguishes an immediate connection failure from a runtime failure: %s', async (error, status, code) => {
+    const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: () => { throw error; } });
+    expect(await probe.probe(target)).toMatchObject({ status, code });
+  });
   it('connects to the candidate port with endpoint SNI and Host, retaining both exit families', async () => {
     const io = connector();
     const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect });
@@ -42,7 +53,7 @@ describe('native candidate probe', () => {
       { ip: '2001:db8::42', family: 'ipv6' },
     ] });
     expect(io.connect).toHaveBeenCalledTimes(2);
-    expect(io.connect).toHaveBeenCalledWith({ hostname: target.host, port: 8443 }, { secureTransport: 'starttls', allowHalfOpen: false });
+    expect(io.connect).toHaveBeenCalledWith({ hostname: target.host, port: 8443 }, { secureTransport: 'off', allowHalfOpen: false });
     expect(io.hosts).toEqual(['ipv4.example', 'ipv6.example']);
     expect(io.writes[0]).toContain('GET /exit?format=json HTTP/1.1\r\nHost: ipv4.example\r\n');
     expect(io.closes.every(close => close.mock.calls.length === 1)).toBe(true);

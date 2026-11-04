@@ -6,6 +6,7 @@ import { architectureViolations } from '../helpers/architecture';
 describe('architecture boundaries', () => {
   it.each([
     ['src/domain/address.ts', "import { probe } from '../adapters/probe/external-api'"],
+    ['src/domain/address.ts', "import { startTls } from 'subtls'"],
     ['src/domain/address.ts', "import type { ProbeAdapter } from '../ports/probe'"],
     ['src/jobs/maintenance.ts', "import { KvPoolRepository } from '../adapters/storage/kv-pool-repository'"],
     ['src/adapters/probe/custom.ts', "import { createHttpApp } from '../../transport/http'"],
@@ -20,6 +21,7 @@ describe('architecture boundaries', () => {
     expect(architectureViolations(file!, source!)).not.toEqual([]);
   });
   it('permits pure rule reuse, ports, and the API client boundary', () => {
+    expect(architectureViolations('src/adapters/probe/tls.ts', "import { startTls } from 'subtls'")).toEqual([]);
     expect(architectureViolations('src/application/check.ts', "import type { ProbeAdapter } from '../ports/probe'\nimport { parseProxyTarget } from '../domain/proxy-target'")).toEqual([]);
     expect(architectureViolations('web/src/api/client.ts', "fetch('/api/config')")).toEqual([]);
     expect(architectureViolations('src/domain/example.ts', "// fetch('example')\nconst text = 'fetch()'")).toEqual([]);

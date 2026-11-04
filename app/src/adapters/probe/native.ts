@@ -6,6 +6,7 @@ import { createRequestTimeout } from '../../util/request-timeout';
 import { readProbeExit, uniqueExits } from './probe-payload';
 import { isTcpLoop } from './probe-errors';
 import { createProbeRedactor, probeErrorMessage } from './diagnostics';
+import { secureProbeSocket } from './tls';
 
 export type ProbeSocket = Pick<Socket, 'opened' | 'closed' | 'readable' | 'writable' | 'close' | 'startTls'>;
 export type ProbeConnect = (address: SocketAddress, options: SocketOptions) => ProbeSocket | Promise<ProbeSocket>;
@@ -13,11 +14,12 @@ interface NativeProbeOptions {
   readonly urls: readonly string[];
   readonly timeoutMs: number;
   readonly connect: ProbeConnect;
+  readonly secure?: (socket: ProbeSocket, hostname: string) => Promise<ProbeSocket>;
   readonly backup?: ProbeAdapter;
 }
 const READ_LIMIT = 65_536;
 
-/** 候选 TCP + 出口服务的 SNI/Host；复用运行平台的 TLS，不维护第二套 TLS 协议。 */
+/** 候选 TCP + 显式 SNI/Host；两个出口分支复用同一 TLS 适配器。 */
 export class NativeProbeAdapter implements ProbeAdapter {
   readonly name = 'native';
   private active = 0;
@@ -90,20 +92,21 @@ export class NativeProbeAdapter implements ProbeAdapter {
     });
     try {
       return await Promise.race([cancelled, (async () => {
-        socket = await connect({ hostname: target.family === 'ipv6' ? `[${target.host}]` : target.host, port: target.port }, { secureTransport: 'starttls', allowHalfOpen: false });
+        phase = 'TARGET_CONNECT_ERROR';
+        socket = await connect({ hostname: target.family === 'ipv6' ? `[${target.host}]` : target.host, port: target.port }, { secureTransport: 'off', allowHalfOpen: false });
         void socket.closed.catch(() => {});
         if (timeout.signal.aborted) { void socket.close().catch(() => {}); throw new Error('cancelled'); }
-        phase = 'TARGET_CONNECT_ERROR';
         await socket.opened;
         if (timeout.signal.aborted) throw new Error('cancelled');
-        phase = 'TARGET_TLS_ERROR';
-        socket = socket.startTls({ expectedServerHostname: url.hostname });
+        phase = this.options.secure ? 'TARGET_TLS_ERROR' : 'PROBE_API_ERROR';
+        socket = await (this.options.secure ? this.options.secure(socket, url.hostname)
+          : secureProbeSocket(socket, url.hostname, undefined, () => { phase = 'TARGET_TLS_ERROR'; }));
         void socket.closed.catch(() => {});
         await socket.opened;
         if (timeout.signal.aborted) throw new Error('cancelled');
         phase = 'TARGET_HTTP_ERROR';
         const writer = socket.writable.getWriter();
-        try { await writer.write(new TextEncoder().encode(`GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`)); }
+        try { await writer.write(new TextEncoder().encode(`GET ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nAccept: application/json, text/plain, */*\r\nAccept-Language: en-US,en;q=0.9\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`)); }
         finally { writer.releaseLock(); }
         const reader = socket.readable.getReader();
         const chunks: Uint8Array[] = [];
@@ -131,7 +134,9 @@ export class NativeProbeAdapter implements ProbeAdapter {
     } catch (error) {
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', details());
       if (isTcpLoop(error instanceof Error ? error.message : String(error))) return unknown(target, 'PROBE_API_ERROR', 'TCP Loop detected：运行平台拒绝回环连接', details());
-      if (timeout.didTimeout()) return dead(target, { ...details(), code: 'TIMEOUT', message: '候选连接超时' });
+      if (timeout.didTimeout()) return phase === 'PROBE_API_ERROR'
+        ? unknown(target, 'PROBE_API_ERROR', 'TLS 信任库准备超时，候选状态未知', details())
+        : dead(target, { ...details(), code: 'TIMEOUT', message: '候选连接超时' });
       if (phase === 'PROBE_API_ERROR' || error instanceof TypeError) return unknown(target, 'PROBE_API_ERROR', '原生检测运行异常', details());
       const stage = phase === 'TARGET_CONNECT_ERROR' ? '候选 TCP 连接失败'
         : phase === 'TARGET_TLS_ERROR' ? '候选 TLS 验证失败' : '候选 HTTP 或出口 JSON 无效';
@@ -147,7 +152,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
 function readHttpJson(bytes: Uint8Array): Record<string, unknown> {
   const decoder = new TextDecoder();
   const headerEnd = findCrlf(bytes, 0, true);
-  if (headerEnd < 0) throw new Error('missing headers');
+  if (headerEnd < 0) throw new Error(bytes.length ? '候选返回的 HTTP 响应不完整' : '候选未返回 HTTP 数据');
   const headers = decoder.decode(bytes.subarray(0, headerEnd));
   const status = /^HTTP\/1\.[01] (\d{3})\b/.exec(headers)?.[1];
   if (status !== '200') throw new Error('HTTP ' + (status ?? '响应格式无效'));

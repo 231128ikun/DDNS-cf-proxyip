@@ -29,7 +29,8 @@
     "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs scripts/ui-browser.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
   },
   "dependencies": {
-    "preact": "^10.29.8"
+    "preact": "^10.29.8",
+    "subtls": "0.5.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260921.1",
