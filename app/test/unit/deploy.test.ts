@@ -43,6 +43,17 @@ function expectClean() {
 }
 
 describe('create-first KV deployment recovery', () => {
+  it('keeps local aliases resolvable after relocating root and environment configuration', () => {
+    const raw = { ...config(), alias: { crypto: './src/adapters/probe/web-crypto.ts', package: 'some-package',
+      absolute: resolve(root, 'absolute.ts'), parent: '../shared/adapter.ts' },
+      env: { beta: { alias: { crypto: './src/adapters/probe/web-crypto.ts', builtin: 'node:crypto' } } } };
+    const original = structuredClone(raw);
+    const normalized = materializeConfig(raw, root);
+    expect(normalized.alias).toEqual({ crypto: resolve(root, 'src/adapters/probe/web-crypto.ts'),
+      package: 'some-package', absolute: resolve(root, 'absolute.ts'), parent: resolve(root, '../shared/adapter.ts') });
+    expect(normalized.env.beta.alias).toEqual({ crypto: resolve(root, 'src/adapters/probe/web-crypto.ts'), builtin: 'node:crypto' });
+    expect(raw).toEqual(original);
+  });
   it('uses the native first deployment for creation or inheritance without extra lookups', async () => {
     const raw = config();
     const { run, snapshots } = runner([succeeded]);

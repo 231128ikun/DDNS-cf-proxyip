@@ -42,6 +42,11 @@ export function materializeConfig(rawConfig, sourceDir) {
     for (const key of ['main', 'tsconfig', 'base_dir']) {
       if (typeof section[key] === 'string') section[key] = absolute(section[key]);
     }
+    if (isRecord(section.alias)) {
+      for (const [name, value] of Object.entries(section.alias)) {
+        if (typeof value === 'string' && /^\.\.?[/\\]/.test(value)) section.alias[name] = absolute(value);
+      }
+    }
     if (typeof section.assets?.directory === 'string') section.assets.directory = absolute(section.assets.directory);
     if (isRecord(section.build)) {
       section.build.cwd = typeof section.build.cwd === 'string' ? absolute(section.build.cwd) : sourceDir;

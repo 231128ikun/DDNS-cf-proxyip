@@ -39,6 +39,9 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Deployment entry dry-run
+        run: npm run deploy -- --dry-run
+
       - name: Desktop and mobile essential flows
         run: npm run audit:acceptance
 
