@@ -70,9 +70,11 @@ try {
     await click('[aria-label="从远程 URL 加载"]');
     await until('document.querySelector("#ip-input").value.includes("URL来源") && !document.querySelector("[data-action=load-pool]").disabled');
     assert.equal(server.requests.slice(widthStart).filter(item => item.method === 'PUT' && item.path.startsWith('/api/pools/')).length, 0, '导入或筛选检测写了库存');
+    const inventoryStart = server.requests.length;
     await click('#pool-action-trigger');
     await click('[data-action=manage-inventory]');
     await until('Boolean(document.querySelector("#pool-editor")) && !document.querySelector("[data-action=read-pool]").disabled');
+    assert.equal(server.requests.slice(inventoryStart).filter(item => item.path === '/api/pools/ip_pool_default').length, 0, '进入已读取的库存重复请求 KV');
     const mutationStart = server.requests.length;
     await set('#pool-editor', '203.0.113.10:443,AS64500,JP,v4 # 保留备注\n203.0.113.20:443');
     await click('[data-action=replace-pool]');
@@ -104,6 +106,8 @@ try {
     await click('[data-action=append-pool]');
     await waitForUiRequest(server.requests, addStart, '/api/pools/ip_pool_default', 'PUT', 200);
     await until('!document.querySelector("[data-action=append-pool]").disabled');
+    assert.deepEqual(server.requests.slice(addStart).filter(item => item.path.startsWith('/api/pools')).map(item => [item.method, item.path]), [['PUT', '/api/pools/ip_pool_default']], '普通追加仍请求预览或回读列表');
+    assert.equal(await read('document.querySelector("#pool-count").textContent'), '3', '回执没有更新库存数量');
     assert.equal(await read('Boolean(document.querySelector("#pool-preview-title"))'), false, '普通追加多余确认');
     assert.ok(server.fixture.poolContents.ip_pool_default.includes('203.0.113.99:443'));
     assert.ok(server.fixture.poolContents.ip_pool_default.includes('保留备注'));
@@ -122,6 +126,32 @@ try {
     await until('!document.querySelector("#pool-preview-title")');
     assert.equal(server.requests.filter(item => item.method === 'PUT' && item.path === '/api/pools/ip_pool_default').at(-1).input.mode, 'replace');
     assert.ok(!server.fixture.poolContents.ip_pool_default.includes('203.0.113.10:443'));
+
+    const orderStart = server.requests.length;
+    await click('#pool-action-trigger');
+    await read('[...document.querySelectorAll(".action-menu-item")].find(item => item.textContent.includes("自定义池排序")).click()');
+    await until('Boolean(document.querySelector("#pool-order-save"))');
+    assert.equal(await read('document.querySelector("#pool-order-save").disabled'), true, '顺序未变仍可保存');
+    await click('#pool-order-list [data-action=down]');
+    await until('!document.querySelector("#pool-order-save").disabled');
+    await click('#pool-order-save');
+    await until('!document.querySelector("#pool-order-title")');
+    assert.deepEqual(server.requests.slice(orderStart).filter(item => item.path.startsWith('/api/pools')).map(item => [item.method, item.path]), [['PUT', '/api/pools/order']], '保存顺序后重复读取列表');
+
+    const containerStart = server.requests.length;
+    await read('window.__promptAnswer = "临时池"; window.prompt = () => window.__promptAnswer');
+    await click('#pool-action-trigger');
+    await read('[...document.querySelectorAll(".action-menu-item")].find(item => item.textContent.includes("新建池")).click()');
+    await until('document.querySelector("#pool-selector").selectedOptions[0]?.textContent === "临时池" && !document.querySelector("#pool-selector").disabled');
+    await read('window.__promptAnswer = "已改名"');
+    await click('#pool-action-trigger');
+    await read('[...document.querySelectorAll(".action-menu-item")].find(item => item.textContent.includes("重命名")).click()');
+    await until('document.querySelector("#pool-selector").selectedOptions[0]?.textContent === "已改名" && !document.querySelector("#pool-selector").disabled');
+    await click('#pool-action-trigger');
+    await read('[...document.querySelectorAll(".action-menu-item")].find(item => item.textContent.includes("删除当前池")).click()');
+    await until('document.querySelector("#pool-selector").value === "ip_pool_default" && !document.querySelector("#pool-selector").disabled');
+    assert.equal(server.requests.slice(containerStart).filter(item => item.method === 'GET' && item.path === '/api/pools').length, 0, '池操作后重复读取全表');
+    assert.equal(await read('[...document.querySelector("#pool-selector").options].some(item => item.textContent === "已改名")'), false);
 
     await click('[data-page=config]');
     await until('Boolean(document.querySelector("#cfg-probe-ipv4"))');
@@ -152,6 +182,14 @@ try {
   await click('#retry-pools');
   await until('document.querySelector("#log-window").textContent.includes("就绪")');
   console.log('PASS startup resource failure: configuration terminal state and successful retry');
+  Object.assign(server.fixture, createUiFixture(), { bindingListDelay: 2000 });
+  await cdp.send('Page.navigate', { url: server.base }, sessionId);
+  await until('document.querySelector("#pool-selector option[value=ip_pool_001]")');
+  await read('document.querySelector("#pool-selector").value = "ip_pool_001"; document.querySelector("#pool-selector").dispatchEvent(new Event("change", { bubbles: true }))');
+  await click('#pool-action-trigger');
+  assert.ok(await read('[...document.querySelectorAll(".action-menu-item")].filter(item => /重命名|删除当前池/.test(item.textContent)).every(item => item.disabled)'), '绑定未加载时仍可修改池身份');
+  await until('[...document.querySelectorAll(".action-menu-item")].some(item => item.textContent.includes("删除当前池") && !item.disabled)');
+  console.log('PASS delayed bindings: pool identity changes wait for confirmed bindings');
 } catch (error) {
   process.exitCode = 1; results.push({ passed: false, error: error.stack }); console.error(error);
 } finally {

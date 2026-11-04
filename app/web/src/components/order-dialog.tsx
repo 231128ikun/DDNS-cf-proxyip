@@ -30,8 +30,6 @@ interface OrderSaveContext {
   readonly client: ApiClient;
   readonly patchPools: (change: (current: PoolsResponse) => PoolsResponse) => void;
   readonly patchBindings: (change: (current: DomainBindingsResponse) => DomainBindingsResponse) => void;
-  readonly refreshPools: () => Promise<boolean>;
-  readonly refreshBindings: () => Promise<boolean>;
   readonly notify: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -39,12 +37,11 @@ interface OrderSaveContext {
 export async function saveOrder(kind: OrderRequest['kind'], order: readonly string[], context: OrderSaveContext): Promise<void> {
   const poolOrder = kind === 'pools';
   const savedOrder = poolOrder ? [DEFAULT_POOL_KEY, ...order, TRASH_POOL_KEY] : order;
-  const { client, patchPools, patchBindings, refreshPools, refreshBindings, notify } = context;
+  const { client, patchPools, patchBindings, notify } = context;
   await (poolOrder ? client.savePoolOrder(savedOrder) : client.saveDomainBindingOrder(savedOrder));
   if (poolOrder) patchPools(current => ({ pools: sortByKeyOrder(current.pools, savedOrder) }));
   else patchBindings(current => ({ items: sortByKeyOrder(current.items, savedOrder) }));
-  const refreshed = await (poolOrder ? refreshPools() : refreshBindings());
-  notify(`${poolOrder ? '池排序' : '域名池绑定顺序'}已保存${refreshed ? '' : '，刷新失败，请重试读取'}`, refreshed ? 'success' : 'error');
+  notify(`${poolOrder ? '池排序' : '域名池绑定顺序'}已保存`, 'success');
 }
 
 interface OrderDialogProps extends OrderRequest {
@@ -59,6 +56,7 @@ export function OrderDialog({ kind, items, onSave, onClose }: OrderDialogProps) 
   const [error, setError] = useState('');
   const submitting = useRef(false);
   const prefix = kind === 'pools' ? 'pool-order' : 'domain-pool-order';
+  const changed = order.some((item, index) => item.key !== items[index]?.key);
   const close = (): void => { if (!submitting.current) onClose(); };
   const move = (index: number, delta: number): void => {
     if (submitting.current) return;
@@ -71,7 +69,7 @@ export function OrderDialog({ kind, items, onSave, onClose }: OrderDialogProps) 
     });
   };
   const save = async (): Promise<void> => {
-    if (submitting.current) return;
+    if (submitting.current || !changed) return;
     submitting.current = true;
     setSaving(true);
     setError('');
@@ -108,7 +106,7 @@ export function OrderDialog({ kind, items, onSave, onClose }: OrderDialogProps) 
       {error && <p class="pool-order-error text-danger" role="alert">{error}</p>}
       <div class="custom-modal-buttons">
         <button class="btn-abandon" type="button" id={`${prefix}-cancel`} disabled={saving} onClick={close}>取消</button>
-        <button class="btn-continue" type="button" id={`${prefix}-save`} disabled={saving} onClick={() => void save()}>{saving ? '保存中…' : '保存排序'}</button>
+        <button class="btn-continue" type="button" id={`${prefix}-save`} disabled={saving || !changed} onClick={() => void save()}>{saving ? '保存中…' : '保存排序'}</button>
       </div>
     </Modal>
   );

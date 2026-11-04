@@ -204,14 +204,13 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     setPoolBusy(key);
     try {
       const message = await task();
-      await refreshPools();
       notify(message);
     } catch (error) {
       notify(errorMessage(error), 'error');
     } finally {
       setPoolBusy((current) => (current === key ? null : current));
     }
-  }, [notify, refreshPools]);
+  }, [notify]);
 
   const handleLookupSubmit = (event: Event): void => {
     event.preventDefault();
@@ -350,6 +349,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   };
 
   const handleRenamePool = (): void => {
+    if (bindings.status !== 'ready') return;
     if (!isUserPoolKey(poolKey)) {
       notify('默认池与编号池之外不支持重命名', 'error');
       return;
@@ -359,6 +359,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!name || name === current?.name) return;
     void runPoolAction('pool-edit', async () => {
       await client.renamePool(poolKey, name);
+      patchPools(current => ({ pools: current.pools.map(pool => pool.key === poolKey ? { ...pool, name } : pool) }));
+      patchBindings(current => ({ items: current.items.map(item => item.poolKey === poolKey ? { ...item, poolName: name } : item) }));
       return `已重命名为 ${name}`;
     });
   };
@@ -381,6 +383,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   };
 
   const handleDeletePool = (): void => {
+    if (bindings.status !== 'ready') return;
     if (!poolLeaveGuard.current()) return;
     if (!NUMBERED_POOL_KEY_RE.test(poolKey)) {
       notify('只能删除编号 IP 池', 'error');
@@ -390,6 +393,10 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     void runPoolAction('pool-edit', async () => {
       await client.removePool(poolKey);
       poolContainerChanged.current(poolKey);
+      patchPools(current => ({ pools: current.pools.filter(pool => pool.key !== poolKey) }));
+      const defaultName = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === DEFAULT_POOL_KEY)?.name : undefined;
+      patchBindings(current => ({ items: current.items.map(item => item.poolKey === poolKey
+        ? { ...item, poolKey: DEFAULT_POOL_KEY, poolName: defaultName ?? '默认池' } : item) }));
       setPoolKey(DEFAULT_POOL_KEY);
       return `已删除 ${poolKey}`;
     });
@@ -509,8 +516,9 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
           <DashboardPage
             poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
-              containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()} batch={batchState}
-              configReady={config.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
+              containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()}
+              onPoolCount={(key, count) => patchPools(current => ({ pools: current.pools.map(pool => pool.key === key ? { ...pool, count } : pool) }))} batch={batchState}
+              configReady={config.status === 'ready'} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
               leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} />}
             check={check}
             batch={batch}
@@ -546,7 +554,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       </footer>
       {orderRequest && OrderDialog && !batchInterrupt && <OrderDialog {...orderRequest}
         onSave={order => orderModule.current!.saveOrder(orderRequest.kind, order,
-          { client, patchPools, patchBindings, refreshPools, refreshBindings, notify })}
+          { client, patchPools, patchBindings, notify })}
         onClose={() => setOrderRequest(null)} />}
       {batchInterrupt && (
         <Modal id="batch-interrupt-title" title="检测已中断">

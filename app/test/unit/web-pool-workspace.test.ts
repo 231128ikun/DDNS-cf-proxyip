@@ -19,6 +19,37 @@ const success = (written: boolean | undefined, content = '1.1.1.1:443\n2.2.2.2:4
   ...(written === undefined ? {} : { receipt: { poolKey: 'ip_pool_default', content, written } }) });
 
 describe('pool workspace command/query boundary', () => {
+  it('appends with one PUT and reuses its receipt when switching pools', async () => {
+    const { model, calls } = setup(() => success(true));
+    expect(await model.append('1.1.1.1:443')).toBe(true);
+    expect(calls.map(call => [call.method, call.body])).toEqual([
+      ['PUT', { content: '1.1.1.1:443', mode: 'append', returnReceipt: true }],
+    ]);
+    model.select('ip_pool_001'); model.select('ip_pool_default');
+    expect(model.content).toContain('2.2.2.2:443');
+    expect(calls).toHaveLength(1);
+  });
+  it('reuses prior reads until explicitly reloaded and forgets deleted pool content', async () => {
+    let content = '1.1.1.1:443';
+    const { model, calls } = setup(() => ({ key: 'ip_pool_default', content }));
+    await model.read();
+    model.select('ip_pool_001'); model.select('ip_pool_default');
+    expect(model.content).toBe('1.1.1.1:443'); expect(calls).toHaveLength(1);
+    content = '2.2.2.2:443'; await model.read();
+    expect(model.content).toBe('2.2.2.2:443'); expect(calls).toHaveLength(2);
+    model.forgetPool('ip_pool_default'); model.select('ip_pool_001'); model.select('ip_pool_default');
+    expect(model.content).toBeUndefined();
+  });
+  it('does not submit invalid appends, duplicate clicks, or retry a failed write automatically', async () => {
+    const response = deferred<unknown>();
+    const { model, calls } = setup(() => response.promise);
+    expect(await model.append('???')).toBe(false); expect(calls).toHaveLength(0);
+    const pending = model.append('1.1.1.1:443');
+    expect(await model.append('1.1.1.1:443')).toBe(false);
+    response.resolve(Response.json({ error: 'failed' }, { status: 500 }));
+    expect(await pending).toBe(false);
+    expect(model.confirmed.size).toBe(0); expect(calls).toHaveLength(1);
+  });
   it('forgets only the confirmed container identity that was deleted or recreated, so empty reused keys read empty', async () => {
     const { model } = setup((path, init) => {
       const key = path.split('/')[3]!;

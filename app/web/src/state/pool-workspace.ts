@@ -8,7 +8,7 @@ export function invalidPoolLines(content: string): readonly string[] {
   return readPoolSnapshot(content).invalid.filter(line => !line.startsWith('#'));
 }
 
-/** One session's accepted writes are separate from eventually consistent reads. */
+/** 保留写入回执，避免 KV 的旧读取覆盖已保存内容。 */
 export class PoolWorkspace {
   key = 'ip_pool_default';
   content: string | undefined;
@@ -23,9 +23,11 @@ export class PoolWorkspace {
   private readGeneration = 0;
   private readController?: AbortController;
   private previewController: AbortController | undefined;
+  private readonly reads = new Map<string, string>();
   constructor(private readonly client: ApiClient, private readonly changed = () => {}) {}
   forgetPool(key: string): void {
     this.confirmed.delete(key);
+    this.reads.delete(key);
     if (key === this.key) {
       this.cancelRead(); this.invalidate();
       this.content = undefined; this.divergent = undefined; this.message = '';
@@ -37,7 +39,7 @@ export class PoolWorkspace {
     this.cancelRead();
     this.invalidate();
     this.key = key;
-    this.content = this.confirmed.get(key)?.content;
+    this.content = this.confirmed.get(key)?.content ?? this.reads.get(key);
     this.divergent = undefined;
     this.message = '';
     this.changed();
@@ -71,6 +73,7 @@ export class PoolWorkspace {
       if (generation !== this.readGeneration || key !== this.key || controller.signal.aborted) return;
       if (result.key !== key) throw new Error('返回的 IP 池与请求不符');
       const confirmed = this.confirmed.get(key);
+      this.reads.set(key, result.content);
       this.divergent = confirmed && confirmed.content !== result.content ? result.content : undefined;
       if (!confirmed) this.content = result.content;
       return this.content;
@@ -106,27 +109,42 @@ export class PoolWorkspace {
   async save(): Promise<boolean> {
     const plan = this.preview;
     if (this.writing || !plan || plan.revision !== this.revision || plan.poolKey !== this.key || !plan.data.changed) return false;
+    return this.write(plan.poolKey, plan.content, plan.mode);
+  }
+  async append(content: string): Promise<boolean> {
+    if (this.writing) return false;
+    this.invalidate();
+    if (this.key === TRASH_POOL_KEY || invalidPoolLines(content).length || !readPoolSnapshot(content).entries.size) {
+      this.message = '没有可入库的有效地址，请检查输入'; this.changed(); return false;
+    }
+    return this.write(this.key, content, 'append');
+  }
+  private async write(poolKey: string, content: string, mode: PoolSaveMode): Promise<boolean> {
+    const plan = this.preview;
     this.writing = true;
     this.cancelRead();
     this.message = '';
     this.changed();
     try {
-      // A client abort cannot undo a PUT; keep waiting and forbid duplicate commands.
-      const result = await this.client.savePool(plan.poolKey, plan.content, plan.mode, undefined, true);
-      if (result.mode !== plan.mode || (result.receipt && result.receipt.poolKey !== plan.poolKey)) throw new Error('回执与提交对象不符');
+      // 写入开始后等待结果，防止重复提交。
+      const result = await this.client.savePool(poolKey, content, mode, undefined, true);
+      if (result.mode !== mode || (result.receipt && result.receipt.poolKey !== poolKey)) throw new Error('回执与提交对象不符');
       const receipt = result.receipt;
       if (receipt?.written) {
-        this.confirmed.set(plan.poolKey, { content: receipt.content, count: result.count });
-        if (this.key === plan.poolKey) { this.content = receipt.content; this.divergent = undefined; }
+        this.confirmed.set(poolKey, { content: receipt.content, count: result.count });
+        if (this.key === poolKey) { this.content = receipt.content; this.divergent = undefined; }
         this.message = '已保存 · ' + result.count + ' 条地址';
       } else if (receipt) {
-        if (!this.confirmed.has(plan.poolKey) && this.key === plan.poolKey) this.content = receipt.content;
+        if (!this.confirmed.has(poolKey)) {
+          this.reads.set(poolKey, receipt.content);
+          if (this.key === poolKey) this.content = receipt.content;
+        }
         this.message = '内容没有变化，未执行新写入';
       } else this.message = '请求成功，但未提供回执；请刷新列表核对';
       if (this.preview === plan) this.preview = undefined;
       return true;
     } catch (error) {
-      this.message = '未取得成功确认：' + errorMessage(error) + '。服务端可能已执行，可用同一预览重试。';
+      this.message = '未取得成功确认：' + errorMessage(error) + '。服务端可能已执行，请核对后重试。';
       return false;
     } finally { this.writing = false; this.changed(); }
   }
@@ -134,6 +152,7 @@ export class PoolWorkspace {
     if (this.divergent === undefined || this.writing) return;
     this.invalidate();
     this.content = this.divergent;
+    this.reads.set(this.key, this.content);
     this.divergent = undefined;
     this.confirmed.delete(this.key);
     this.changed();

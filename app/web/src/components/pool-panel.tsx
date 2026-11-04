@@ -24,17 +24,19 @@ interface PoolPanelProps {
   readonly actions: PoolContainerActions;
   readonly containerBusy: boolean;
   readonly refreshPools: () => void;
+  readonly onPoolCount: (key: string, count: number) => void;
   readonly batch: ReturnType<typeof useBatchCheck>;
   readonly configReady: boolean;
+  readonly bindingsReady: boolean;
   readonly probeConfigured: boolean;
   readonly leaveGuard: { current: () => boolean };
   readonly containerChanged: { current: (key: string) => void };
   readonly log: (message: string, tone?: ConsoleTone) => void;
 }
 
-/** The pool card owns drafts and queries; only explicit commands can write. */
-export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools,
-  batch, configReady, probeConfigured, leaveGuard, containerChanged, log }: PoolPanelProps) {
+/** 导入和检测不改库，只有入库或保存才写入。 */
+export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools, onPoolCount,
+  batch, configReady, bindingsReady, probeConfigured, leaveGuard, containerChanged, log }: PoolPanelProps) {
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
   containerChanged.current = key => model.forgetPool(key);
@@ -98,7 +100,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   useLayoutEffect(() => {
     model.select(poolKey);
     setSelection(new Set()); setFilter(''); setPage(0); setEdit(null);
-    if (mode === 'manage' || poolKey === TRASH_POOL_KEY) void model.read();
+    if ((mode === 'manage' || poolKey === TRASH_POOL_KEY) && model.content === undefined) void model.read();
   }, [poolKey, model]);
   useEffect(() => { model.invalidate(); setCategory('alive'); setShowResults(hasReport); }, [batch.ipText, hasReport, model]);
   useEffect(() => { if (batch.ipText) setMode('import'); }, [batch.ipText]);
@@ -135,7 +137,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     void loadSource(async signal => (await client.remoteLoad(url.trim(), signal)).content, 'URL 载入');
   };
   const loadStored = (): void => { void loadSource(async () => {
-    const text = await model.read();
+    const text = model.content ?? await model.read();
     if (text === undefined) throw new Error(model.message || '读取 IP 库失败');
     return text;
   }, '从库载入', poolKey); };
@@ -194,18 +196,19 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const confirmPreview = async (): Promise<void> => {
     const plan = model.preview;
     if (!plan || (plan.mode === 'replace' && plan.data.currentCount > 0 && plan.data.count === 0 && !window.confirm(`危险操作：确认清空「${targetName}」全部池内容？池容器仍保留。`))) return;
-    if (await model.save()) { setEdit(null); setSelection(new Set()); log('[IP池] ' + model.message); refreshPools(); }
+    if (await model.save()) { setEdit(null); setSelection(new Set()); acceptPoolCount(); log('[IP池] ' + model.message); }
     else log('[IP池] ' + model.message, 'error');
+  };
+  const acceptPoolCount = (): void => {
+    if (model.content !== undefined) onPoolCount(poolKey, readPoolSnapshot(model.content).entries.size);
   };
   const append = async (): Promise<void> => {
     if (inputsLocked || sidePending.current || !appendText.trim()) return;
     sidePending.current = true; setSideBusy(true);
     try {
-      await model.prepare(appendText, 'append');
-      if (model.preview && !model.preview.data.changed) {
-        model.preview = undefined; model.message = '这些地址已在池中，无需重复入库';
-      } else if (model.preview && await model.save()) refreshPools();
-      log('[IP池] ' + model.message);
+      const saved = await model.append(appendText);
+      if (saved) acceptPoolCount();
+      log('[IP池] ' + model.message, saved ? 'success' : 'error');
     } finally { sidePending.current = false; setSideBusy(false); }
   };
 
@@ -218,7 +221,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
             if (leaveGuard.current()) onPoolChange(event.currentTarget.value);
             else event.currentTarget.value = poolKey;
           }}>{poolOptions(pools, poolKey).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}</select>
-        <PoolActionMenu busy={inputsLocked} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} onManage={() => switchMode('manage')} />
+        <PoolActionMenu busy={inputsLocked} inTrash={inTrash} bindingsReady={bindingsReady} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} onManage={() => switchMode('manage')} />
       </div>
     </div>
     <ResourceFeedback state={pools} id="retry-pools" onRetry={refreshPools} />
@@ -336,7 +339,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     {model.preview && !sideBusy && <Modal id="pool-preview-title" title={`确认${({ append: '添加', replace: '修改', remove: '删除' })[model.preview.mode]} · ${targetName}`} className="pool-preview-modal" onClose={() => { if (!model.writing) model.invalidate(); }}>
       <p>地址 {model.preview.data.currentCount} → {model.preview.data.count} · 新增 {model.preview.data.added} / 更新 {model.preview.data.updated} / 移除 {model.preview.data.removed}</p>
       <p>无法识别行 {model.preview.data.unrecognized.before} → {model.preview.data.unrecognized.after} · 独立备注 {model.preview.data.standaloneComments.before} → {model.preview.data.standaloneComments.after}</p>
-      <p class="small text-secondary">确认后写入当前池。{({ replace: '覆盖替换整个文本，独立备注也可能改变；下方是逐地址差异。', append: '追加不会清理原池中的失效地址。', remove: '仅删除明确选择的地址，不自动移入垃圾桶。' })[model.preview.mode]}</p>
+      <p class="small text-secondary">确认后{model.preview.mode === 'replace' ? '替换整个库内容，请核对移除项和备注。' : '保存到当前池。'}</p>
       {!model.preview.data.changed ? <p>本次读取快照无变化，未执行新写入。</p> : !model.preview.data.changes.length && <p>地址差异为零，但文本规范化或备注发生变化。</p>}
       <details><summary>查看地址变更（{model.preview.data.changes.length}）</summary><ul class="pool-change-list">{model.preview.data.changes.map((change, index) => <li key={index}>
         <strong>{change.kind} · {change.address}</strong>{change.before !== undefined && <pre class="pool-text">之前：{change.before}</pre>}{change.after !== undefined && <pre class="pool-text">之后：{change.after}</pre>}
@@ -361,12 +364,14 @@ function PoolActionMenu({
   busy,
   inTrash,
   canDelete,
+  bindingsReady,
   actions,
   onManage,
 }: {
   readonly busy: boolean;
   readonly inTrash: boolean;
   readonly canDelete: boolean;
+  readonly bindingsReady: boolean;
   readonly actions: PoolContainerActions;
   readonly onManage: () => void;
 }) {
@@ -398,9 +403,9 @@ function PoolActionMenu({
   const items: readonly (readonly [IconName, string, boolean, boolean, () => void])[] = [
     ['database', '管理库存', false, false, onManage],
     ['plus', '新建池', false, false, actions.createPool],
-    ['pencil', '重命名当前池', inTrash, false, actions.renamePool],
+    ['pencil', '重命名当前池', inTrash || !bindingsReady, false, actions.renamePool],
     ['sort', '自定义池排序', false, false, actions.openPoolOrder],
-    ['trash', '删除当前池', !canDelete, true, actions.deletePool],
+    ['trash', '删除当前池', !canDelete || !bindingsReady, true, actions.deletePool],
   ];
 
   return (
