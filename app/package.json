@@ -23,6 +23,7 @@
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs",
+    "audit:acceptance": "node scripts/ui-acceptance.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only && node scripts/ui-pool-review-fixes.mjs",
