@@ -14,7 +14,7 @@ function http(body: string, headers = ''): Uint8Array {
   return encode('HTTP/1.1 200 OK\r\n' + headers + '\r\n' + body);
 }
 function connector(response: (host: string) => Uint8Array | Error = host => http(JSON.stringify({
-  ip: host.includes('ipv6') ? '2001:db8::42' : '198.51.100.42', asn: 64500, country: 'jp',
+  ip: host.includes('ipv6') ? '2001:db8::42' : '198.51.100.42', asn: 64500, country: 'jp', colo: ' icn ',
 }))) {
   const writes: string[] = [], hosts: string[] = [], closes: ReturnType<typeof vi.fn>[] = [];
   const connect = vi.fn((_address: SocketAddress, _options: SocketOptions): ProbeSocket => {
@@ -48,7 +48,7 @@ describe('native candidate probe', () => {
   it('connects to the candidate port with endpoint SNI and Host, retaining both exit families', async () => {
     const io = connector();
     const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect });
-    expect(await probe.probe(target)).toMatchObject({ status: 'alive', exitFamily: 'dual', exits: [
+    expect(await probe.probe(target)).toMatchObject({ status: 'alive', colo: 'ICN', exitFamily: 'dual', exits: [
       { ip: '198.51.100.42', family: 'ipv4', country: 'JP', asn: '64500' },
       { ip: '2001:db8::42', family: 'ipv6' },
     ] });

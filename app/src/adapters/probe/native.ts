@@ -3,7 +3,7 @@ import { alive, dead, unknown, type ProbeExit, type ProbeResult } from '../../do
 import { parseProxyTarget, type ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
-import { readProbeExit, uniqueExits } from './probe-payload';
+import { readProbeExit, readText, uniqueExits } from './probe-payload';
 import { isTcpLoop } from './probe-errors';
 import { createProbeRedactor, probeErrorMessage } from './diagnostics';
 import { secureProbeSocket } from './tls';
@@ -56,7 +56,9 @@ export class NativeProbeAdapter implements ProbeAdapter {
     const failed = results.find(result => result && result.status !== 'alive');
     if (exits.length) {
       const families = new Set(exits.map(exit => exit.family));
+      const colo = results.find(result => result?.status === 'alive' && result.colo)?.colo;
       return alive(target, { endpoint: this.name, latencyMs: Date.now() - started, exits,
+        ...(colo ? { colo } : {}),
         exitIp: exits[0]!.ip!, exitFamily: families.size > 1 ? 'dual' : exits[0]!.family,
         ...(failed?.message ? { code: 'PARTIAL_EXIT', message: failed.message } : {}),
       });
@@ -129,7 +131,10 @@ export class NativeProbeAdapter implements ProbeAdapter {
         if (!address || address.family === 'hostname' || address.host !== String(ip).toLowerCase()) throw new Error('候选响应缺少有效出口 IP');
         const exit = readProbeExit(payload, undefined)!;
         const trusted: ProbeExit = { ...exit, ip: address.host, family: address.family };
-        return alive(target, { ...details(), exits: [trusted], exitIp: address.host, exitFamily: address.family });
+        const colo = readText(payload.colo)?.toUpperCase();
+        return alive(target, { ...details(), exits: [trusted], exitIp: address.host, exitFamily: address.family,
+          ...(colo && /^[A-Z]{3}$/.test(colo) ? { colo } : {}),
+        });
       })()]);
     } catch (error) {
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', details());
