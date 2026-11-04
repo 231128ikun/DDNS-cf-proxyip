@@ -63,7 +63,8 @@ interface TargetDraft extends TargetConfig {
 interface ConfigForm {
   readonly zones: readonly ZoneDraft[];
   readonly targets: readonly TargetDraft[];
-  readonly checkApi: string;
+  readonly probeIpv4Url: string;
+  readonly probeIpv6Url: string;
   readonly checkApiBackup: string;
   readonly dohApi: string;
   readonly projectUrl: string;
@@ -82,7 +83,7 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
   ['CONCURRENT_CHECKS', '检测并发', '控制手动批量检测、域名探测、洗库与维护补货；1–128。解析实况全并发。', 'cfg-concurrent-checks'],
-  ['CHECK_TIMEOUT', '检测超时(ms)', '单接口请求超时；复检后仍超时按失效处理，洗库和维护时入桶。', 'cfg-check-timeout'],
+  ['CHECK_TIMEOUT', '检测超时(ms)', '原生候选连接超时；复检仍失败才清理。备用 API 请求超时不清理。', 'cfg-check-timeout'],
   ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
   ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
   ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增维护域名默认值。', 'cfg-default-min-active'],
@@ -314,8 +315,9 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
           </fieldset>
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
           <div class="config-grid config-group">
-            <TextField id="cfg-check-api" label="检测 API" help="留空使用备用接口；支持 {proxyip} 占位符。" value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
-            <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；单接口时复用原接口。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
+            <TextField id="cfg-probe-ipv4" label="IPv4 出口接口" help="原生检测经候选 IP 访问，需返回含 ip 的 JSON。" value={form.probeIpv4Url} placeholder="https://ipv4.090227.xyz/" onValue={(value) => patch({ probeIpv4Url: value })} />
+            <TextField id="cfg-probe-ipv6" label="IPv6 出口接口" help="验证 IPv6 出口；留空关闭该检测分支。" value={form.probeIpv6Url} placeholder="https://ipv6.090227.xyz/" onValue={(value) => patch({ probeIpv6Url: value })} />
+            <TextField id="cfg-check-api-backup" label="备用检测 API" help="原生失败时复检；留空则原生重试。支持 {proxyip} 占位符。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
             <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
@@ -674,7 +676,8 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
   return {
     zones: config.zones.map((zone) => ({ ...zone, apiKey: '', hasApiKey: zone.hasApiKey })),
     targets: config.targets.map((target) => ({ ...target, sourceKey: bindingKey(target) })),
-    checkApi: config.checkApi,
+    probeIpv4Url: config.probeIpv4Url,
+    probeIpv6Url: config.probeIpv6Url,
     checkApiBackup: config.checkApiBackup,
     dohApi: config.dohApi,
     projectUrl: config.projectUrl,
@@ -707,7 +710,8 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateReques
     })),
     targets: form.targets.map(({ sourceKey: _sourceKey, ...target }) => normalizeTargetDraft(target, form.zones)),
     ...(authKey === undefined ? {} : { authKey }),
-    checkApi: form.checkApi.trim(),
+    probeIpv4Url: form.probeIpv4Url.trim(),
+    probeIpv6Url: form.probeIpv6Url.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
     dohApi: form.dohApi.trim(),
     ...(tgToken === undefined ? {} : { tgToken }),

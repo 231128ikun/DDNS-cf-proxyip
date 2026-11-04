@@ -23,7 +23,7 @@ describe('probe availability and diagnostic regressions', () => {
     expect(onDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ phase: 'payload', code: 'PARTIAL_EXIT' }));
   });
 
-  it.each([{ apiError: true }, { message: 'TLS handshake failed' }])('does not hide a global service error behind one working family: %j', async flags => {
+  it.each([{ apiError: true }, { apiError: true, message: 'TCP Loop detected' }])('does not hide a global service error behind one working family: %j', async flags => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 1000,
       fetchImpl: (async () => Response.json({ ...partial('TLS handshake failed'), ...flags })) as typeof fetch });
     expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
@@ -93,12 +93,12 @@ describe('probe availability and diagnostic regressions', () => {
     try {
       const worker = createWorker();
       const client = new ApiClient({ fetchImpl: async (url, init) => worker.fetch!(new Request(new URL(String(url), 'https://worker.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0],
-        { CHECK_API: 'https://probe.example/check?key=fixture-token&proxyip=', CHECK_API_BACKUP: '' }, {} as ExecutionContext) });
+        { CHECK_API_BACKUP: 'https://probe.example/check?key=fixture-token&proxyip=' }, {} as ExecutionContext) });
       const result = await client.checkTarget(target.authority);
       expect(result.items[0]!.result).toMatchObject({ status: 'unknown', code: 'HTTP_ERROR', diagnostics: [
-        { endpoint: 'primary', code: 'HTTP_ERROR' }, { endpoint: 'primary', code: 'HTTP_ERROR' },
+        { endpoint: 'backup', code: 'HTTP_ERROR' },
       ] });
-      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(warn.mock.calls)).not.toContain('fixture-token');
     } finally { vi.unstubAllGlobals(); warn.mockRestore(); }
   });

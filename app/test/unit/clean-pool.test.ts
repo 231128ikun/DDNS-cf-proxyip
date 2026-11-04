@@ -1,3 +1,4 @@
+import { failingNativeProbe } from '../helpers/native-probe';
 import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -225,4 +226,39 @@ it('洗库将复检后仍超时的节点通过统一 KV 入口入桶并移出原
   expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('203.0.113.20');
   expect(catalog.data.get(TRASH_POOL_KEY)).toContain('203.0.113.10:443,AS64500,JP,v4 # 洗库失效');
   expect(catalog.data.get(TRASH_POOL_KEY)).toContain('来自 ip_pool_default');
+});
+
+it.each([
+  { success: false, message: 'TCP Loop detected, contact us if this doesn\'t seem right.' },
+  { success: false, probes: { ipv4: { apiError: true, error: 'candidate timeout' } } },
+])('洗库保留已知检测接口异常的原池且不入桶：%j', async payload => {
+  const content = '203.0.113.10:443,AS64500,JP,v4 # 用户备注';
+  const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: content });
+  const trash = new RecordingTrashRepository();
+  const write = vi.spyOn(catalog, 'write');
+  const fetchImpl = vi.fn(async () => Response.json(payload));
+  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+    timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
+  const cleaner = new CleanPool({ pools: new PoolService(catalog), catalog, trash,
+    checkPool: new CheckPoolText(new CheckProxy(probe), 2) });
+
+  expect(await cleaner.execute(DEFAULT_POOL_KEY)).toMatchObject({ checked: 1, kept: 0, trashed: 0, unknown: 1, skipped: true });
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(write).not.toHaveBeenCalled();
+  expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
+  expect(trash.batches).toEqual([]);
+});
+
+describe('native probe cleaning boundary', () => {
+  it.each([['loop', new Error('TCP Loop detected'), true], ['runtime', new TypeError('runtime unavailable'), true], ['candidate', new Error('connection refused'), false]] as const)('%s protects only detector failures', async (_label, error, skipped) => {
+    const original = poolOf('203.0.113.10:443,AS64500,JP,v4 # note', '203.0.113.11:443');
+    const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: original });
+    const trash = new RecordingTrashRepository();
+    const cleaner = new CleanPool({ pools: new PoolService(catalog), catalog, trash,
+      checkPool: new CheckPoolText(new CheckProxy(failingNativeProbe(error)), 4) });
+    const report = await cleaner.execute(DEFAULT_POOL_KEY);
+    expect(report.skipped).toBe(skipped);
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(skipped ? original : '');
+    expect(trash.batches.flat().length).toBe(skipped ? 0 : 2);
+  });
 });

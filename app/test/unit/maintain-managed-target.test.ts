@@ -1,3 +1,4 @@
+import { failingNativeProbe } from '../helpers/native-probe';
 import { describe, expect, it, vi } from 'vitest';
 import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { MaintainManagedTarget } from '../../src/application/maintain-managed-target';
@@ -302,7 +303,7 @@ describe('MaintainManagedTarget', () => {
   });
 });
 
-function externalMaintenance(type: 'A' | 'AAAA' | 'TXT', payload: unknown) {
+function externalMaintenance(type: 'A' | 'AAAA' | 'TXT', payload: unknown, native?: ProbeAdapter) {
   const target = requireTarget({ mode: type === 'TXT' ? 'TXT' : 'A', domain: 'edge.example.com', port: 443, minActive: 1, exitFilter: 'dual' });
   const host = type === 'AAAA' ? '2001:db8::10' : '203.0.113.10';
   const address = type === 'AAAA' ? `[${host}]:443` : `${host}:443`;
@@ -310,7 +311,7 @@ function externalMaintenance(type: 'A' | 'AAAA' | 'TXT', payload: unknown) {
   const dns = new MemoryDnsRepository(type === 'TXT' ? [] : [record], type === 'TXT' ? [record] : []);
   const initial = `${address},AS64500,JP,v4/v6 # 用户备注`;
   const pools = new MemoryPoolRepository(initial);
-  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+  const probe = native ?? new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
     timeoutMs: 1_000, fetchImpl: (async () => new Response(JSON.stringify(payload))) as typeof fetch });
   const service = new MaintainManagedTarget({ probe, pools, dns });
   return { target, dns, pools, initial, service };
@@ -352,9 +353,6 @@ describe('external probe to maintenance safety', () => {
   const detectorErrors = [
     { success: false, apiError: true },
     { success: true, apiError: true },
-    { success: false, message: 'Worker exceeded resource limits' },
-    { success: false, message: 'too many requests, rate limit exceeded' },
-    { success: false, message: 'fetch failed: internal error' },
   ];
 
   it.each(detectorErrors.flatMap(payload => types.map(type => ({ type, payload }))))('preserves $type DNS and pool on detector error $payload', async ({ type, payload }) => {
@@ -369,6 +367,10 @@ describe('external probe to maintenance safety', () => {
   });
 
   const candidateFailures = [
+    { success: false, message: 'Worker exceeded resource limits' },
+    { success: false, message: 'too many requests, rate limit exceeded' },
+    { success: false, message: 'fetch failed: internal error' },
+
     { success: false, detail: 'Network connection lost.' },
     { success: false, reason: 'Network connection lost.' },
     { success: false, message: 'node failed', error: 'Network connection lost.' },
@@ -544,4 +546,43 @@ it('treats a detector-reported target HTTP 404 as dead and continues to a later 
   expect(pools.trash).toEqual([{ entryLine: '203.0.113.20:443', reason: '维护失效', poolKey: 'ip_pool_default' }]);
   expect(report.candidateResults?.find(item => item.address === '203.0.113.20:443')?.result)
     .toMatchObject({ status: 'dead', code: 'TARGET_HTTP_ERROR' });
+});
+
+it.each(['A', 'TXT'])('preserves %s DNS and the pool when the service reports a TCP loop', async mode => {
+  const target = requireTarget({ mode, domain: 'edge.example.com', port: 443, minActive: 1 });
+  const address = '203.0.113.10:443';
+  const content = address + ',AS64500,JP,v4 # 原备注';
+  const dns = mode === 'A'
+    ? new MemoryDnsRepository([{ id: 'a1', type: 'A', name: target.domain, content: '203.0.113.10' }])
+    : new MemoryDnsRepository([], [{ id: 'txt1', type: 'TXT', name: target.domain, content: '"' + address + '"' }]);
+  const pools = new MemoryPoolRepository(content);
+  const save = vi.spyOn(pools, 'save');
+  const fetchImpl = vi.fn(async () => Response.json({ success: false, message: 'TCP Loop detected' }));
+  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+    timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
+
+  const report = await new MaintainManagedTarget({ probe, pools, dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(report).toMatchObject({ probeErrors: 1, deleted: 0, added: 0, dnsUpdated: false });
+  expect(report.plan.current[0]!.decision).toBe('keep-unknown');
+  expect(report.plan.current[0]!.item.result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(dns.deleted).toEqual([]);
+  expect(dns.added).toEqual([]);
+  expect(dns.upserted).toEqual([]);
+  expect(pools.trash).toEqual([]);
+  expect(save).not.toHaveBeenCalled();
+  expect(pools.value()).toBe(content);
+});
+
+describe('native probe maintenance boundary', () => {
+  it.each(['A', 'AAAA', 'TXT'] as const)('protects %s DNS and pool on runtime faults but cleans candidate failures', async type => {
+    for (const [error, shouldClean] of [[new Error('TCP Loop detected'), false], [new TypeError('runtime failure'), false], [new Error('connection refused'), true]] as const) {
+      const { target, dns, pools, initial, service } = externalMaintenance(type, null, failingNativeProbe(error));
+      const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+      expect(report.deleted).toBe(shouldClean ? 1 : 0);
+      expect(pools.trash.length).toBe(shouldClean ? 1 : 0);
+      expect(pools.value()).toBe(shouldClean ? '' : initial);
+      if (!shouldClean) { expect(dns.deleted).toEqual([]); expect(dns.upserted).toEqual([]); }
+    }
+  });
 });

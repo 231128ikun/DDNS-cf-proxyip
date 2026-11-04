@@ -22,6 +22,7 @@ export interface ExternalApiEndpoint {
 
 export interface ProbeConfig {
   readonly endpoints: readonly ExternalApiEndpoint[];
+  readonly urls: readonly string[];
   readonly fallbackToNext: boolean;
   readonly timeoutMs: number;
 }
@@ -57,7 +58,8 @@ export interface AppConfig {
   readonly zones: readonly ZoneConfig[];
   readonly targets: readonly TargetConfig[];
   readonly authKey: string;
-  readonly checkApi: string;
+  readonly probeIpv4Url: string;
+  readonly probeIpv6Url: string;
   readonly checkApiBackup: string;
   readonly dohApi: string;
   readonly tgToken: string;
@@ -80,7 +82,8 @@ export interface PublicAppConfig {
   readonly zones: readonly PublicZoneConfig[];
   readonly targets: readonly TargetConfig[];
   readonly zoneId: string;
-  readonly checkApi: string;
+  readonly probeIpv4Url: string;
+  readonly probeIpv6Url: string;
   readonly checkApiBackup: string;
   readonly dohApi: string;
   readonly tgId: string;
@@ -111,7 +114,8 @@ export function createDefaultConfig(): AppConfig {
     zones: [],
     targets: [],
     authKey: '',
-    checkApi: '',
+    probeIpv4Url: 'https://ipv4.090227.xyz/',
+    probeIpv6Url: 'https://ipv6.090227.xyz/',
     checkApiBackup: 'https://checkapi.dvb.kdns.fr/?candidate=',
     dohApi: 'https://cloudflare-dns.com/dns-query',
     tgToken: '',
@@ -134,7 +138,8 @@ export function toPublicConfig(config: AppConfig): PublicAppConfig {
     })),
     targets: config.targets,
     zoneId: config.zoneId,
-    checkApi: config.checkApi,
+    probeIpv4Url: config.probeIpv4Url,
+    probeIpv6Url: config.probeIpv6Url,
     checkApiBackup: config.checkApiBackup,
     dohApi: config.dohApi,
     tgId: config.tgId,
@@ -152,10 +157,10 @@ export function toPublicConfig(config: AppConfig): PublicAppConfig {
 
 export function toProbeConfig(config: AppConfig): ProbeConfig {
   const endpoints: ExternalApiEndpoint[] = [];
-  if (config.checkApi.trim()) endpoints.push({ name: 'primary', urlTemplate: config.checkApi.trim() });
   if (config.checkApiBackup.trim()) endpoints.push({ name: 'backup', urlTemplate: config.checkApiBackup.trim() });
   return {
     endpoints,
+    urls: [config.probeIpv4Url, config.probeIpv6Url],
     fallbackToNext: true,
     timeoutMs: config.settings.CHECK_TIMEOUT,
   };
@@ -166,6 +171,14 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
   const record = asRecord(value);
   if (!record) return parseFail('配置必须是 JSON 对象');
   const base = previous ?? createDefaultConfig();
+  for (const key of ['probeIpv4Url', 'probeIpv6Url'] as const) {
+    if (record[key] === undefined || record[key] === '') continue;
+    try {
+      if (typeof record[key] !== 'string' || record[key].length > MAX_ENDPOINT_URL_LENGTH) throw new Error();
+      const url = new URL(record[key]);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error();
+    } catch { return parseFail('出口检测地址必须为不含账号或片段的 HTTPS URL'); }
+  }
   // 旧 KV 与部分更新都只覆盖提供的字段，未提交的运行参数沿用已解析配置。
   const settings = parseRuntimeSettings({ ...base.settings, ...(asRecord(record.settings) ?? {}) });
   const parsedZones = Array.isArray(record.zones) ? parseZones(record.zones, base.zones) : parseOk(base.zones);
@@ -183,8 +196,12 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     zones,
     targets,
     authKey: text(record.authKey, base.authKey, MAX_SECRET_LENGTH),
-    checkApi: text(record.checkApi, base.checkApi, MAX_ENDPOINT_URL_LENGTH),
-    checkApiBackup: text(record.checkApiBackup, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH),
+    probeIpv4Url: text(record.probeIpv4Url, base.probeIpv4Url, MAX_ENDPOINT_URL_LENGTH),
+    probeIpv6Url: text(record.probeIpv6Url, base.probeIpv6Url, MAX_ENDPOINT_URL_LENGTH),
+    // 旧主接口只在读取时迁入备用字段，保存不再生成第二个检测 API。
+    checkApiBackup: 'checkApi' in record
+      ? text(record.checkApiBackup, '', MAX_ENDPOINT_URL_LENGTH) || text(record.checkApi, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH)
+      : text(record.checkApiBackup, base.checkApiBackup, MAX_ENDPOINT_URL_LENGTH),
     dohApi: text(record.dohApi, base.dohApi, MAX_ENDPOINT_URL_LENGTH),
     tgToken: text(record.tgToken, base.tgToken, MAX_SECRET_LENGTH),
     tgId: text(record.tgId, base.tgId, 64),

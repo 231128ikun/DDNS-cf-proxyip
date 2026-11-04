@@ -108,3 +108,22 @@ describe('masked zone credentials', () => {
     expect(result.value.zones[0]?.apiKey).toBe(legacy.apiKey);
   });
 });
+
+describe('native probe configuration', () => {
+  it('migrates legacy primary into one backup field and keeps exit URL changes in the same config', () => {
+    const parsed = parseAppConfig({ checkApi: 'https://legacy.example/check?proxyip=', checkApiBackup: '', probeIpv4Url: 'https://custom.example/info' });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).not.toHaveProperty('checkApi');
+    expect(parsed.value.checkApiBackup).toBe('https://legacy.example/check?proxyip=');
+    expect(parsed.value.probeIpv4Url).toBe('https://custom.example/info');
+    expect(parseAppConfig(parsed.value)).toEqual(parsed);
+  });
+  it.each(['http://example.test/', 'https://user:secret@example.test/', 'https://example.test/#fragment', 'not-a-url'])('rejects invalid native endpoint %s', value => {
+    expect(parseAppConfig({ probeIpv4Url: value }).ok).toBe(false);
+  });
+  it('allows disabling branches and the optional backup explicitly', () => {
+    const parsed = parseAppConfig({ probeIpv4Url: '', probeIpv6Url: '', checkApiBackup: '' });
+    expect(parsed.ok && parsed.value.probeIpv4Url === '' && parsed.value.checkApiBackup === '').toBe(true);
+  });
+});

@@ -273,8 +273,7 @@ describe('HTTP app config routes', () => {
     tgToken: 'tg-token',
     tgId: '42',
     tgEnabled: false,
-    checkApi: 'https://probe.example/?proxyip={proxyip}',
-    checkApiBackup: '',
+    checkApiBackup: 'https://probe.example/?proxyip={proxyip}',
     projectUrl: 'https://example.com/project',
   };
 
@@ -291,8 +290,7 @@ describe('HTTP app config routes', () => {
         zoneId: 'zone-1',
         tgId: '42',
         tgEnabled: false,
-        checkApi: 'https://probe.example/?proxyip={proxyip}',
-        checkApiBackup: '',
+        checkApiBackup: 'https://probe.example/?proxyip={proxyip}',
         projectUrl: 'https://example.com/project',
         secrets: { apiKey: true, tgToken: true },
       },
@@ -307,7 +305,7 @@ describe('HTTP app config routes', () => {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        checkApi: 'https://next.example/?proxyip={proxyip}',
+        checkApiBackup: 'https://next.example/?proxyip={proxyip}',
         settings: { CHECK_TIMEOUT: 5_000 },
       }),
     });
@@ -315,18 +313,18 @@ describe('HTTP app config routes', () => {
     expect(gateway.current).toMatchObject({
       apiKey: 'cf-token',
       tgToken: 'tg-token',
-      checkApi: 'https://next.example/?proxyip={proxyip}',
+      checkApiBackup: 'https://next.example/?proxyip={proxyip}',
       settings: { CHECK_TIMEOUT: 5_000 },
     });
 
     const cleared = await app.request('/api/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiKey: '', checkApi: '', checkApiBackup: '' }),
+      body: JSON.stringify({ apiKey: '', checkApiBackup: '' }),
     });
     expect(cleared.status).toBe(200);
     expect(gateway.current.apiKey).toBe('');
-    expect(gateway.current.checkApi).toBe('');
+    expect(gateway.current.checkApiBackup).toBe('');
     expect(gateway.current.checkApiBackup).toBe('');
     expect(gateway.current.tgToken).toBe('tg-token');
   });

@@ -256,7 +256,7 @@ describe('发布 Worker 装配', () => {
     const read = await client.config();
     expect(read.config.secrets.authKey).toBe(true);
     expect(read.config).not.toHaveProperty('authKey');
-    await client.saveConfig({ checkApi: 'https://new.example/?proxyip=' });
+    await client.saveConfig({ checkApiBackup: 'https://new.example/?proxyip=' });
     expect(JSON.parse(store.get('app_config')!)).toMatchObject({ authKey: 'fixture-panel-key' });
   });
 

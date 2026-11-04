@@ -21,7 +21,7 @@ if (!existsSync(indexHtml)) throw new Error('app/dist/web/index.html 缺失：�
 
 // 冒烟只验证本地部署形态，不调用公共检测服务。
 const child = spawn(process.execPath, [wrangler, 'dev', '--config', 'wrangler.toml', '--port', String(port), '--local',
-  '--var', 'CHECK_API:', '--var', 'CHECK_API_BACKUP:'], {
+  '--var', 'PROBE_IPV4_URL:', '--var', 'PROBE_IPV6_URL:', '--var', 'CHECK_API_BACKUP:'], {
   cwd: appRoot,
   stdio: 'ignore',
   env: { ...process.env, DDNS_SKIP_CUSTOM_BUILD: '1', CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },

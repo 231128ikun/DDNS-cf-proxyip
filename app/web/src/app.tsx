@@ -522,7 +522,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
               containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()} batch={batchState}
-              configReady={config.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.checkApi || config.data.config.checkApiBackup)}
+              configReady={config.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
               leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} />}
             check={check}
             batch={batch}

@@ -35,8 +35,7 @@ describe('KV configuration storage', () => {
   it('loads the original app_config record directly', async () => {
     const store = new Map<string, string>([
       [CONFIG_KEY, JSON.stringify({
-        checkApi: 'https://primary.example/?proxyip=',
-        checkApiBackup: '',
+        checkApiBackup: 'https://primary.example/?proxyip=',
         tgToken: 'tg-token',
         tgId: '42',
         projectUrl: 'https://github.com/example/project',
@@ -67,8 +66,7 @@ describe('KV configuration storage', () => {
     expect(result.config).toMatchObject({
       apiKey: 'cf-token',
       zoneId: 'zone-1',
-      checkApi: 'https://primary.example/?proxyip=',
-      checkApiBackup: '',
+      checkApiBackup: 'https://primary.example/?proxyip=',
       tgToken: 'tg-token',
       tgId: '42',
       projectUrl: 'https://github.com/example/project',
@@ -97,7 +95,7 @@ describe('KV configuration storage', () => {
     expect(store.has(CONFIG_KEY)).toBe(true);
     const raw = JSON.parse(store.get(CONFIG_KEY) ?? '{}') as Record<string, unknown>;
     expect(raw).toMatchObject({
-      checkApi: 'https://primary.example/?proxyip=',
+      checkApiBackup: 'https://primary.example/?proxyip=',
       settings: { CONCURRENT_CHECKS: 5, CHECK_TIMEOUT: 9_000 },
       zones: [{ name: '主域名', label: '主域名' }],
       targets: [{ mode: 'TXT', port: 'any', country: 'US', asn: '64500' }],
@@ -130,7 +128,7 @@ describe('KV configuration storage', () => {
 
     expect(result).toMatchObject({
       status: 'loaded',
-      config: { checkApi: 'https://primary.example/?proxyip=', checkApiBackup: '' },
+      config: { checkApiBackup: 'https://primary.example/?proxyip=' },
     });
   });
 });
@@ -166,8 +164,7 @@ function validConfig(): AppConfig {
       asns: ['64500'],
       enabled: true,
     }],
-    checkApi: 'https://primary.example/?proxyip=',
-    checkApiBackup: '',
+    checkApiBackup: 'https://primary.example/?proxyip=',
     tgToken: 'tg-token',
     tgId: '42',
     projectUrl: 'https://github.com/example/project',

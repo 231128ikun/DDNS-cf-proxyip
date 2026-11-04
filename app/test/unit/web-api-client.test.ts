@@ -482,7 +482,7 @@ describe('web API client config and remote load endpoints', () => {
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
 
-    await client.saveConfig({ checkApi: 'https://probe.example/?proxyip={proxyip}', settings: { CHECK_TIMEOUT: 5_000 } });
+    await client.saveConfig({ checkApiBackup: 'https://probe.example/?proxyip={proxyip}', settings: { CHECK_TIMEOUT: 5_000 } });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

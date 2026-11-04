@@ -1,4 +1,5 @@
 import { asRecord } from '../../contracts/parse';
+import { isTcpLoop } from './probe-errors';
 import {
   alive,
   dead,
@@ -135,7 +136,7 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
       const latencyMs = Date.now() - startedAt;
       if (context.signal?.aborted) return finish(unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs }));
       if (timeout.didTimeout() || isTimeoutError(error)) {
-        return finish(dead(target, { code: 'TIMEOUT', message: `检测超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, endpoint: endpoint.name, latencyMs }));
+        return finish(unknown(target, 'API_TIMEOUT', `检测接口请求超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, { endpoint: endpoint.name, latencyMs }));
       }
       return finish(unknown(target, 'NETWORK_ERROR', '检测接口网络异常：' + probeErrorMessage(error), { endpoint: endpoint.name, latencyMs }));
     } finally { timeout.cleanup(); }
@@ -159,21 +160,18 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   }
   const statusText = readText(record.status)?.toLowerCase();
   const decision = readBooleanDecision(record) ?? readStatusDecision(statusText)
-    ?? readProbeResultsDecision(record.probe_results ?? record.probeResults ?? record.probes);
-  const detectorFailure = decision !== true ? readDetectorFailure(record, message) : null;
-  if (detectorFailure) return unknown(target, 'PROBE_API_ERROR', detectorFailure, { endpoint, latencyMs });
+    ?? readProbeResultsDecision(record);
   const exits = readProbeExits(record);
+  const hasHealthyBranch = readProbeExits(record, true).some(exit => exit.ip);
+  const detectorFailure = readDetectorFailure(record, !hasHealthyBranch);
+  if (detectorFailure) return unknown(target, 'PROBE_API_ERROR', detectorFailure, { endpoint, latencyMs });
   const exitIp = pickExitIp(record, exits);
   const exitFamily = pickExitFamily(record, exitIp, exits);
   const colo = pickColo(record);
   const details = { endpoint, latencyMs, ...(colo ? { colo } : {}) };
-  const candidateFailure = readCandidateFailure(record, decision === false ? message : undefined);
+  const candidateFailure = readCandidateFailure(record, decision === false ? message : hasHealthyBranch ? readLoopError(record) : undefined);
 
-  const globalError = readProbeInfrastructureError(record, false);
-  if (decision === true && globalError) {
-    return unknown(target, 'PROBE_API_ERROR', trimMessage(globalError) ?? '检测接口异常', { endpoint, latencyMs });
-  }
-  const probeRecords = readProbeRecords(record.probe_results ?? record.probeResults ?? record.probes);
+  const probeRecords = readPayloadProbeRecords(record);
   if (decision === true && probeRecords.length && !exits.length) {
     return unknown(target, 'PROBE_API_ERROR', message ?? '检测接口成功标记与探测结果不一致', { endpoint, latencyMs });
   }
@@ -196,7 +194,6 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   if (statusText === 'error' || statusText === 'invalid') {
     return unknown(target, 'API_ERROR', message ?? '检测接口返回错误', { endpoint, latencyMs });
   }
-  if (globalError) return unknown(target, 'PROBE_API_ERROR', trimMessage(globalError) ?? '检测接口异常', { endpoint, latencyMs });
   return unknown(target, 'INVALID_RESPONSE', message ?? '检测接口未返回可信的成功或失败结论', details);
 }
 
@@ -257,8 +254,12 @@ function readProbeRecords(value: unknown): readonly ProbeRecord[] {
   });
 }
 
-function readProbeResultsDecision(value: unknown): boolean | undefined {
-  const records = readProbeRecords(value).map(item => item.record);
+function readPayloadProbeRecords(record: JsonRecord): readonly ProbeRecord[] {
+  return ['probe_results', 'probeResults', 'probes'].flatMap(key => readProbeRecords(record[key]));
+}
+
+function readProbeResultsDecision(record: JsonRecord): boolean | undefined {
+  const records = readPayloadProbeRecords(record).map(item => item.record);
   if (!records.length) return undefined;
   const values = records.map(probe => typeof probe.ok === 'boolean' ? probe.ok
     : typeof probe.success === 'boolean' ? probe.success : undefined).filter((ok): ok is boolean => ok !== undefined);
@@ -273,7 +274,7 @@ interface CandidateFailure {
 }
 
 function readCandidateFailure(record: JsonRecord, fallback: string | undefined): CandidateFailure | null {
-  const failed = readProbeRecords(record.probe_results ?? record.probeResults ?? record.probes)
+  const failed = readPayloadProbeRecords(record)
     .map(item => item.record).filter(isFailedProbe);
   const statuses = [...new Set(failed.map(probe => Number(probe.status_code))
     .filter(status => Number.isInteger(status) && status >= 100 && status <= 599))];
@@ -285,19 +286,20 @@ function readCandidateFailure(record: JsonRecord, fallback: string | undefined):
   if (http) return { code: 'TARGET_HTTP_ERROR', message: '候选链路 HTTP ' + http[1] };
   if (/time(?:d)?[ -]?out|timeout|etimedout/i.test(text)) return { code: 'TIMEOUT', message: '候选连接超时' };
   if (PROBE_TLS_ERROR_PATTERN.test(text)) return { code: 'TARGET_TLS_ERROR', message: trimMessage(text) ?? '候选 TLS 探测失败' };
-  if (/tcp loop|tcp connect|network connection lost|connection reset|socket hang up|econnreset|eai_again|getaddrinfo|fetch failed|failed to fetch/i.test(text)) {
+  if (/tcp connect|network connection lost|connection reset|socket hang up|econnreset|eai_again|getaddrinfo|fetch failed|failed to fetch/i.test(text)) {
     return { code: 'TARGET_CONNECT_ERROR', message: trimMessage(text) ?? '候选连接失败' };
   }
   return { code: 'TARGET_FAILED', message: trimMessage(text) ?? '候选探测失败' };
 }
 
-function readDetectorFailure(record: JsonRecord, message: string | undefined): string | null {
-  const topLevel = firstText(record, ['message', 'errorMessage', 'detail', 'reason']);
-  const error = typeof record.error === 'string' ? record.error : undefined;
-  const text = [topLevel, error, message].filter(Boolean).join(' ');
-  if (!text) return null;
-  if (/worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|fetch failed:\s*internal/i.test(text)) {
-    return trimMessage(text) ?? '检测接口异常';
+function readDetectorFailure(record: JsonRecord, includeBranches: boolean): string | null {
+  if (!includeBranches) return null;
+  const global = readLoopError(record);
+  if (global) return trimMessage(global) ?? null;
+  for (const { record: probe } of readPayloadProbeRecords(record)) {
+    if (probe.apiError === true) return readMessage(probe) ?? '检测接口报告异常';
+    const message = readLoopError(probe);
+    if (message) return trimMessage(message) ?? null;
   }
   return null;
 }
@@ -308,7 +310,7 @@ function isFailedProbe(probe: JsonRecord): boolean {
 }
 
 function readProbeError(probe: JsonRecord): string | undefined {
-  return firstText(probe, ['error', 'message', 'detail', 'reason']);
+  return firstText(probe, ['error', 'message', 'detail', 'reason', 'errorMessage']) ?? readLoopError(probe);
 }
 
 function pickExitIp(record: JsonRecord, exits: readonly ProbeExit[]): string | undefined {
@@ -330,7 +332,7 @@ function pickExitIp(record: JsonRecord, exits: readonly ProbeExit[]): string | u
   const topLevelIp = readText(record.ip);
   if (topLevelIp && topLevelIp !== candidate) return topLevelIp;
 
-  for (const { record: probe } of readProbeRecords(record.probe_results ?? record.probeResults ?? record.probes)) {
+  for (const { record: probe } of readPayloadProbeRecords(record)) {
     if (!isSuccessfulProbe(probe)) continue;
     const probeExit = asRecord(probe.exit);
     const fromProbe = probeExit ? firstText(probeExit, ['ip', 'ipAddress', 'exitIp', 'exit_ip']) : firstText(probe, ['exitIp', 'exit_ip']);
@@ -339,15 +341,15 @@ function pickExitIp(record: JsonRecord, exits: readonly ProbeExit[]): string | u
   return undefined;
 }
 
-function readProbeExits(record: JsonRecord, healthyOnly = false): readonly ProbeExit[] {
+function readProbeExits(record: JsonRecord, branchesOnly = false): readonly ProbeExit[] {
   const exits: ProbeExit[] = [];
-  for (const { hint, record: probe } of readProbeRecords(record.probe_results ?? record.probeResults ?? record.probes)) {
-    if (!isSuccessfulProbe(probe) || (healthyOnly && readProbeInfrastructureError(probe))) continue;
+  for (const { hint, record: probe } of readPayloadProbeRecords(record)) {
+    if (!isSuccessfulProbe(probe)) continue;
     const exit = asRecord(probe.exit) ?? asRecord(probe.egress) ?? asRecord(probe.result) ?? probe;
     const parsed = readProbeExit(exit, readText(probe.exit_family) ?? hint);
     if (parsed) exits.push(parsed);
   }
-  if (healthyOnly) return uniqueExits(exits);
+  if (branchesOnly) return uniqueExits(exits);
   for (const value of Array.isArray(record.exits) ? record.exits : []) {
     const exit = asRecord(value);
     if (!exit) continue;
@@ -392,7 +394,7 @@ function pickExitFamily(record: JsonRecord, exitIp: string | undefined, exits: r
 function pickColo(record: JsonRecord): string | undefined {
   const direct = readText(record.colo)?.toUpperCase();
   if (direct && /^[A-Z]{3}$/.test(direct)) return direct;
-  for (const { record: probe } of readProbeRecords(record.probe_results ?? record.probeResults ?? record.probes)) {
+  for (const { record: probe } of readPayloadProbeRecords(record)) {
     if (!isSuccessfulProbe(probe)) continue;
     const value = firstText(probe, ['exit_colo', 'colo']) ?? firstText(asRecord(probe.exit) ?? {}, ['colo']);
     const normalized = value?.toUpperCase();
@@ -401,36 +403,19 @@ function pickColo(record: JsonRecord): string | undefined {
   return undefined;
 }
 
-function readProbeInfrastructureError(record: JsonRecord, includeProbes = true): string | undefined {
-  const messageKeys = ['message', 'errorMessage', 'detail', 'reason', 'error'];
-  // 检查所有错误别名及嵌套消息，只匹配实际字符串，不把计时字段、空 error 或出口元数据当作错误。
-  for (const key of [...messageKeys, ...(includeProbes ? ['probe_results', 'probeResults', 'probes'] : [])]) {
-    const pending = [{ value: record[key], isMessage: messageKeys.includes(key) }];
-    while (pending.length) {
-      const { value, isMessage } = pending.pop()!;
-      if (typeof value === 'string') {
-        if (isMessage && isProbeInfrastructureMessage(value)) return value;
-      } else if (value && typeof value === 'object') {
-        for (const [nestedKey, nestedValue] of Object.entries(value)) {
-          pending.push({ value: nestedValue, isMessage: isMessage || messageKeys.includes(nestedKey) });
-        }
-      }
-    }
+function readLoopError(record: JsonRecord): string | undefined {
+  const keys = ['message', 'errorMessage', 'detail', 'reason', 'error'];
+  const pending: unknown[] = keys.map(key => record[key]);
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === 'string' && isTcpLoop(value)) return value;
+    if (value && typeof value === 'object') pending.push(...Object.values(value));
   }
   return undefined;
 }
 
-const PROBE_INFRASTRUCTURE_ERROR_PATTERN =
-  /tcp loop detected|contact us if this doesn't seem right|network connection lost|connection reset by peer|socket hang up|econnreset|etimedout|eai_again|getaddrinfo|time(?:d)?[ -]?out|timeout|worker exceeded (?:cpu time|resource) limits?|too many subrequests|out of memory|rate limit|too many requests|quota exceeded|bad gateway|service unavailable|internal server error|fetch failed|failed to fetch|invalid (?:probe )?response|malformed response|json parse|unexpected response|unexpected status:\s*[45]\d{2}|request cancel(?:l)?ed|operation aborted/i;
-
 const PROBE_HTTP_ERROR_PATTERN = /\b(?:http(?:\s+(?:error|status))?|unexpected status|upstream(?: returned)?)\s*[:=]?\s*([45]\d{2})\b/i;
 const PROBE_TLS_ERROR_PATTERN = /(?:tls|ssl).{0,80}(?:fail|error|alert)|handshake.{0,80}(?:fail|error)|certificate.{0,80}(?:expired|invalid|fail|error|verify)|(?:err_(?:ssl|tls|cert)|ssl_error|cert_has_expired|unable_to_verify_leaf_signature|depth_zero_self_signed_cert)|(?:self[ -]signed|unable to verify).*certificate/i;
-
-function isProbeInfrastructureMessage(value: string): boolean {
-  return PROBE_INFRASTRUCTURE_ERROR_PATTERN.test(value)
-    || PROBE_HTTP_ERROR_PATTERN.test(value)
-    || PROBE_TLS_ERROR_PATTERN.test(value);
-}
 
 function readMessage(record: JsonRecord): string | undefined {
   const direct = firstText(record, ['message', 'errorMessage', 'detail', 'reason']);

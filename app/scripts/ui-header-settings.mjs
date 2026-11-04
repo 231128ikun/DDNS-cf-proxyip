@@ -30,7 +30,9 @@ try {
   for (const width of [375, 1440]) {
     Object.assign(server.fixture, createUiFixture());
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
-    await cdp.send('Page.navigate', { url: server.base }, sessionId);
+    const loaded = cdp.wait(sessionId, 'Page.loadEventFired');
+      await cdp.send('Page.navigate', { url: server.base }, sessionId);
+      await loaded;
     await cdp.until(sessionId, 'Boolean(document.querySelector("#status-table")?.offsetWidth)');
     assert(await read('!document.querySelector(".hero input[role=switch]") && ![...document.querySelectorAll("input[role=switch]")].some(input => input.checkVisibility())'), 'Configuration switches leaked onto the dashboard');
     assert(await read('document.querySelectorAll(".target-select-overlay").length === 1 && Boolean(document.querySelector(".probe-overview-card .target-select-overlay")) && !document.querySelector(".hero .target-select-overlay")'), 'Target selector is not scoped to live DNS');
@@ -43,7 +45,7 @@ try {
     await click('#tab-config');
     await cdp.until(sessionId, 'Boolean(document.querySelector(".config-details-summary")?.offsetWidth)');
     await click('.config-details-summary > :first-child');
-    assert(await read('document.querySelectorAll(".config-details-body input[role=switch]").length === 2 && [...document.querySelectorAll("#page-config input[role=switch]")].every(input => input.checkVisibility()) && document.querySelector(".config-task-settings").getBoundingClientRect().bottom <= document.querySelector("#cfg-check-api").getBoundingClientRect().top'), 'Task switches are not inside the expanded configuration above its parameters');
+    assert(await read('document.querySelectorAll(".config-details-body input[role=switch]").length === 2 && [...document.querySelectorAll("#page-config input[role=switch]")].every(input => input.checkVisibility()) && document.querySelector(".config-task-settings").getBoundingClientRect().bottom <= document.querySelector("#cfg-probe-ipv4").getBoundingClientRect().top'), 'Task switches are not inside the expanded configuration above its parameters');
     await setValue('#cfg-concurrent-checks', '7');
     await click('#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
     await setValue('#zone-name-0', '未提交编辑草稿');

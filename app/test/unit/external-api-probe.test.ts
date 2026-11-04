@@ -20,6 +20,7 @@ describe('ExternalApiProbeAdapter', () => {
     ['upstream returned 503 Service Unavailable', 'TARGET_HTTP_ERROR', '候选链路 HTTP 503'],
     ['HTTP 500', 'TARGET_HTTP_ERROR', '候选链路 HTTP 500'],
     ['HTTP status: 403', 'TARGET_HTTP_ERROR', '候选链路 HTTP 403'],
+    ['HTTP 429 Too Many Requests', 'TARGET_HTTP_ERROR', '候选链路 HTTP 429'],
     ['TLS handshake failed', 'TARGET_TLS_ERROR', 'TLS handshake failed'],
     ['certificate has expired', 'TARGET_TLS_ERROR', 'certificate has expired'],
     ['ERR_SSL_PROTOCOL_ERROR', 'TARGET_TLS_ERROR', 'ERR_SSL_PROTOCOL_ERROR'],
@@ -183,7 +184,7 @@ describe('ExternalApiProbeAdapter', () => {
     expect(result.exitIp).toBe('198.51.100.9');
   });
 
-  it('treats a TCP loop reported by the probe as candidate connection failure', async () => {
+  it('keeps a known TCP loop service failure unknown after rechecking', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
         candidate: '203.0.113.10:8443',
@@ -203,8 +204,9 @@ describe('ExternalApiProbeAdapter', () => {
     });
 
     const result = await adapter.probe(target);
-    expect(result).toMatchObject({ status: 'dead', code: 'TARGET_CONNECT_ERROR' });
+    expect(result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
     expect(result.message).toContain('TCP Loop detected');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('rechecks a failed node on the backup before adopting a dead result', async () => {
@@ -235,10 +237,10 @@ describe('ExternalApiProbeAdapter', () => {
   });
 
   it.each(['Worker exceeded resource limits', 'too many requests, rate limit exceeded', 'fetch failed: internal error'])
-  ('keeps an explicit detector capacity failure unknown: %s', async message => {
+  ('does not reinterpret false based on generic capacity wording: %s', async message => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
       timeoutMs: 1_000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
-    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'dead' });
   });
 
 });
@@ -466,6 +468,36 @@ describe('external probe safety regressions', () => {
   });
 
   it.each([
+    { probe_results: { ipv4: { ok: false, error: 'TCP Loop detected, contact us if this doesn\'t seem right.' } } },
+    { probeResults: [{ ok: false, error: { cause: { message: 'TCP Loop detected' } } }] },
+    { probes: { ipv4: { ok: false, apiError: true, error: 'candidate timeout' } } },
+  ])('does not turn a nested detector failure into a dead candidate: %j', async evidence => {
+    expect(await adapterFor({ success: false, message: 'probe failed', ...evidence }).probe(target))
+      .toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
+  it('keeps an explicit candidate HTTP status ahead of generic rate-limit wording', async () => {
+    expect(await adapterFor({ success: false, probe_results: {
+      ipv4: { ok: false, status_code: 429, error: 'Too Many Requests' },
+    } }).probe(target)).toMatchObject({ status: 'dead', code: 'TARGET_HTTP_ERROR', message: '候选链路 HTTP 429' });
+  });
+
+  it.each([true, false])('retains a healthy exit alongside a branch TCP loop (success:%s)', async success => {
+    expect(await adapterFor({ success, probe_results: {
+      ipv4: { ok: true, exit: { ip: '198.51.100.1', ipType: 'ipv4' } },
+      ipv6: { ok: false, error: 'TCP Loop detected' },
+    } }).probe(target)).toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4',
+      exits: [{ family: 'ipv4', ip: '198.51.100.1' }] });
+  });
+
+  it('does not miss an explicit API error in a second probe-results alias', async () => {
+    expect(await adapterFor({ success: false,
+      probe_results: { ipv4: { ok: false, error: 'connection refused' } },
+      probes: { ipv6: { apiError: true, error: 'service failure' } },
+    }).probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
+  it.each([
     { success: false, apiError: true },
     { success: false, detail: 'Network connection lost.' },
     { success: false, message: 'TLS handshake failed' },
@@ -509,14 +541,14 @@ describe('probe timeout decisions', () => {
     init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
   });
 
-  it('marks an exhausted deadline dead after the existing single-endpoint recheck', async () => {
+  it('keeps an exhausted API deadline unknown after the existing single-endpoint recheck', async () => {
     vi.useFakeTimers();
     try {
       const fetchImpl = vi.fn(stalledFetch);
       const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 10, fetchImpl: fetchImpl as typeof fetch });
       const pending = adapter.probe(target);
       await vi.advanceTimersByTimeAsync(20);
-      expect(await pending).toMatchObject({ status: 'dead', code: 'TIMEOUT', endpoint: 'primary', message: '检测超时 (10ms)' });
+      expect(await pending).toMatchObject({ status: 'unknown', code: 'API_TIMEOUT', endpoint: 'primary', message: '检测接口请求超时 (10ms)' });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
   });
@@ -533,7 +565,7 @@ describe('probe timeout decisions', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('marks a response-body deadline dead and releases its timer', async () => {
+  it('keeps an API response-body deadline unknown and releases its timer', async () => {
     vi.useFakeTimers();
     try {
       const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 10, fallbackToNext: false,
@@ -542,7 +574,7 @@ describe('probe timeout decisions', () => {
         } }))) as typeof fetch });
       const pending = adapter.probe(target);
       await vi.advanceTimersByTimeAsync(10);
-      expect(await pending).toMatchObject({ status: 'dead', code: 'TIMEOUT' });
+      expect(await pending).toMatchObject({ status: 'unknown', code: 'API_TIMEOUT' });
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
   });
@@ -559,10 +591,27 @@ describe('probe timeout decisions', () => {
 
   it.each([
     ['AbortError', 'unknown', 'NETWORK_ERROR'],
-    ['TimeoutError', 'dead', 'TIMEOUT'],
+    ['TimeoutError', 'unknown', 'API_TIMEOUT'],
   ])('distinguishes an unsolicited %s from caller cancellation', async (name, status, code) => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [endpoint], timeoutMs: 1000,
       fetchImpl: (async () => { throw new DOMException('fixture transport failure', name); }) as typeof fetch });
     expect(await adapter.probe(target)).toMatchObject({ status, code });
+  });
+});
+
+describe('independent healthy exits and precise loop evidence', () => {
+  const probe = (payload: unknown) => new ExternalApiProbeAdapter({ endpoints: [{ name: 'backup', urlTemplate: 'https://probe.example/check?proxyip=' }], timeoutMs: 1000,
+    fetchImpl: (async () => Response.json(payload)) as typeof fetch }).probe(target);
+  it('keeps an independent healthy branch when the summary repeats a failed branch loop', async () => {
+    expect(await probe({ success: true, message: 'IPv6: TCP Loop detected', probe_results: {
+      ipv4: { ok: true, exit: { ip: '198.51.100.1', ipType: 'ipv4' } },
+      ipv6: { ok: false, error: 'TCP Loop detected' },
+    } })).toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exits: [{ ip: '198.51.100.1' }] });
+  });
+  it.each([{ error: { cause: { message: 'TCP Loop detected' } } }, { errorMessage: 'TCP Loop detected' }])('does not trust a branch containing its own loop: %j', async flags => {
+    const broken = { ok: true, exit: { ip: '198.51.100.1', ipType: 'ipv4' }, ...flags };
+    expect(await probe({ success: true, probe_results: { ipv4: broken } })).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR', exits: [] });
+    expect(await probe({ success: true, probe_results: { ipv4: broken, ipv6: { ok: true, exit: { ip: '2001:db8::1', ipType: 'ipv6' } } } }))
+      .toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv6', exits: [{ ip: '2001:db8::1' }] });
   });
 });

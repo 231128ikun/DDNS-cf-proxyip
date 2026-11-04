@@ -65,7 +65,7 @@ const CLIENT_OPERATIONS: readonly ClientOperation[] = [
   { name: 'config', invoke: (client) => client.config(), method: 'GET', path: '/api/config' },
   {
     name: 'saveConfig',
-    invoke: (client) => client.saveConfig({ checkApi: 'https://probe.example/?proxyip=' }),
+    invoke: (client) => client.saveConfig({ checkApiBackup: 'https://probe.example/?proxyip=' }),
     method: 'PUT',
     path: '/api/config',
   },
