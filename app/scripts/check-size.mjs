@@ -9,10 +9,10 @@ const BUDGETS = {
   // 单个脚本与全部脚本分别设限。
   script: { rawKb: 70, gzipKb: 24 },
   // 全量脚本同时限制未压缩与 gzip 体积。
-  // IP 池完整预览/回执界面替换旧实现后约 41.5 KiB；仅 gzip 放宽 10.53%。
-  scriptTotal: { rawKb: 115, gzipKb: 42 },
+  // 紧凑池工作区、预览与回执经去重后约 116/42 KiB；相对本批初值增长 4.35%/15.79%。
+  scriptTotal: { rawKb: 120, gzipKb: 44 },
   style: { rawKb: 40, gzipKb: 10 },
-  pageTotal: { rawKb: 155, gzipKb: 50 },
+  pageTotal: { rawKb: 160, gzipKb: 52 },
 };
 
 // 调整预算时最多只能相对上一轮生效值放宽 20%，避免连续追涨掩盖体积膨胀。
