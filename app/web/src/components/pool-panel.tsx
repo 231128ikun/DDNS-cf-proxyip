@@ -50,16 +50,21 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
   const [page, setPage] = useState(0);
   const [category, setCategory] = useState('alive');
+  const [showResults, setShowResults] = useState(false);
   const dirty = Boolean(edit && edit.text !== edit.original);
   const inTrash = poolKey === TRASH_POOL_KEY;
   const busy = model.writing || sideBusy || containerBusy;
   const inputsLocked = busy || batch.checkingBatch || remoteBusy;
+  const managementLocked = busy || model.reading;
   const snapshot = useMemo(() => readPoolSnapshot(model.content ?? ''), [model.content]);
   const query = filter.trim() ? parsePoolFilter(filter) : null;
   const invalidFilter = Boolean(filter.trim() && !query);
   const rows = [...snapshot.entries].filter(([, item]) => !filter.trim() || (query && matchesPoolFilter(item.raw, query)));
-  const shown = rows.slice(page * 50, (page + 1) * 50);
+  const pages = Math.max(1, Math.ceil(rows.length / 50));
+  const currentPage = Math.min(page, pages - 1);
+  const shown = rows.slice(currentPage * 50, (currentPage + 1) * 50);
   const report = batch.batchReport;
+  const resultsVisible = showResults && report !== null;
   const invalid = useMemo(() => invalidPoolLines(batch.ipText), [batch.ipText]);
   const poolName = (key: string): string => poolOptions(pools, key).find(pool => pool.key === key)?.name ?? key;
   const targetName = poolName(poolKey);
@@ -84,9 +89,11 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     setSelection(new Set()); setFilter(''); setPage(0); setEdit(null);
     if (mode === 'manage' || poolKey === TRASH_POOL_KEY) void model.read();
   }, [poolKey, model]);
-  useEffect(() => { model.invalidate(); setCategory('alive'); }, [batch.ipText, report, model]);
+  useEffect(() => { model.invalidate(); setCategory('alive'); setShowResults(report !== null); }, [batch.ipText, report, model]);
+  useLayoutEffect(() => { setSelection(new Set()); }, [model.content]);
+  useEffect(() => { if (page !== currentPage) setPage(currentPage); }, [page, currentPage]);
 
-  const changeDraft = (text: string): void => { model.invalidate(); batch.replaceIpText(text); };
+  const changeDraft = (text: string): void => { setShowResults(false); model.invalidate(); batch.replaceIpText(text); };
   const switchMode = (next: 'import' | 'manage'): void => {
     if (mode === next || !leaveGuard.current()) return;
     model.invalidate(); setMode(next); setSelection(new Set());
@@ -112,6 +119,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     } finally { if (remote.current === controller) { remote.current = null; setRemoteBusy(false); } }
   };
   const select = (key: string, checked: boolean): void => {
+    if (model.reading) return;
     const next = new Set(selection); if (checked) next.add(key); else next.delete(key);
     setSelection(next); model.invalidate();
   };
@@ -189,19 +197,18 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         <input id="remote-url" class="form-control form-control-sm" type="url" aria-label="远程 TXT URL" placeholder="远程 TXT URL" value={url} disabled={inputsLocked} onInput={event => setUrl(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') void loadRemote(); }} />
         <button type="button" class="btn btn-sm btn-outline-primary" aria-label="从远程 URL 加载" disabled={inputsLocked} onClick={() => void loadRemote()}><Icon name="download" />{remoteBusy ? '加载中…' : '加载'}</button>
       </div>
-      <p class="small text-secondary">远程内容由服务端规范化，无效原始行无法恢复；粘贴草稿保留原文并校验。</p>
-      <label class="small" for="ip-input">导入草稿（尚未保存）</label>
-      <textarea id="ip-input" class="form-control ip-input mb-2" rows={6} value={batch.ipText} readOnly={inputsLocked} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder="IPv4、[IPv6]:port、域名及已有元数据和备注" />
-      {invalid.length > 0 && <details class="kv-alert compact" open><summary>格式无效 {invalid.length} 条，请修正后直接追加</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
-      {!probeConfigured && <p class="kv-alert compact">尚未配置主复检或备用复检接口，检测将报告探针异常。</p>}
-      <div class="pool-buttons" id="main-actions">
-        <button type="button" class={batch.checkingBatch ? 'btn btn-danger' : 'btn btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || busy || remoteBusy)} onClick={() => { model.invalidate(); if (batch.checkingBatch) batch.handleStopBatch(); else batch.handleCheckBatch(); }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止检测' : '检测'}</button>
-        <button type="button" class="btn btn-success" data-action="append-alive" disabled={inputsLocked || model.previewing || !report?.items.some(item => item.status === 'alive')} onClick={() => void model.prepare(report!.items.filter(item => item.status === 'alive').map(item => item.line).join('\n'), 'append')}><Icon name="plus" />预览追加可用</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="append-input" disabled={inputsLocked || model.previewing || !batch.ipText.trim() || !!invalid.length} onClick={() => void model.prepare(batch.ipText, 'append')}>直接追加输入地址</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked} onClick={() => { changeDraft(''); setSourcePool(null); }}>清空输入</button>
+      <details class="pool-remote-help small text-secondary"><summary>远程文本由服务端规范化</summary><p>无效原始行无法恢复；粘贴草稿保留原文并校验。</p></details>
+      <div class="pool-view-header">
+        <label class="small" for="ip-input" hidden={resultsVisible}>导入草稿（尚未保存）</label>
+        <span class="small" hidden={!resultsVisible}>检测结果（原文保留）</span>
+        <div class="pool-view-switch" role="group" aria-label="导入内容视图">
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-action="view-draft" aria-pressed={!resultsVisible} onClick={() => setShowResults(false)}>草稿</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-action="view-results" aria-pressed={resultsVisible} disabled={!report} onClick={() => setShowResults(true)}>结果</button>
+        </div>
       </div>
-      {batch.checkingBatch && <p class="small text-secondary">检测中，请等待或先停止再预览。</p>}
-      {report && <div class="pool-report">
+      <div class="pool-data-body">
+      <textarea id="ip-input" class="form-control ip-input" rows={6} hidden={resultsVisible} value={batch.ipText} readOnly={inputsLocked} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder="IPv4、[IPv6]:port、域名及已有元数据和备注" />
+      {report && <div class="pool-report" hidden={!resultsVisible} role="region" aria-label="本次检测结果">
         <div class="pool-buttons" role="group" aria-label="检测结果分类">
           {(['alive', 'dead', 'unknown', 'invalid', 'incomplete'] as const).map(value => {
             const count = value === 'invalid' ? report.invalid.length : value === 'incomplete' ? report.incomplete.length : report.items.filter(item => item.status === value).length;
@@ -209,7 +216,8 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
             return <button type="button" class="btn btn-sm btn-outline-secondary" aria-pressed={category === value} onClick={() => setCategory(value)}>{label} {count}</button>;
           })}
         </div>
-        <ul class="pool-result-list">{category === 'invalid' || category === 'incomplete' ? report[category].map((line, index) => <li key={index}><code>{line}</code></li>)
+        {batch.checkingBatch && <p class="small text-secondary">检测中，请等待或先停止再预览。</p>}
+        <ul class="pool-result-list" tabIndex={0} aria-label="检测结果列表">{category === 'invalid' || category === 'incomplete' ? report[category].map((line, index) => <li key={index}><code>{line}</code></li>)
           : report.items.filter(item => item.status === category).map((item, index) => <li key={index}>
             <strong>{item.address} · {probeStatusLabel(item.status, item.code)}</strong>
             <span>{[item.exitIp, item.asn, item.country, item.exitFamily, item.latencyMs === undefined ? '' : `${item.latencyMs}ms`].filter(Boolean).join(' · ')}</span>
@@ -220,11 +228,20 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
           <button type="button" class="btn btn-sm btn-outline-secondary" onClick={() => download(report.text)}>导出检测文本</button>
         </div>
       </div>}
+      </div>
+      {!resultsVisible && invalid.length > 0 && <details class="kv-alert compact pool-invalid"><summary>格式无效 {invalid.length} 条，请修正后直接追加</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
+      {!probeConfigured && <p class="kv-alert compact">尚未配置主复检或备用复检接口，检测将报告探针异常。</p>}
+      <div class="pool-buttons" id="main-actions">
+        <button type="button" class={batch.checkingBatch ? 'btn btn-danger' : 'btn btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || busy || remoteBusy)} onClick={() => { model.invalidate(); if (batch.checkingBatch) batch.handleStopBatch(); else batch.handleCheckBatch(); }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止检测' : '检测'}</button>
+        <button type="button" class="btn btn-success" data-action="append-alive" disabled={inputsLocked || model.previewing || !report?.items.some(item => item.status === 'alive')} onClick={() => void model.prepare(report!.items.filter(item => item.status === 'alive').map(item => item.line).join('\n'), 'append')}><Icon name="plus" />预览追加可用</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="append-input" disabled={inputsLocked || model.previewing || !batch.ipText.trim() || !!invalid.length} onClick={() => void model.prepare(batch.ipText, 'append')}>直接追加输入地址</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked} onClick={() => { changeDraft(''); setSourcePool(null); }}>清空输入</button>
+      </div>
     </div> : <div class="ip-content-area pool-management">
       {inTrash && <p class="small text-secondary">垃圾桶仅支持选择恢复或清空；恢复到来源池，来源缺失由服务端回退。</p>}
       <div class="pool-buttons">
         <button type="button" class="btn btn-sm btn-outline-primary" data-action="read-pool" disabled={model.reading || busy} onClick={() => { setSelection(new Set()); void model.read(); }}><Icon name="folder" />{model.reading ? '读取中…' : '读取池快照'}</button>
-        {!inTrash && <button type="button" class="btn btn-sm btn-outline-secondary" disabled={model.content === undefined || busy || !!edit} onClick={copyToDraft}>拷贝到导入区</button>}
+        {!inTrash && <button type="button" class="btn btn-sm btn-outline-secondary" disabled={model.content === undefined || managementLocked || !!edit} onClick={copyToDraft}>拷贝到导入区</button>}
         <button type="button" class="btn btn-sm btn-outline-secondary" disabled={model.content === undefined} onClick={() => download(selection.size ? selectedText() : model.content!)}>导出{selection.size ? '选择' : '完整池'}</button>
       </div>
       {model.content !== undefined && (edit ? <>
@@ -245,22 +262,22 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
           <table class="table table-sm pool-table" aria-label={inTrash ? '垃圾桶条目' : '当前池读取快照'}>
             <thead><tr><th scope="col">选择</th><th scope="col">地址 / 元数据</th><th scope="col">{inTrash ? '来源池' : '检测状态'}</th></tr></thead>
             <tbody>{shown.map(([key, item]) => <tr key={key}>
-              <td><input type="checkbox" aria-label={`选择 ${key}`} checked={selection.has(key)} disabled={busy} onChange={event => select(key, event.currentTarget.checked)} /></td>
+              <td><input type="checkbox" aria-label={`选择 ${key}`} checked={selection.has(key)} disabled={managementLocked} onChange={event => select(key, event.currentTarget.checked)} /></td>
               <td><strong>{item.entry.address}</strong><small>{[item.entry.asn, item.entry.country, item.entry.stack, item.entry.comment].filter(Boolean).join(' · ')}</small></td>
               <td>{inTrash ? poolName(sourcePoolFromTrash(item.raw) ?? 'ip_pool_default') : '未检测'}</td>
             </tr>)}</tbody></table>
         </div>
-        {rows.length > 50 && <div class="pool-buttons"><button type="button" class="btn btn-sm btn-outline-secondary" disabled={page === 0} onClick={() => setPage(page - 1)}>前一页</button><span>{page + 1} / {Math.ceil(rows.length / 50)}</span><button type="button" class="btn btn-sm btn-outline-secondary" disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}>后一页</button></div>}
+        {pages > 1 && <div class="pool-buttons"><button type="button" class="btn btn-sm btn-outline-secondary" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>前一页</button><span>{currentPage + 1} / {pages}</span><button type="button" class="btn btn-sm btn-outline-secondary" disabled={currentPage + 1 >= pages} onClick={() => setPage(currentPage + 1)}>后一页</button></div>}
         {snapshot.invalid.length > 0 && <details><summary>独立备注 / 无法识别内容（{snapshot.invalid.length}）</summary><pre class="pool-text">{snapshot.invalid.join('\n')}</pre></details>}
         <div class="pool-buttons">
-          <button type="button" class="btn btn-sm btn-outline-secondary" disabled={busy || invalidFilter} onClick={() => { setSelection(new Set(rows.map(([key]) => key))); model.invalidate(); }}>选择当前筛选结果</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" disabled={managementLocked || invalidFilter} onClick={() => { setSelection(new Set(rows.map(([key]) => key))); model.invalidate(); }}>选择当前筛选结果</button>
           {inTrash ? <>
-            <button type="button" class="btn btn-success" data-action="restore-trash" disabled={busy || !selection.size} onClick={restore}><Icon name="recycle" />恢复选中</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" onClick={clearTrash} disabled={busy}>清空垃圾桶</button>
+            <button type="button" class="btn btn-success" data-action="restore-trash" disabled={managementLocked || !selection.size} onClick={restore}><Icon name="recycle" />恢复选中</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" onClick={clearTrash} disabled={managementLocked}>清空垃圾桶</button>
           </> : <>
-            <button type="button" class="btn btn-sm btn-outline-danger" data-action="remove-selected" disabled={busy || !selection.size || model.previewing} onClick={() => void model.prepare(selectedText(), 'remove')}>预览删除选择</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" disabled={busy} onClick={() => { model.invalidate(); setEdit({ poolKey, original: model.content!, text: model.content! }); }}>完整编辑</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" disabled={busy || !snapshot.entries.size} onClick={clean}>洗库（写库与入桶）</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-action="remove-selected" disabled={managementLocked || !selection.size || model.previewing} onClick={() => void model.prepare(selectedText(), 'remove')}>预览删除选择</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" disabled={managementLocked} onClick={() => { model.invalidate(); setEdit({ poolKey, original: model.content!, text: model.content! }); }}>完整编辑</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" disabled={managementLocked || !snapshot.entries.size} onClick={clean}>洗库（写库与入桶）</button>
           </>}
         </div>
       </>)}

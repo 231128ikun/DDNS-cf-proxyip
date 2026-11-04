@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { launchBrowser } from './ui-browser.mjs';
-import { createUiFixture, serveUiFixture } from './ui-fixture.mjs';
+import { createUiFixture, serveUiFixture, waitForUiRequest } from './ui-fixture.mjs';
 
 export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, capture) {
   const original = structuredClone(fixture);
@@ -11,6 +11,9 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
   const read = expression => cdp.evaluate(sessionId, expression);
   const click = selector => cdp.click(sessionId, selector);
   const setValue = async (selector, value) => {
+    if (selector === '#ip-input' && await read('Boolean(document.querySelector("[data-action=view-draft]")) && !document.querySelector("#ip-input").getClientRects().length')) {
+      await click('[data-action=view-draft]');
+    }
     await read(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); input.value = ${JSON.stringify(value)};
       input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await read('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
@@ -194,6 +197,146 @@ export async function auditPoolFlow(cdp, sessionId, base, requests, fixture, cap
     assert.ok(await read('document.documentElement.scrollWidth <= innerWidth'), 'IP 库操作造成页面溢出');
   } catch (error) { failures.push('pool-flow: ' + error.message); }
   finally { Object.assign(fixture, original); }
+  failures.push(...await auditCompactPoolFlow(cdp, sessionId, base, requests, fixture, capture));
+  return failures;
+}
+
+/** Independent cases keep one behavioral failure from hiding the other regressions. */
+export async function auditCompactPoolFlow(cdp, sessionId, base, requests, fixture, capture) {
+  const original = structuredClone(fixture), failures = [];
+  const read = expression => cdp.evaluate(sessionId, expression);
+  const click = selector => cdp.click(sessionId, selector);
+  const settle = () => read('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+  const entries = count => Array.from({ length: count }, (_, i) => `10.2.0.${i + 1}:443,AS64500,US,v4`).join('\n');
+  const open = async content => {
+    Object.assign(fixture, createUiFixture());
+    fixture.poolContents.ip_pool_default = content;
+    await cdp.send('Page.navigate', { url: base }, sessionId);
+    await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    const start = requests.length;
+    await click('[data-pool-mode=manage]');
+    await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'GET', 200);
+    await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled && Boolean(document.querySelector(".pool-table"))');
+    await settle();
+  };
+  const record = async (name, run) => {
+    try { await run(); }
+    catch (error) { failures.push(`pool-compact/${name}: ${error.message}`); }
+  };
+  const evidence = async (name, data) => {
+    console.log(`pool-compact ${await read('innerWidth')}px ${name}: ${JSON.stringify(data)}`);
+    await capture?.(`compact-${name}`);
+  };
+  try {
+    await record('last-page-delete', async () => {
+      await open(entries(51));
+      await read('[...document.querySelectorAll(".dashboard-pool-card button")].find(button => button.textContent.trim() === "后一页").click()');
+      await cdp.until(sessionId, 'document.querySelectorAll(".pool-table tbody tr").length === 1');
+      assert.ok(await read('document.querySelector(".pool-table tbody").textContent.includes("10.2.0.51:443")'), '未到达第二页最后条目');
+      await click('.pool-table input');
+      const start = requests.length;
+      await click('[data-action=remove-selected]');
+      await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
+      const preview = await waitForUiRequest(requests, start, '/api/pools/ip_pool_default/preview', 'POST', 200);
+      assert.equal(preview.input.mode, 'remove');
+      assert.ok(preview.input.content.includes('10.2.0.51:443'), '预览未使用真实末页选择');
+      await click('[data-action=confirm-pool]');
+      const write = await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'PUT', 200);
+      await cdp.until(sessionId, '!document.querySelector("#pool-preview-title")');
+      await settle();
+      assert.equal(write.input.returnReceipt, true, '删除没有请求写入回执');
+      assert.equal(write.input.mode, 'remove');
+      assert.deepEqual(fixture.poolContents.ip_pool_default.split('\n').map(line => line.split(',')[0]), entries(50).split('\n').map(line => line.split(',')[0]), '删除影响了未选择地址');
+      const state = await read(`({ count: document.querySelector('#pool-count').textContent,
+        rows: document.querySelectorAll('.pool-table tbody tr').length,
+        addresses: [...document.querySelectorAll('.pool-table tbody strong')].map(item => item.textContent),
+        navigation: [...document.querySelectorAll('.dashboard-pool-card button')].filter(button => ['前一页', '后一页'].includes(button.textContent.trim())).map(button => ({ text: button.textContent.trim(), disabled: button.disabled })) })`);
+      await evidence('last-page-delete', state);
+      assert.equal(state.count, '50', '回执未显示剩余 50 条');
+      assert.deepEqual(state.addresses, entries(50).split('\n').map(line => line.split(',')[0]), `删除末页后剩余 50 条不可达：表格 ${state.rows} 行，导航 ${JSON.stringify(state.navigation)}`);
+    });
+    await record('slow-read-selection', async () => {
+      const before = entries(3), after = before.replace('10.2.0.1:443,AS64500,US', '10.2.0.1:443,AS64500,JP');
+      await open(before);
+      await read(`(() => { const input = document.querySelector('#universal-filter'); input.value = 'country:US'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await settle(); await click('.pool-table input');
+      assert.equal(await read('document.querySelectorAll(".pool-table input:checked").length'), 1, '慢读取前未建立选择');
+      fixture.poolReadDelay = 1200; fixture.poolReadOverride = after; fixture.poolContents.ip_pool_default = after;
+      const start = requests.length;
+      await click('[data-action=read-pool]'); await settle();
+      const atStart = await read('({ checked: document.querySelectorAll(".pool-table input:checked").length, removeDisabled: document.querySelector("[data-action=remove-selected]").disabled })');
+      const during = await read(`(() => {
+        const rows = [...document.querySelectorAll('.pool-table input')];
+        const selectAll = [...document.querySelectorAll('.dashboard-pool-card button')].find(button => button.textContent.trim() === '选择当前筛选结果');
+        const state = { reading: document.querySelector('[data-action=read-pool]').disabled, rowDisabled: rows.every(input => input.disabled), selectAllDisabled: selectAll.disabled };
+        rows[0].click(); selectAll.click(); return state;
+      })()`);
+      await settle();
+      during.checked = await read('document.querySelectorAll(".pool-table input:checked").length');
+      during.removeDisabled = await read('document.querySelector("[data-action=remove-selected]").disabled');
+      await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'GET', 200);
+      await cdp.until(sessionId, '!document.querySelector("[data-action=read-pool]").disabled && document.querySelectorAll(".pool-table tbody tr").length === 2');
+      const completed = await read(`({ checked: document.querySelectorAll('.pool-table input:checked').length,
+        summary: document.querySelector('#filter-preview').textContent, removeDisabled: document.querySelector('[data-action=remove-selected]').disabled,
+        hiddenAddressAbsent: !document.querySelector('.pool-table tbody').textContent.includes('10.2.0.1:443') })`);
+      // Native clicks respect disabled controls. If a stale selection opens a real preview,
+      // confirm it against the in-memory Worker to expose the actual hidden deletion.
+      await read('document.querySelector("[data-action=remove-selected]").click()'); await settle();
+      if (requests.slice(start).some(item => item.path.endsWith('/preview'))) {
+        await cdp.until(sessionId, 'Boolean(document.querySelector("#pool-preview-title"))');
+        await click('[data-action=confirm-pool]');
+        await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'PUT', 200);
+        await cdp.until(sessionId, '!document.querySelector("#pool-preview-title")');
+      }
+      const mutations = requests.slice(start).filter(item => item.method !== 'GET');
+      await evidence('slow-read-selection', { atStart, during, completed, mutations: mutations.map(item => ({ method: item.method, path: item.path, mode: item.input.mode })), hiddenAddressPreserved: fixture.poolContents.ip_pool_default.includes('10.2.0.1:443') });
+      const issues = [];
+      if (atStart.checked || !atStart.removeDisabled) issues.push('读取开始未清空选择/禁用删除');
+      if (!during.reading || !during.rowDisabled || !during.selectAllDisabled || during.checked || !during.removeDisabled) issues.push('读取期间旧行仍可选择或删除');
+      if (completed.checked || !completed.removeDisabled || !completed.summary.includes('已选择 0 条')) issues.push('读取完成残留选择或启用删除');
+      if (!completed.hiddenAddressAbsent || mutations.length || fixture.poolContents.ip_pool_default !== after) issues.push('筛选隐藏地址发生预览或删除');
+      assert.deepEqual(issues, []);
+    });
+    await record('management-density', async () => {
+      const measure = () => read(`(() => {
+        const card = document.querySelector('.dashboard-pool-card'), list = document.querySelector('.pool-table-wrap');
+        let scroller = list;
+        while (scroller !== card && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+        const top = scroller.scrollTop; scroller.scrollTop = 80;
+        const scrolls = scroller !== card && scroller.scrollTop > top; scroller.scrollTop = top;
+        return { cardHeight: card.getBoundingClientRect().height, listHeight: list.getBoundingClientRect().height,
+          rows: document.querySelectorAll('.pool-table tbody tr').length, scrollsInternally: scrolls,
+          scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight };
+      })()`);
+      await open(entries(3)); const short = await measure(); await evidence('manage-3', short);
+      fixture.poolContents.ip_pool_default = entries(201);
+      const start = requests.length;
+      await click('[data-action=read-pool]');
+      await waitForUiRequest(requests, start, '/api/pools/ip_pool_default', 'GET', 200);
+      await cdp.until(sessionId, 'document.querySelector("#filter-preview").textContent.includes("201")');
+      await settle(); const long = await measure(); await evidence('manage-201', long);
+      assert.equal(short.rows, 3); assert.equal(long.rows, 50, '管理列表分页失效');
+      assert.ok(long.scrollsInternally, '长列表没有真实内部滚动');
+      // Allow pagination and a wrapped control row, but not hundreds of pixels of list growth.
+      assert.ok(long.cardHeight - short.cardHeight <= 96 && long.listHeight - short.listHeight <= 96,
+        `列表长度撑高卡片：${short.cardHeight} → ${long.cardHeight}px；列表 ${short.listHeight} → ${long.listHeight}px`);
+    });
+    await record('selector-menu-row', async () => {
+      await open(entries(3));
+      await read('document.querySelector("#pool-selector").scrollIntoView({ block: "center", behavior: "instant" })');
+      const geometry = await read(`(() => {
+        const box = selector => { const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect(); return { x, y, width, height }; };
+        return { selector: box('#pool-selector'), menu: box('#pool-action-trigger'), width: innerWidth, pageWidth: document.documentElement.scrollWidth };
+      })()`);
+      await click('#pool-action-trigger');
+      geometry.menuTargets = await read('[...document.querySelectorAll(".action-menu-item")].map(button => { const box = button.getBoundingClientRect(); return { width: box.width, height: box.height }; })');
+      await evidence('selector-menu-row', geometry); await click('#pool-action-trigger');
+      assert.ok([geometry.selector, geometry.menu, ...geometry.menuTargets].every(box => Math.min(box.width, box.height) >= 32), '池选择器或菜单点击区域小于 32px');
+      assert.ok(Math.abs(geometry.selector.y + geometry.selector.height / 2 - geometry.menu.y - geometry.menu.height / 2) <= 2
+        && geometry.selector.x + geometry.selector.width <= geometry.menu.x + 1, '池选择器和池操作菜单没有同排对齐');
+      assert.ok(geometry.pageWidth <= geometry.width, '池工具栏导致页面溢出');
+    });
+  } finally { Object.assign(fixture, original); }
   return failures;
 }
 
@@ -219,7 +362,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } }, sessionId);
         writeFileSync(join(out, `${name}-${width}.png`), Buffer.from(data, 'base64'));
       };
-      const failures = await auditPoolFlow(cdp, sessionId, server.base, server.requests, server.fixture, capture);
+      const audit = process.argv.includes('--compact-only') ? auditCompactPoolFlow : auditPoolFlow;
+      const failures = await audit(cdp, sessionId, server.base, server.requests, server.fixture, capture);
       console.log(`${width}px pool: ${failures.join('; ') || 'passed'}`);
       if (failures.length) process.exitCode = 1;
     }
