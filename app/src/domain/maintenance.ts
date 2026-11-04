@@ -138,10 +138,8 @@ export function buildMaintenancePlan(input: MaintenancePlanInput): MaintenancePl
   }
 
   for (const candidate of input.candidates) {
-    if (activeCount >= input.target.minActive) break;
-
     if (candidate.result.status === 'alive' && probeMatchesTarget(candidate.result, input.target)) {
-      if (coveredValues.has(candidate.value)) continue;
+      if (activeCount >= input.target.minActive || coveredValues.has(candidate.value)) continue;
       additions.push(candidate);
       coveredValues.add(candidate.value);
       activeCount += 1;

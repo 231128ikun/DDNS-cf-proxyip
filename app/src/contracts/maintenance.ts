@@ -68,6 +68,7 @@ export interface MaintenanceRunResult {
   readonly candidates?: MaintenanceCandidateStats;
   readonly candidateErrors?: readonly { readonly code: string; readonly message: string; readonly count: number }[];
   readonly archived?: number;
+  readonly archivedAddresses?: readonly string[];
   readonly lines?: readonly string[];
 }
 

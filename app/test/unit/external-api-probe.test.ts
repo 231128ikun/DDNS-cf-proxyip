@@ -14,20 +14,20 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 describe('ExternalApiProbeAdapter', () => {
   it.each([
-    ['tcp connect timeout after 9999ms', 'TIMEOUT', '节点连接超时'],
-    ['probe request timed out', 'TIMEOUT', '节点连接超时'],
-    ['unexpected status: 502 body: <html><h1>502 Bad Gateway</h1></html>', 'HTTP_ERROR', '探针上游 HTTP 502（节点状态未知）'],
-    ['upstream returned 503 Service Unavailable', 'HTTP_ERROR', '探针上游 HTTP 503（节点状态未知）'],
-    ['HTTP 500', 'HTTP_ERROR', '探针上游 HTTP 500（节点状态未知）'],
-    ['HTTP status: 403', 'HTTP_ERROR', '探针上游 HTTP 403（节点状态未知）'],
-    ['TLS handshake failed', 'PROBE_API_ERROR', 'TLS handshake failed'],
-    ['certificate has expired', 'PROBE_API_ERROR', 'certificate has expired'],
-    ['ERR_SSL_PROTOCOL_ERROR', 'PROBE_API_ERROR', 'ERR_SSL_PROTOCOL_ERROR'],
-    ['unable to verify the first certificate', 'PROBE_API_ERROR', 'unable to verify the first certificate'],
-  ])('classifies reported infrastructure errors without exposing response bodies: %s', async (message, code, expected) => {
+    ['tcp connect timeout after 9999ms', 'TIMEOUT', '候选连接超时'],
+    ['probe request timed out', 'TIMEOUT', '候选连接超时'],
+    ['unexpected status: 502 body: <html><h1>502 Bad Gateway</h1></html>', 'TARGET_HTTP_ERROR', '候选链路 HTTP 502'],
+    ['upstream returned 503 Service Unavailable', 'TARGET_HTTP_ERROR', '候选链路 HTTP 503'],
+    ['HTTP 500', 'TARGET_HTTP_ERROR', '候选链路 HTTP 500'],
+    ['HTTP status: 403', 'TARGET_HTTP_ERROR', '候选链路 HTTP 403'],
+    ['TLS handshake failed', 'TARGET_TLS_ERROR', 'TLS handshake failed'],
+    ['certificate has expired', 'TARGET_TLS_ERROR', 'certificate has expired'],
+    ['ERR_SSL_PROTOCOL_ERROR', 'TARGET_TLS_ERROR', 'ERR_SSL_PROTOCOL_ERROR'],
+    ['unable to verify the first certificate', 'TARGET_TLS_ERROR', 'unable to verify the first certificate'],
+  ])('classifies a recognized failed candidate without exposing response bodies: %s', async (message, code, expected) => {
     const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
       timeoutMs: 15000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
-    expect(await adapter.probe(target)).toMatchObject({ status: code === 'TIMEOUT' ? 'dead' : 'unknown', code, message: expected });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'dead', code, message: expected });
   });
 
   it('accepts backup recovery after a reported timeout', async () => {
@@ -183,7 +183,7 @@ describe('ExternalApiProbeAdapter', () => {
     expect(result.exitIp).toBe('198.51.100.9');
   });
 
-  it('treats a TCP loop reported by the probe as an infrastructure error', async () => {
+  it('treats a TCP loop reported by the probe as candidate connection failure', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
         candidate: '203.0.113.10:8443',
@@ -203,8 +203,7 @@ describe('ExternalApiProbeAdapter', () => {
     });
 
     const result = await adapter.probe(target);
-    expect(result.status).toBe('unknown');
-    expect(result.code).toBe('PROBE_API_ERROR');
+    expect(result).toMatchObject({ status: 'dead', code: 'TARGET_CONNECT_ERROR' });
     expect(result.message).toContain('TCP Loop detected');
   });
 
@@ -229,33 +228,29 @@ describe('ExternalApiProbeAdapter', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    'Network connection lost.',
-    'Worker exceeded resource limits',
-    'too many requests, rate limit exceeded',
-    'fetch failed: internal error',
-  ])('treats probe service failure %s as unknown', async (message) => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ success: false, message })) as unknown as typeof fetch;
-    const adapter = new ExternalApiProbeAdapter({
-      endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
-      timeoutMs: 1_000,
-      fetchImpl,
-    });
-
-    const result = await adapter.probe(target);
-    expect(result.status).toBe('unknown');
-    expect(result.code).toBe('PROBE_API_ERROR');
+  it('treats a legacy candidate connection error as dead', async () => {
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse({ success: false, message: 'Network connection lost.' })) as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'dead', code: 'TARGET_CONNECT_ERROR' });
   });
+
+  it.each(['Worker exceeded resource limits', 'too many requests, rate limit exceeded', 'fetch failed: internal error'])
+  ('keeps an explicit detector capacity failure unknown: %s', async message => {
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://check.example/check?proxyip={proxyip}' }],
+      timeoutMs: 1_000, fetchImpl: (async () => jsonResponse({ success: false, message })) as typeof fetch });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
 });
 
 describe('probe rechecks', () => {
   const cases = [
     { label: 'confirmed timeout', payloads: [{ success: false, message: 'tcp connect timeout' }], status: 'dead', attempts: 2 },
-    { label: 'timeout followed by API error', payloads: [{ success: false, message: 'tcp connect timeout' }, { success: false, message: 'HTTP 500' }], status: 'unknown', attempts: 2 },
+    { label: 'timeout followed by HTTP target failure', payloads: [{ success: false, message: 'tcp connect timeout' }, { success: false, message: 'HTTP 500' }], status: 'dead', attempts: 2 },
     { label: 'healthy', payloads: [{ success: true }], status: 'alive', attempts: 1 },
     { label: 'recovered', payloads: [{ success: false }, { success: true }], status: 'alive', attempts: 2 },
     { label: 'confirmed failure', payloads: [{ success: false }, { success: false }], status: 'dead', attempts: 2 },
-    { label: 'failed recheck', payloads: [{ success: false }, { success: false, message: 'TLS handshake failed' }], status: 'unknown', attempts: 2 },
+    { label: 'failed TLS recheck', payloads: [{ success: false }, { success: false, message: 'TLS handshake failed' }], status: 'dead', attempts: 2 },
     { label: 'recovered API error', payloads: [{ success: false, message: 'HTTP 500' }, { success: true }], status: 'alive', attempts: 2 },
   ];
 
@@ -354,7 +349,7 @@ describe('complete public probe payload regressions', () => {
     });
     const result = await adapter.probe(target);
     expect(result).toMatchObject({ status: success ? 'alive' : 'dead' });
-    expect(result.code).toBeUndefined();
+    expect(result.code).toBe(success ? undefined : 'TARGET_FAILED');
     expect(fetchImpl).toHaveBeenCalledTimes(success ? 1 : 2);
     if (success) {
       expect(result).toMatchObject({ colo: 'LHR', exitFamily: 'dual', exitIp: '198.51.100.42', exits: [
@@ -413,9 +408,9 @@ describe('complete public probe payload regressions', () => {
   });
 
   it.each([
-    ['TLS handshake failed', 'PROBE_API_ERROR', true], ['TLS handshake failed', 'PROBE_API_ERROR', false],
+    ['TLS handshake failed', 'TARGET_TLS_ERROR', true], ['TLS handshake failed', 'TARGET_TLS_ERROR', false],
     ['tcp connect timeout after 9999ms', 'TIMEOUT', true], ['tcp connect timeout after 9999ms', 'TIMEOUT', false],
-    ['HTTP 502', 'HTTP_ERROR', true], ['HTTP 502', 'HTTP_ERROR', false],
+    ['HTTP 502', 'TARGET_HTTP_ERROR', true], ['HTTP 502', 'TARGET_HTTP_ERROR', false],
   ] as const)('still classifies real nested errors in complete payloads: %s / %s (success=%s)', async (message, code, success) => {
     const payload = completePayload(success);
     payload.probe_results.ipv6.error = message;
@@ -423,7 +418,7 @@ describe('complete public probe payload regressions', () => {
       endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?candidate=' }],
       timeoutMs: 1_000, fetchImpl: (async () => jsonResponse(payload)) as typeof fetch,
     });
-    expect(await adapter.probe(target)).toMatchObject(success ? { status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' } : { status: code === 'TIMEOUT' ? 'dead' : 'unknown', code });
+    expect(await adapter.probe(target)).toMatchObject(success ? { status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' } : { status: 'dead', code });
   });
 });
 
@@ -459,15 +454,15 @@ describe('external probe safety regressions', () => {
     ['nested probe error', { probes: { ipv4: { ok: false, error: { cause: { message: 'Network connection lost.' } } } } }],
     ['nested error array', { probes: { ipv4: { ok: false, error: { causes: [{ detail: 'Network connection lost.' }] } } } }],
     ['untruncated evidence', { message: 'ordinary details '.repeat(30) + 'Network connection lost.' }],
-  ] as const)('detects infrastructure evidence in %s', async (_label, evidence) => {
+  ] as const)('classifies recognized candidate failure evidence in %s', async (_label, evidence) => {
     const result = await adapterFor({ success: false, ...evidence }).probe(target);
-    expect(result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+    expect(result.status).toBe('dead');
     expect(result.message!.length).toBeLessThanOrEqual(240);
   });
 
-  it('keeps specific timeout classification even when apiError is set', async () => {
+  it('keeps explicit apiError unknown even when its detail mentions timeout', async () => {
     expect(await adapterFor({ success: false, apiError: true, detail: 'tcp connect timeout after 9999ms' }).probe(target))
-      .toMatchObject({ status: 'dead', code: 'TIMEOUT' });
+      .toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
   });
 
   it.each([

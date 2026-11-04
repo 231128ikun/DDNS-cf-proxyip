@@ -349,9 +349,26 @@ describe('maintenance pool write safety', () => {
 
 describe('external probe to maintenance safety', () => {
   const types = ['A', 'AAAA', 'TXT'] as const;
-  const errors = [
+  const detectorErrors = [
     { success: false, apiError: true },
     { success: true, apiError: true },
+    { success: false, message: 'Worker exceeded resource limits' },
+    { success: false, message: 'too many requests, rate limit exceeded' },
+    { success: false, message: 'fetch failed: internal error' },
+  ];
+
+  it.each(detectorErrors.flatMap(payload => types.map(type => ({ type, payload }))))('preserves $type DNS and pool on detector error $payload', async ({ type, payload }) => {
+    const { target, dns, pools, initial, service } = externalMaintenance(type, payload);
+    const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
+    expect(report).toMatchObject({ deleted: 0, added: 0, dnsUpdated: false, probeErrors: 1 });
+    expect(report.plan.current[0]?.decision).toBe('keep-unknown');
+    expect(dns.deleted).toEqual([]);
+    expect(dns.upserted).toEqual([]);
+    expect(pools.value()).toBe(initial);
+    expect(pools.trash).toEqual([]);
+  });
+
+  const candidateFailures = [
     { success: false, detail: 'Network connection lost.' },
     { success: false, reason: 'Network connection lost.' },
     { success: false, message: 'node failed', error: 'Network connection lost.' },
@@ -361,15 +378,14 @@ describe('external probe to maintenance safety', () => {
     { success: false, message: 'HTTP 500' },
   ];
 
-  it.each(errors.flatMap(payload => types.map(type => ({ type, payload }))))('preserves $type DNS and pool on error $payload', async ({ type, payload }) => {
-    const { target, dns, pools, initial, service } = externalMaintenance(type, payload);
+  it.each(candidateFailures.flatMap(payload => types.map(type => ({ type, payload }))))('removes and archives a confirmed $type candidate failure $payload', async ({ type, payload }) => {
+    const { target, dns, pools, service } = externalMaintenance(type, payload);
     const report = await service.execute({ target, zone, poolKey: 'ip_pool_default' });
-    expect(report).toMatchObject({ deleted: 0, added: 0, dnsUpdated: false, probeErrors: 1 });
-    expect(report.plan.current[0]?.decision).toBe('keep-unknown');
-    expect(dns.deleted).toEqual([]);
-    expect(dns.upserted).toEqual([]);
-    expect(pools.value()).toBe(initial);
-    expect(pools.trash).toEqual([]);
+    expect(report).toMatchObject({ deleted: 1, added: 0, dnsUpdated: true, probeErrors: 0 });
+    expect(report.plan.current[0]?.decision).toBe('remove-dead');
+    expect(dns.deleted).toEqual(['current']);
+    expect(pools.value()).toBe('');
+    expect(pools.trash).toHaveLength(1);
   });
 
   it.each(types.flatMap(type => [false, true].map(reversed => ({ type, reversed }))))('retains dual-stack $type DNS (reversed=$reversed)', async ({ type, reversed }) => {
@@ -506,4 +522,26 @@ it('does not replace an invalid DNS record verdict with a successful duplicate-f
   expect(result.plan.current.map(item => item.decision)).toEqual(['keep-unknown', 'active']);
   expect(result.plan.current[0]!.item.result.code).toBe('INVALID_DNS_VALUE');
   expect(probe.calls).toEqual([address]);
+});
+
+it('treats a detector-reported target HTTP 404 as dead and continues to a later refill candidate', async () => {
+  const target = requireTarget({ mode: 'A', domain: 'edge.example.com', port: 443, minActive: 3 });
+  const dns = new MemoryDnsRepository(['10', '11'].map(last => ({ id: last, type: 'A' as const, name: target.domain, content: '203.0.113.' + last })));
+  const pools = new MemoryPoolRepository('203.0.113.20:443\n203.0.113.21:443');
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+    const candidate = new URL(String(input)).searchParams.get('proxyip')!;
+    if (candidate === '203.0.113.20:443') return Response.json({ candidate, ok: false, probe_results: [
+      { probe_name: 'dbip', ok: false, status_code: 404, error: 'unexpected status: 404' },
+      { probe_name: 'ipsb', ok: false, status_code: 404, error: 'unexpected status: 404' },
+    ] });
+    return Response.json({ success: true, exits: [{ ip: '198.51.100.42', stack: 'ipv4', asn: 'AS64500', country: 'JP' }] });
+  });
+  const probe = new ExternalApiProbeAdapter({ endpoints: [{ name: 'primary', urlTemplate: 'https://probe.example/?proxyip=' }],
+    timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
+  const report = await new MaintainManagedTarget({ probe, pools, dns }).execute({ target, zone, poolKey: 'ip_pool_default' });
+  expect(report).toMatchObject({ activeCount: 3, probeErrors: 0, added: 1 });
+  expect(dns.added).toEqual([{ host: '203.0.113.21', type: 'A' }]);
+  expect(pools.trash).toEqual([{ entryLine: '203.0.113.20:443', reason: '维护失效', poolKey: 'ip_pool_default' }]);
+  expect(report.candidateResults?.find(item => item.address === '203.0.113.20:443')?.result)
+    .toMatchObject({ status: 'dead', code: 'TARGET_HTTP_ERROR' });
 });

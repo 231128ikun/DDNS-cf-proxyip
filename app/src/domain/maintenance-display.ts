@@ -12,7 +12,11 @@ export function maintenanceDisplayLines(result: MaintenanceRunResult): string[] 
   const active = result.activeCount ?? 0;
   const minimum = result.minActive ?? 0;
   lines.push('活跃 ' + active + '/' + minimum + ' · IP 池 ' + result.poolName);
-  const checks = new Map((result.checks ?? []).map(item => [item.value, item]));
+  const checks = new Map<string, MaintenanceAddressCheck>();
+  for (const item of result.checks ?? []) {
+    checks.set(item.value, item);
+    checks.set(item.address, item);
+  }
   if (!result.dns.after.length) lines.push('解析：无');
   for (const value of result.dns.after) {
     const check = checks.get(value);
@@ -25,6 +29,10 @@ export function maintenanceDisplayLines(result: MaintenanceRunResult): string[] 
     lines.push('移除 ' + value + ' · ' + reason);
   }
   if (result.dnsUpdated) lines.push('DNS 记录：新增 ' + result.added + '，移除 ' + result.deleted);
+  const removed = new Set(result.dns.removed);
+  for (const value of result.archivedAddresses ?? []) {
+    if (!removed.has(value)) lines.push('归档 ' + value + ' · ' + removalReason(checks.get(value)));
+  }
   if (result.archived) lines.push('归档处理 ' + result.archived + ' 个地址');
   const candidates = result.candidates;
   if (candidates && (active < minimum || candidates.unknown > 0)) {
@@ -43,6 +51,12 @@ function checkText(check: MaintenanceAddressCheck | undefined): string {
   const status = check.status === 'alive' ? check.matchesTarget ? '可用' : '筛选不匹配' : check.status === 'dead' ? '失效' : '未判定';
   return status + (check.details ? ' · ' + check.details : '')
     + (check.status !== 'alive' && check.message ? ' · ' + (check.code ? '[' + check.code + '] ' : '') + check.message : '');
+}
+
+function removalReason(check: MaintenanceAddressCheck | undefined): string {
+  if (check?.status === 'dead') return check.code === 'TIMEOUT' ? '检测超时' : check.message ?? '检测失效';
+  if (check?.status === 'alive' && !check.matchesTarget) return '筛选不匹配';
+  return '记录移除';
 }
 
 export function notificationDisplay(result: NotifyResult | null | undefined): string {

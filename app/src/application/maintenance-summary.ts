@@ -1,7 +1,7 @@
 import { maintenanceDisplayLines, notificationDisplay } from '../domain/maintenance-display';
 import type { MaintenanceAddressCheck, MaintenanceRunResponse, MaintenanceRunResult } from '../contracts/maintenance';
 import type { NotifyResult } from '../contracts/notification';
-import { isUnknownMetaValue } from '../domain/pool-entry';
+import { extractPoolAddressKey, isUnknownMetaValue } from '../domain/pool-entry';
 import { probeMatchesTarget } from '../domain/managed-target';
 import type { ProbeResult } from '../domain/probe-result';
 import { createPublicTextRedactor } from '../contracts/public-text';
@@ -40,12 +40,16 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
     });
   };
   for (const item of report.plan.current) addCheck(item.item.value, item.item.address, item.item.result);
-  for (const item of report.candidateResults ?? report.plan.additions) if (dns.added.includes(item.value)) addCheck(item.value, item.address, item.result);
+  for (const item of report.candidateResults ?? report.plan.additions) {
+    if (dns.added.includes(item.value) || item.result.status !== 'alive') addCheck(item.value, item.address, item.result);
+  }
   return { domain: target.domain, mode: target.mode, poolKey, poolName: redact(poolName), dnsUpdated: report.dnsUpdated,
     added: report.added, deleted: report.deleted, probeErrors: report.probeErrors, error: errors.join('；') || null, errors,
     dns: safeDns, activeCount: report.activeCount ?? report.plan.activeCount, minActive: target.minActive,
     ...(target.port ? { port: target.port } : {}), checks: [...checks.values()],
-    ...(report.candidates ? { candidates: report.candidates } : {}), candidateErrors: [...candidateErrors.values()], archived: report.archived ?? (report.errors.includes('写入垃圾桶失败') ? 0 : report.plan.trash.length),
+    ...(report.candidates ? { candidates: report.candidates } : {}), candidateErrors: [...candidateErrors.values()],
+    archived: report.archived ?? (report.errors.includes('写入垃圾桶失败') ? 0 : report.plan.trash.length),
+    archivedAddresses: report.errors.includes('写入垃圾桶失败') ? [] : report.plan.trash.map(item => redactAddress(extractPoolAddressKey(item.entryLine))).filter(Boolean),
   };
 }
 

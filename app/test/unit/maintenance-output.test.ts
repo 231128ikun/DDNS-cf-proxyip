@@ -5,6 +5,7 @@ import { CheckTarget } from '../../src/application/check-target';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { normalizeManagedTarget } from '../../src/domain/managed-target';
+import { parseProxyTarget } from '../../src/domain/proxy-target';
 import { alive } from '../../src/domain/probe-result';
 import type { DnsRecord, DnsRepository } from '../../src/ports/dns-repository';
 import type { PoolRepository } from '../../src/ports/pool-repository';
@@ -41,8 +42,8 @@ describe('complete and concise maintenance output', () => {
   it('includes every final DNS address, actual active count and successful additions', async () => {
     const { run } = await fixture();
     const message = buildTelegramMaintenanceMessage(run, { isManual: true, now: new Date('2026-11-03T00:00:00Z') });
-    for (const last of ['10', '11', '12']) expect(message).toContain('解析 203.0.113.' + last);
-    expect(message).toContain('活跃 3/3');
+    for (const last of ['10', '11', '12']) expect(message).toContain('<code>203.0.113.' + last + '</code>');
+    expect(message).toContain('活跃：3/3');
     expect(message).toContain('[新增]');
     expect(message).toContain('JP');
     expect(message).not.toContain('IP 池数量无变化');
@@ -53,10 +54,10 @@ describe('complete and concise maintenance output', () => {
     const { run } = await fixture(true);
     expect(run.insufficient).toBe(true);
     const message = buildTelegramMaintenanceMessage(run, { isManual: true });
-    expect(message).toContain('活跃 2/3');
+    expect(message).toContain('活跃：2/3');
     expect(message).toContain('未达到最小活跃数');
-    expect(message).not.toContain('解析 203.0.113.12');
-    expect(message).not.toContain('活跃 3/3');
+    expect(message).not.toContain('<code>203.0.113.12</code>');
+    expect(message).not.toContain('活跃：3/3');
   });
 
   it('returns prepared public lines and partial delivery status through the real client and route', async () => {
@@ -85,4 +86,22 @@ describe('complete and concise maintenance output', () => {
     expect(result.notification?.sent).toBe(false);
     expect(saveBaseline).not.toHaveBeenCalled();
   });
+});
+
+it('reports an archived failed pool candidate with its address and reason', async () => {
+  const { run } = await fixture();
+  const result = run.results[0]!;
+  const report = result.report!;
+  const target = report.target;
+  const failedAddress = '203.0.113.99:443';
+  const failed = { entry: { address: failedAddress, asn: null, country: null, stack: null, comment: '' }, address: failedAddress,
+    value: '203.0.113.99', result: { status: 'dead' as const, target: parseProxyTarget(failedAddress)!, exitFamily: 'unknown' as const,
+      exits: [], code: 'TARGET_HTTP_ERROR', message: '候选链路 HTTP 404' } };
+  const changed = { ...run, results: [{ ...result, report: { ...report, candidateResults: [failed], archived: 1,
+    plan: { ...report.plan, trash: [{ entryLine: failedAddress, reason: '维护失效' }] } } }] };
+  const message = buildTelegramMaintenanceMessage(changed, { isManual: true });
+  expect(message).toContain('<code>203.0.113.99:443</code>');
+  expect(message).toContain('候选链路 HTTP 404');
+  expect(message).toContain('归档 1 个地址');
+  expect(target.domain).toBe('edge.example.com');
 });
