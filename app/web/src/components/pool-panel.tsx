@@ -53,6 +53,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const dirty = Boolean(edit && edit.text !== edit.original);
   const inTrash = poolKey === TRASH_POOL_KEY;
   const busy = model.writing || sideBusy || containerBusy;
+  const inputsLocked = busy || batch.checkingBatch || remoteBusy;
   const snapshot = useMemo(() => readPoolSnapshot(model.content ?? ''), [model.content]);
   const query = filter.trim() ? parsePoolFilter(filter) : null;
   const invalidFilter = Boolean(filter.trim() && !query);
@@ -162,17 +163,17 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
       <h2 class="card-title m-0 fw-bold"><Icon name="database" /> IP库管理</h2>
       <div class="pool-tools">
         <select id="pool-selector" class="form-select form-select-sm" aria-label="选择 IP 池" value={poolKey}
-          disabled={busy || batch.checkingBatch || remoteBusy} onChange={event => {
+          disabled={inputsLocked} onChange={event => {
             if (leaveGuard.current()) onPoolChange(event.currentTarget.value);
             else event.currentTarget.value = poolKey;
           }}>{poolOptions(pools, poolKey).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}</select>
-        <PoolActionMenu busy={busy || batch.checkingBatch || remoteBusy} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} />
+        <PoolActionMenu busy={inputsLocked} inTrash={inTrash} canDelete={NUMBERED_POOL_KEY_RE.test(poolKey)} actions={actions} />
       </div>
     </div>
     <ResourceFeedback state={pools} id="retry-pools" onRetry={refreshPools} />
     {!inTrash && <div class="pool-modes" role="group" aria-label="IP 池操作模式">
       {([['import', '导入与检测'], ['manage', '管理当前池']] as const).map(([value, label]) => <button type="button" class={mode === value ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-secondary'} data-pool-mode={value}
-        aria-pressed={mode === value} disabled={busy || batch.checkingBatch || remoteBusy} onClick={() => switchMode(value)}>{label}</button>)}
+        aria-pressed={mode === value} disabled={inputsLocked} onClick={() => switchMode(value)}>{label}</button>)}
     </div>}
     <p class="small text-secondary pool-summary">目标池：{targetName} · <span id="pool-count">{count ?? '—'}</span> 条{model.confirmed.has(poolKey) ? '（本次操作确认数量）' : '（读取快照）'}</p>
     {model.message && <p class="kv-alert compact pool-feedback" role="status">{model.message}</p>}
@@ -185,19 +186,19 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     {!inTrash && mode === 'import' ? <div class="ip-content-area pool-import">
       {sourcePool && <p class="small text-secondary">来源池：{poolName(sourcePool)} · 目标池：{targetName}</p>}
       <div class="pool-remote">
-        <input id="remote-url" class="form-control form-control-sm" type="url" aria-label="远程 TXT URL" placeholder="远程 TXT URL" value={url} disabled={remoteBusy || batch.checkingBatch || busy} onInput={event => setUrl(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') void loadRemote(); }} />
-        <button type="button" class="btn btn-sm btn-outline-primary" aria-label="从远程 URL 加载" disabled={remoteBusy || batch.checkingBatch || busy} onClick={() => void loadRemote()}><Icon name="download" />{remoteBusy ? '加载中…' : '加载'}</button>
+        <input id="remote-url" class="form-control form-control-sm" type="url" aria-label="远程 TXT URL" placeholder="远程 TXT URL" value={url} disabled={inputsLocked} onInput={event => setUrl(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') void loadRemote(); }} />
+        <button type="button" class="btn btn-sm btn-outline-primary" aria-label="从远程 URL 加载" disabled={inputsLocked} onClick={() => void loadRemote()}><Icon name="download" />{remoteBusy ? '加载中…' : '加载'}</button>
       </div>
       <p class="small text-secondary">远程内容由服务端规范化，无效原始行无法恢复；粘贴草稿保留原文并校验。</p>
       <label class="small" for="ip-input">导入草稿（尚未保存）</label>
-      <textarea id="ip-input" class="form-control ip-input mb-2" rows={6} value={batch.ipText} readOnly={batch.checkingBatch || remoteBusy || busy} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder="IPv4、[IPv6]:port、域名及已有元数据和备注" />
+      <textarea id="ip-input" class="form-control ip-input mb-2" rows={6} value={batch.ipText} readOnly={inputsLocked} aria-busy={batch.checkingBatch} onInput={event => changeDraft(event.currentTarget.value)} placeholder="IPv4、[IPv6]:port、域名及已有元数据和备注" />
       {invalid.length > 0 && <details class="kv-alert compact" open><summary>格式无效 {invalid.length} 条，请修正后直接追加</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
       {!probeConfigured && <p class="kv-alert compact">尚未配置主复检或备用复检接口，检测将报告探针异常。</p>}
       <div class="pool-buttons" id="main-actions">
         <button type="button" class={batch.checkingBatch ? 'btn btn-danger' : 'btn btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || busy || remoteBusy)} onClick={() => { model.invalidate(); if (batch.checkingBatch) batch.handleStopBatch(); else batch.handleCheckBatch(); }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止检测' : '检测'}</button>
-        <button type="button" class="btn btn-success" data-action="append-alive" disabled={busy || remoteBusy || batch.checkingBatch || model.previewing || !report?.items.some(item => item.status === 'alive')} onClick={() => void model.prepare(report!.items.filter(item => item.status === 'alive').map(item => item.line).join('\n'), 'append')}><Icon name="plus" />预览追加可用</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="append-input" disabled={busy || remoteBusy || batch.checkingBatch || model.previewing || !batch.ipText.trim() || !!invalid.length} onClick={() => void model.prepare(batch.ipText, 'append')}>直接追加输入地址</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={busy || batch.checkingBatch || remoteBusy} onClick={() => { changeDraft(''); setSourcePool(null); }}>清空输入</button>
+        <button type="button" class="btn btn-success" data-action="append-alive" disabled={inputsLocked || model.previewing || !report?.items.some(item => item.status === 'alive')} onClick={() => void model.prepare(report!.items.filter(item => item.status === 'alive').map(item => item.line).join('\n'), 'append')}><Icon name="plus" />预览追加可用</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="append-input" disabled={inputsLocked || model.previewing || !batch.ipText.trim() || !!invalid.length} onClick={() => void model.prepare(batch.ipText, 'append')}>直接追加输入地址</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" disabled={inputsLocked} onClick={() => { changeDraft(''); setSourcePool(null); }}>清空输入</button>
       </div>
       {batch.checkingBatch && <p class="small text-secondary">检测中，请等待或先停止再预览。</p>}
       {report && <div class="pool-report">
