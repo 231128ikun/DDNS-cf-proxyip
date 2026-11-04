@@ -89,17 +89,17 @@ export function DashboardPage({
               <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 工作台</h2>
             </div>
             <Console logs={consoleLogs} />
-              <div
+              {batch.status !== 'idle' && <div
                 class="progress console-progress mb-3"
                 role="progressbar"
                 aria-label="批量检测进度"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={batchProgress(batch, batchProgressState)}
-                aria-valuetext={batchProgressLabel(batchProgressState)}
+                aria-valuetext={batch.status === 'ready' ? '检测完成' : batch.status === 'error' ? '检测已停止' : batchProgressLabel(batchProgressState)}
               >
                 <div class="progress-bar console-progress-bar" style={{ width: `${batchProgress(batch, batchProgressState)}%` }} />
-              </div>
+              </div>}
             <button
               class="btn btn-dark w-100"
               type="button"

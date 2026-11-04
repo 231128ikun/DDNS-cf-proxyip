@@ -70,7 +70,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const orderGeneration = useRef(0);
   const orderModule = useRef<OrderDialogModule | null>(null);
   const OrderDialog = orderModule.current?.OrderDialog;
-  const startupLogged = useRef(false);
+  const startupLogged = useRef('');
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -181,12 +181,24 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   }, [toast]);
 
   useEffect(() => {
-    if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready' || pools.status !== 'ready' || !confirmedBindings) return;
-    if (targetChoices.length && !selectedTargetKey) return;
-    startupLogged.current = true;
-    appendConsoleLog('[配置] 已加载' + (config.data.source === 'kv' ? ' KV 配置' : '环境配置'), 'success');
-    appendConsoleLog(targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加', targetChoices.length ? 'success' : 'warning');
-  }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices]);
+    if (config.status === 'loading' || config.status === 'idle') return;
+    setConsoleLogs(current => current.map(entry => entry.id !== 0 ? entry : { ...entry,
+      tone: config.status === 'ready' ? 'success' : 'error',
+      message: config.status === 'ready' ? '[配置] 已加载' + (config.data.source === 'kv' ? ' KV 配置' : '环境配置')
+        : '[配置] 加载失败：' + config.message,
+    }));
+  }, [config]);
+
+  useEffect(() => {
+    const resources = [health, config, pools, bindings];
+    if (resources.some(resource => resource.status === 'loading' || resource.status === 'idle')) return;
+    const failed = resources.some(resource => resource.status === 'error');
+    const message = failed ? '[系统] 部分资源加载失败，请在对应区域重试'
+      : targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加';
+    if (message === startupLogged.current) return;
+    startupLogged.current = message;
+    appendConsoleLog(message, failed || !targetChoices.length ? 'warning' : 'success');
+  }, [appendConsoleLog, config, health, pools, bindings, targetChoices]);
 
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
     setPoolBusy(key);

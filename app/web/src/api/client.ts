@@ -205,13 +205,17 @@ export class ApiClient {
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };
     if (body !== undefined) init.body = JSON.stringify(body);
-    if (signal) init.signal = signal;
+    const deadline = method === 'GET' && /^\/api\/(config|health|pools|domain-bindings)$/.test(path)
+      ? AbortSignal.timeout(15_000) : undefined;
+    if (deadline) init.signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    else if (signal) init.signal = signal;
 
     const fetchImpl = this.fetchImpl;
     let response: Response;
     try {
       response = await fetchImpl(`${this.baseUrl}${path}`, init);
     } catch (error) {
+      if (deadline?.aborted && !signal?.aborted) throw new ApiError('读取数据超时，请重试', 0);
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       throw new ApiError('无法连接到 Worker API', 0);
     }
@@ -227,6 +231,7 @@ export class ApiClient {
     try {
       payload = await response.json();
     } catch {
+      if (deadline?.aborted && !signal?.aborted) throw new ApiError('读取数据超时，请重试', 0);
       throw new ApiError(`API 返回了无效响应 (HTTP ${response.status})`, response.status);
     }
 

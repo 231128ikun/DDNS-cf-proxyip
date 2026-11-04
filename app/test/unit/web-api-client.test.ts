@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../../web/src/api/client';
 
 describe('web API client', () => {
+  it('terminates a stalled startup read with a retryable error', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    try {
+      const client = new ApiClient({ fetchImpl: (_url, init) => new Promise((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      }) });
+      const result = expect(client.config()).rejects.toMatchObject({ status: 0, message: '读取数据超时，请重试' });
+      deadline.abort();
+      await result;
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    } finally { timeout.mockRestore(); }
+  });
   it('uses the shared check contract without adding a panel key header', async () => {
     const fetchMock = vi.fn(async function (this: unknown, _input: RequestInfo | URL, init?: RequestInit) {
       expect(this).toBeUndefined();
