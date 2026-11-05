@@ -183,12 +183,12 @@ try {
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, sessionId);
     const dark = await pageColor();
     assert.notEqual(dark, light, 'System theme did not switch the panel palette');
-    await setValue('.theme-select', 'light');
+    await click('#theme-toggle');
     assert.equal(await pageColor(), light, 'Explicit light theme did not override system theme');
-    await setValue('.theme-select', 'dark');
+    await click('#theme-toggle');
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, sessionId);
     await cdp.send('Page.reload', {}, sessionId);
-    await cdp.until(sessionId, 'document.querySelector(".theme-select")?.value === "dark" && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    await cdp.until(sessionId, 'document.querySelector("#theme-toggle use")?.getAttribute("href").endsWith("#moon") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
     assert.equal(await pageColor(), dark, 'Dark theme was lost after reloading');
     const captureTheme = async state => {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
@@ -206,8 +206,9 @@ try {
     await captureTheme('history');
     await key('Escape', 27);
     await cdp.until(sessionId, '!document.querySelector(".version-notes") && document.activeElement.id === "version-trigger"');
-    await setValue('.theme-select', 'system');
-    assert.equal(await pageColor(), light, 'Returning to system did not clear the override');
+    await click('#theme-toggle');
+    await click('#theme-toggle');
+    assert(await read('document.querySelector("#theme-toggle use").getAttribute("href").endsWith("#monitor") && !document.documentElement.style.colorScheme'), 'Returning to system did not clear the override');
     console.log(`${width}px: system and saved themes, click-only Markdown history and focus return PASS`);
   }
 } finally {

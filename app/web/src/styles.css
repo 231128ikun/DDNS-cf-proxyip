@@ -846,7 +846,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
   border-bottom: 1px solid var(--color-border);
   margin-bottom: var(--space-7);
 }
-.theme-select { width: auto; padding-inline-end: var(--space-10); }
+.btn-icon { width: var(--control-height-compact); padding: 0; }
 .btn:active:not(:disabled), .guide-toggle:active { filter: brightness(.87); }
 .nav-tab {
   display: inline-flex;
@@ -1027,8 +1027,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
             .pool-tools {
                 width: 100%;
                 display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
-                gap: var(--space-2);
+                grid-template-columns: minmax(0, 1fr) auto auto;
             }
             .pool-tools .form-select {
                 width: 100%;
@@ -1163,6 +1162,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .pool-header h2 { display: flex; align-items: center; gap: var(--space-2); }
 .pool-header h2 small { color: var(--color-text-muted); font-size: var(--font-size-xs); font-weight: normal; white-space: nowrap; }
 .pool-editor-toolbar { margin-bottom: var(--space-3); }
+.pool-source-actions { flex-wrap: wrap; }
 .pool-view-switch { display: flex; gap: var(--space-1); }
 .pool-view-switch .btn[aria-pressed=true] { color: var(--color-primary); background: var(--color-info-soft); border-color: var(--color-primary); }
 .pool-remote { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); margin-bottom: var(--space-3); }
@@ -1199,9 +1199,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .console-time, .console-kind { flex-shrink: 0; }
 @media (max-width: 480px) {
   .pool-header h2 { font-size: var(--font-size-md); }
-  .pool-header .pool-tools { flex: 1; }
-  .pool-header .pool-tools select { min-width: 0; flex: 1; width: auto; }
-  .pool-footer-secondary { width: 100%; }
+  .pool-footer-secondary, .pool-source-actions { width: 100%; }
 }
 .version-notes { max-width: var(--order-modal-width); display: grid; grid-template-columns: 1fr auto; align-items: center; gap: var(--space-5); text-align: left; font-size: var(--font-size-sm); }
 .version-notes section, .version-notes p { grid-column: 1 / -1; }

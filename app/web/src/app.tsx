@@ -16,6 +16,7 @@ import {
 } from './components/dashboard-page';
 import { PoolPanel } from './components/pool-panel';
 import { Hero } from './components/hero';
+import { Icon } from './components/icon';
 import { VersionHistory } from './components/version-history';
 import type { GlobalSettingKey } from './components/config-page';
 import { TopNav, type AppPage } from './components/top-nav';
@@ -27,7 +28,7 @@ import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } fr
 import { useBatchCheck } from './state/use-batch-check';
 import { formatProbeLog } from './components/probe-log';
 import { executionStatus } from './state/execution-status';
-import { setTheme } from './state/theme';
+import { currentTheme, cycleTheme } from './state/theme';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -38,6 +39,8 @@ interface Toast {
 }
 
 export function App({ client, initialConfig }: { readonly client: ApiClient; readonly initialConfig?: ConfigResponse }) {
+  const [theme, setTheme] = useState(currentTheme);
+  const themeLabel = `切换外观（当前：${theme === 'system' ? '跟随系统' : theme === 'light' ? '浅色' : '深色'}）`;
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
@@ -536,12 +539,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             setPage(next);
             return true;
           }} />
-          <select class="form-select form-select-sm theme-select" aria-label="界面外观"
-            value={document.documentElement.style.colorScheme || 'system'} onChange={event => setTheme(event.currentTarget.value)}>
-            <option value="system">跟随系统</option>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
-          </select>
+          <button id="theme-toggle" type="button" class="btn btn-sm btn-icon btn-outline-secondary" aria-label={themeLabel} title={themeLabel}
+            onClick={() => setTheme(cycleTheme(theme))}><Icon name={theme === 'system' ? 'monitor' : theme === 'light' ? 'sun' : 'moon'} /></button>
         </div>
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
