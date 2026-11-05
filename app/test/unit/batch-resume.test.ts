@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeBatch, mergeBatchProgress, remainingBatch, remainingBatchText } from '../../web/src/state/batch-resume';
+import { describeBatch, remainingBatch } from '../../web/src/state/batch-resume';
 
 describe('batch interruption progress', () => {
   it('separates immutable source, multi-result groups, invalid and incomplete lines', () => {
@@ -16,7 +16,7 @@ describe('batch interruption progress', () => {
   const input = '203.0.113.10:443 # first\ninvalid input\n203.0.113.12:443 # third';
 
   it('keeps only unfinished valid and invalid source lines for a resume', () => {
-    expect(remainingBatchText(input, new Set([0]))).toBe(
+    expect(remainingBatch(input, new Set([0])).text).toBe(
       'invalid input\n203.0.113.12:443 # third',
     );
   });
@@ -28,24 +28,19 @@ describe('batch interruption progress', () => {
     });
   });
 
-  it('applies completed results while preserving unfinished and invalid lines in source order', () => {
-    const text = mergeBatchProgress(input, new Map([
-      [0, [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4',
-        line: '203.0.113.10:443,AS64500,JP,v4 # first' }]],
-      [2, [{ address: '203.0.113.12:443', status: 'dead', exitFamily: 'ipv4',
-        line: '203.0.113.12:443' }]],
-    ]));
-
-    expect(text).toBe('203.0.113.10:443,AS64500,JP,v4 # first\ninvalid input');
+  it('only derives fields consumed by the results workspace', () => {
+    const report = describeBatch(input, new Map(), new Set());
+    expect(Object.keys(report).sort()).toEqual(['incomplete', 'invalid', 'items', 'source']);
   });
 
-  it('does not schedule or preserve duplicate targets when resuming', () => {
-    const duplicated = '203.0.113.10:443 # first\n203.0.113.10:443 # duplicate';
-
-    expect(remainingBatchText(duplicated, new Set())).toBe('203.0.113.10:443 # first');
-    expect(mergeBatchProgress(duplicated, new Map([
-      [0, [{ address: '203.0.113.10:443', status: 'alive', exitFamily: 'ipv4',
-        line: '203.0.113.10:443,AS64500,JP,v4 # first' }]],
-    ]))).toBe('203.0.113.10:443,AS64500,JP,v4 # first');
+  it('merges duplicate metadata and comments while preserving the first source index', () => {
+    const duplicated = '203.0.113.10:443\ninvalid input\n203.0.113.10:443,AS64500,JP,v4 # keep\n203.0.113.11:443';
+    expect(remainingBatch(duplicated, new Set())).toEqual({
+      text: '203.0.113.10:443,AS64500,JP,v4 # keep\ninvalid input\n203.0.113.11:443',
+      sourceIndices: [0, 1, 3],
+    });
+    expect(remainingBatch(duplicated, new Set([0])).text).toBe('invalid input\n203.0.113.11:443');
+    expect(describeBatch(duplicated, new Map(), new Set()).incomplete)
+      .toEqual(['203.0.113.10:443,AS64500,JP,v4 # keep', '203.0.113.11:443']);
   });
 });
