@@ -229,15 +229,10 @@ describe('shouldNotifyMaintenance', () => {
     insufficient: false,
     errors: [],
     probeErrors: 0,
-    poolStats: { before: {}, after: {}, pools: [], changed: false },
   };
 
-  it('always notifies for manual maintenance', () => {
-    expect(shouldNotifyMaintenance(quiet, true)).toBe(true);
-  });
-
-  it('stays quiet for an unchanged scheduled run', () => {
-    expect(shouldNotifyMaintenance(quiet, false)).toBe(false);
+  it('stays quiet for an unchanged run', () => {
+    expect(shouldNotifyMaintenance(quiet)).toBe(false);
   });
 
   it.each([
@@ -245,9 +240,8 @@ describe('shouldNotifyMaintenance', () => {
     ['insufficient', { insufficient: true }],
     ['execution errors', { errors: ['x'] }],
     ['probe errors', { probeErrors: 1 }],
-    ['pool count changes', { poolStats: { before: {}, after: { ip_pool_trash: 1 }, pools: [], changed: true } }],
-  ])('notifies scheduled maintenance when there are %s', (_label, patch) => {
-    expect(shouldNotifyMaintenance({ ...quiet, ...patch }, false)).toBe(true);
+  ])('notifies maintenance when there are %s', (_label, patch) => {
+    expect(shouldNotifyMaintenance({ ...quiet, ...patch })).toBe(true);
   });
 });
 
@@ -274,8 +268,8 @@ describe('runMaintenanceJob', () => {
     return { source, runner, notifier, stats, isManual: options.isManual };
   }
 
-  it('notifies on a manual run even when nothing changed', async () => {
-    const job = createJob({ isManual: true });
+  it.each([true, false])('stays silent when DNS is unchanged, including manual maintenance: %s', async isManual => {
+    const job = createJob({ isManual });
 
     const result = await runMaintenanceJob({
       source: job.source,
@@ -287,9 +281,9 @@ describe('runMaintenanceJob', () => {
     });
 
     expect(job.source.loads).toBe(1);
-    expect(result.notification).toEqual({ sent: true, reason: 'sent' });
-    expect(job.notifier.messages).toHaveLength(1);
-    expect(job.notifier.messages[0]).toContain('DDNS 手动维护报告');
+    expect(result.notification).toBeNull();
+    expect(job.notifier.messages).toEqual([]);
+    expect(job.stats.saved).toBeNull();
   });
 
   it('stays silent on an unchanged scheduled run', async () => {
@@ -306,6 +300,22 @@ describe('runMaintenanceJob', () => {
 
     expect(result.notification).toBeNull();
     expect(job.notifier.messages).toEqual([]);
+  });
+
+  it.each([true, false])('ignores pool-only changes from cleanup or an older notification baseline: %s', async isManual => {
+    const stats = new StubStats([
+      [{ key: 'ip_pool_default', name: '默认池', count: 8 }, { key: 'ip_pool_trash', name: '垃圾桶', count: 2 }],
+      [{ key: 'ip_pool_default', name: '默认池', count: 6 }, { key: 'ip_pool_trash', name: '垃圾桶', count: 4 }],
+    ], { ip_pool_default: 12, ip_pool_trash: 0 });
+    const job = createJob({ isManual, stats });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await runMaintenanceJob({ source: job.source, maintainer: job.runner, notifier: job.notifier,
+        stats, fallbackZone, isManual });
+      expect(result.run.changed).toBe(false);
+      expect(result.notification).toBeNull();
+    }
+    expect(job.notifier.messages).toEqual([]);
+    expect(stats.saved).toBeNull();
   });
 
   it('notifies the scheduled run once DNS actually changes', async () => {
@@ -358,7 +368,8 @@ describe('runMaintenanceJob', () => {
       ],
       { ip_pool_default: 1, ip_pool_trash: 0 },
     );
-    const job = createJob({ isManual: false, stats });
+    const job = createJob({ isManual: false, stats,
+      report: command => createReport({ target: command.target, dnsUpdated: true, added: 1 }) });
 
     const result = await runMaintenanceJob({
       source: job.source,
@@ -372,7 +383,6 @@ describe('runMaintenanceJob', () => {
     expect(result.run.poolStats).toMatchObject({
       before: { ip_pool_default: 1, ip_pool_trash: 0 },
       after: { ip_pool_default: 0, ip_pool_trash: 1 },
-      changed: true,
     });
     expect(result.notification).toEqual({ sent: true, reason: 'sent' });
     expect(job.notifier.messages[0]).toContain('<b>默认池</b>\n   维护前: 1 个\n   维护后: 0 个\n   📉 变化: -1');
@@ -409,6 +419,7 @@ describe('runMaintenanceJob', () => {
     const job = createJob({
       isManual: false,
       stats,
+      report: command => createReport({ target: command.target, dnsUpdated: true, added: 1 }),
       notifyResult: { sent: false, reason: 'failed' },
     });
 
