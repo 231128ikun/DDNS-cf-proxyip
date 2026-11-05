@@ -168,4 +168,8 @@ it('reports an archived failed pool candidate with its address and reason', asyn
   expect(message).toContain('候选链路 HTTP 404');
   expect(message).toContain('归档 1 个地址');
   expect(target.domain).toBe('edge.example.com');
+  const removed = { ...changed, results: [{ ...changed.results[0]!, report: { ...changed.results[0]!.report!,
+    dns: { ...report.dns, removed: ['203.0.113.99'] } } }] };
+  const withoutDuplicate = buildTelegramMaintenanceMessage(removed, { isManual: true });
+  expect(withoutDuplicate.split('<code>' + failedAddress + '</code>')).toHaveLength(2);
 });

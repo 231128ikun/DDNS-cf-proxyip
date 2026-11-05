@@ -84,7 +84,7 @@ function formatTarget(result: MaintenanceRunResult): string[] {
     lines.push('   ' + (check?.status === 'dead' ? '❌' : '⚠️') + ' <code>' + escapeHtml(result.mode === 'A' ? check?.address ?? value : value) + '</code>',
       '      ' + escapeHtml(checkMetadata(check)), '      原因: ' + escapeHtml(removalReason(check)));
   }
-  const removed = new Set(result.dns.removed);
+  const removed = new Set(result.dns.removed.flatMap(value => [value, checks.get(value)?.address ?? value]));
   for (const value of result.archivedAddresses ?? []) {
     if (!removed.has(value)) lines.push('🗑️ <code>' + escapeHtml(value) + '</code> · ' + escapeHtml(removalReason(checks.get(value))));
   }
