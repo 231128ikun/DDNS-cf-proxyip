@@ -50,6 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ui-review
+          retention-days: 14
           path: app/.wrangler/tmp/ui-acceptance
           include-hidden-files: true
           if-no-files-found: ignore
