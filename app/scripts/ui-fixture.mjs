@@ -324,7 +324,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       : url.pathname.includes('/batch-check-') ? fixture.batchChunkDelay
       : url.pathname.includes('/index-') && extname(file) === '.js' ? fixture.entryChunkDelay : 0;
     if (chunkDelay) await new Promise(resolve => setTimeout(resolve, chunkDelay));
-    response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[extname(file)] || 'application/octet-stream' });
+    response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

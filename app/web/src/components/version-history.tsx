@@ -1,21 +1,38 @@
 import { useState } from 'preact/hooks';
-import changelog from '../../../../CHANGELOG.md?raw';
+import changelogUrl from '../../../../CHANGELOG.md?url&no-inline';
+import { loadChangelog } from '../api/client';
+import { Modal } from './modal';
 
-const releases = changelog.split(/^## /m).slice(1).map(section => ({
-  version: section.match(/^\[([^\]]+)\]/)?.[1] ?? '',
-  notes: section.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2)),
-}));
+function inlineMarkdown(text: string) {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map((part, index) =>
+    part.startsWith('`') && part.endsWith('`') ? <code key={index}>{part.slice(1, -1)}</code>
+      : part.startsWith('**') && part.endsWith('**') ? <strong key={index}>{part.slice(2, -2)}</strong> : part);
+}
 
 export function VersionHistory({ version }: { readonly version: string }) {
   const [open, setOpen] = useState(false);
-  return <div class="version-history" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
-    onFocusIn={() => setOpen(true)} onFocusOut={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}>
+  const [notes, setNotes] = useState<string | null>();
+  const close = () => setOpen(false);
+  const load = () => {
+    setNotes(undefined);
+    void loadChangelog(changelogUrl).then(setNotes, () => setNotes(null));
+  };
+  return <>
     DDNS Pro · {' '}
-    <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="版本更新历史" aria-expanded={open} aria-controls="version-notes"
-      onClick={() => setOpen(true)} onKeyDown={event => { if (event.key === 'Escape') setOpen(false); }}>{version}</button>
-    <div id="version-notes" class="version-notes card p-4" role="region" aria-label="版本更新历史" hidden={!open}>
-      <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="关闭更新历史" onClick={() => setOpen(false)}>关闭</button>
-      {releases.map(release => <section key={release.version}><strong>{release.version}</strong><ul>{release.notes.map(note => <li key={note}>{note}</li>)}</ul></section>)}
-    </div>
-  </div>;
+    <button id="version-trigger" type="button" class="btn btn-sm btn-outline-secondary" aria-label={`版本历史：${version}`}
+      aria-haspopup="dialog" onClick={() => { setOpen(true); if (!notes) load(); }}>{version}</button>
+    {open && <Modal id="version-history-title" title="版本历史" className="version-notes" returnFocusId="version-trigger" onClose={close}>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onClick={close}>关闭</button>
+      {notes === undefined ? <p role="status">正在读取更新日志…</p> : notes === null
+        ? <p role="status">更新日志暂不可用。 <button type="button" class="btn btn-sm btn-outline-secondary" onClick={load}>重试</button></p>
+        : notes.split(/^## /m).slice(1).map(section => {
+          const [heading = '', ...lines] = section.trim().split(/\r?\n/);
+          const [name, date] = heading.split(' - ');
+          return <section key={heading}>
+            <h3>{name?.replace(/^\[|\]$/g, '')} {date && <small class="text-secondary">{date}</small>}</h3>
+            <ul>{lines.filter(line => line.startsWith('- ')).map(line => <li key={line}>{inlineMarkdown(line.slice(2))}</li>)}</ul>
+          </section>;
+        })}
+    </Modal>}
+  </>;
 }

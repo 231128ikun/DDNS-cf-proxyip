@@ -43,6 +43,14 @@ export function loadBatchCheckModule(): Promise<typeof import('./batch-check')> 
   return import('./batch-check');
 }
 
+let changelog: Promise<string> | undefined;
+export function loadChangelog(url: string): Promise<string> {
+  return changelog ??= fetch(url, { signal: AbortSignal.timeout(8000) }).then(response => {
+    if (!response.ok) throw new Error('更新日志暂不可用');
+    return response.text();
+  }).catch(error => { changelog = undefined; throw error; });
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;

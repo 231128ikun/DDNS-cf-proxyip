@@ -27,6 +27,10 @@ try {
   const toggle = id => click(`#page-config label:has(#${id})`);
   const writes = () => server.requests.filter(request => request.path === '/api/config' && request.method === 'PUT');
   const probes = () => server.requests.filter(request => ['/api/current-status', '/api/check'].includes(request.path)).length;
+  const key = async (key, windowsVirtualKeyCode) => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode, ...(key === 'Enter' ? { text: '\r' } : {}) }, sessionId);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode }, sessionId);
+  };
   for (const width of [375, 1440]) {
     Object.assign(server.fixture, createUiFixture());
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
@@ -42,15 +46,49 @@ try {
     await cdp.until(sessionId, 'document.querySelectorAll("#status-table .status-badge.ok").length === 2 && !document.querySelector("#status-table").textContent.includes("8443")');
     const compact = await read(`(() => { const chip=document.querySelector('.target-summary').getBoundingClientRect(); const domain=document.querySelector('.target-summary-domain').getBoundingClientRect(); const meta=document.querySelector('.target-summary-meta').getBoundingClientRect(); const title=document.querySelector('#status-overview-title').getBoundingClientRect(); return { height:chip.height, inline:Math.abs((domain.top+domain.bottom)/2-(meta.top+meta.bottom)/2)<2, aligned:innerWidth<992 || Math.abs((title.top+title.bottom)/2-(chip.top+chip.bottom)/2)<2 }; })()`);
     assert(compact.height >= 32 && compact.height <= 40 && compact.inline && compact.aligned, 'Domain chip is too tall, stacked, or misaligned with the section title');
-    await click('#tab-config');
+    assert(await read('document.querySelector("#status-display").scrollWidth <= document.querySelector("#status-display").clientWidth'), 'DNS results require horizontal scrolling');
+    const exits = '#status-table .status-row:first-child';
+    if (width === 375) {
+      assert(await read(`!document.querySelector('${exits} .exit-ip').checkVisibility()`), 'Exit details are expanded by default on mobile');
+      await click(`${exits} .status-exit-toggle`);
+      assert(await read(`document.querySelector('${exits} .exit-ip').checkVisibility() && document.querySelector('${exits} .status-exit-toggle').getAttribute('aria-expanded') === 'true'`), 'Exit details did not open');
+      const expanded = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+      writeFileSync(join(out, 'dashboard-375-exits.png'), Buffer.from(expanded.data, 'base64'));
+      await click(`${exits} .status-exit-toggle`);
+    } else {
+      assert(await read(`document.querySelector('${exits} .exit-ip').checkVisibility() && !document.querySelector('${exits} .status-exit-toggle').checkVisibility()`), 'Desktop table hides exit details');
+    }
+    await read('document.querySelector("#tab-dashboard").focus()');
+    await key('ArrowRight', 39);
+    await cdp.until(sessionId, 'document.activeElement.id === "tab-config" && document.querySelector("#tab-config").getAttribute("aria-selected") === "true"');
+    assert(await read('document.querySelector("#tab-dashboard").tabIndex === -1 && document.querySelector("#tab-config").tabIndex === 0'), 'Both tabs remain in the Tab order');
     await cdp.until(sessionId, 'Boolean(document.querySelector(".config-details-summary")?.offsetWidth)');
     await click('.config-details-summary > :first-child');
     assert(await read('document.querySelectorAll(".config-details-body input[role=switch]").length === 2 && [...document.querySelectorAll("#page-config input[role=switch]")].every(input => input.checkVisibility()) && document.querySelector(".config-task-settings").getBoundingClientRect().bottom <= document.querySelector("#cfg-probe-ipv4").getBoundingClientRect().top'), 'Task switches are not inside the expanded configuration above its parameters');
+    const beforeInvalid = writes().length;
+    await setValue('#cfg-concurrent-checks', '0');
+    await click('#btn-save-config');
+    await cdp.until(sessionId, 'document.activeElement.id === "cfg-concurrent-checks" && document.querySelector("#cfg-concurrent-checks-error")?.checkVisibility()');
+    assert(await read('document.querySelector("#cfg-concurrent-checks").getAttribute("aria-invalid") === "true"'));
+    assert.equal(writes().length, beforeInvalid, 'Invalid form was sent to KV');
+    const errorShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+    writeFileSync(join(out, `config-${width}-validation.png`), Buffer.from(errorShot.data, 'base64'));
+    if (width === 375) {
+      const prompt = cdp.wait(sessionId, 'Page.javascriptDialogOpening');
+      await read('setTimeout(() => location.reload(), 100); true');
+      assert.equal((await prompt).type, 'beforeunload', 'Refreshing an unsaved form did not ask for confirmation');
+      await cdp.send('Page.handleJavaScriptDialog', { accept: false }, sessionId);
+      assert(await read('document.querySelector("#cfg-concurrent-checks").value === "0"'), 'Canceling reload discarded the draft');
+      await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, sessionId);
+      assert(await read('getComputedStyle(document.querySelector(".toast")).transitionDuration === "0s" && getComputedStyle(document.querySelector(".app-entrance")).animationName === "none"'), 'Reduced motion leaves entrance or toast movement enabled');
+      await cdp.send('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+    }
     await setValue('#cfg-concurrent-checks', '7');
+    assert(await read('!document.querySelector("#cfg-concurrent-checks-error")'), 'Correcting the value did not clear its error');
     await click('#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
     await setValue('#zone-name-0', '未提交编辑草稿');
     const assertDraft = async () => {
-      assert(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#zone-name-0")?.value === "未提交编辑草稿" && Boolean(document.querySelector("#btn-save-config")?.offsetWidth)'), 'Toggle write replaced unsaved settings or editor draft');
+      assert(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#zone-name-0")?.value === "未提交编辑草稿" && document.querySelector("#btn-save-config").disabled'), 'Unconfirmed edits were lost or can be skipped by saving');
     };
     server.fixture.configSaveDelay = 400;
     server.fixture.failConfigSave = true;
@@ -96,7 +134,9 @@ try {
     assert.equal(server.fixture.config.scheduledEnabled, false);
     assert.equal(server.fixture.config.tgEnabled, true);
     assert(await read('!document.querySelector("#cfg-scheduled-enabled").checked && document.querySelector("#cfg-tg-enabled").checked'));
-    await click('#tab-dashboard');
+    await read('document.querySelector("#tab-config").focus()');
+    await key('Home', 36);
+    await cdp.until(sessionId, 'document.activeElement.id === "tab-dashboard" && document.querySelector("#tab-dashboard").getAttribute("aria-selected") === "true"');
     await flush();
     assert(await read('![...document.querySelectorAll("input[role=switch]")].some(input => input.checkVisibility())'), 'Switches remain visible on the dashboard');
     assert(await read('document.documentElement.scrollWidth <= innerWidth'), 'Configuration switches or live DNS toolbar overflows');
@@ -109,7 +149,7 @@ try {
     await flush();
     const configShot=await cdp.send('Page.captureScreenshot', {format:'png'}, sessionId);
     writeFileSync(join(out, `config-${width}.png`), Buffer.from(configShot.data,'base64'));
-    console.log(`${width}px configuration switches: partial saves, failure recovery, shared lock, draft preservation and target context PASS`);
+    console.log(`${width}px: DNS layout, keyboard tabs, inline validation, draft protection and shared save lock PASS`);
     Object.assign(server.fixture, createUiFixture());
     const original = server.fixture.config.targets[width === 375 ? 1 : 0];
     const prefix = `${'long-domain.'.repeat(8)}node`;
@@ -138,6 +178,37 @@ try {
       && longTarget.badge >= 16 && longTarget.metadata >= 30 && longTarget.arrowSpace >= 20 && !longTarget.overflow,
     `Long target hides the record type, metadata, dropdown or full domain: ${JSON.stringify(longTarget)}`);
     console.log(`${width}px long ${original.mode} target: ellipsis, full name and inline metadata PASS`);
+    const pageColor = () => read('getComputedStyle(document.body).backgroundColor');
+    const light = await pageColor();
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, sessionId);
+    const dark = await pageColor();
+    assert.notEqual(dark, light, 'System theme did not switch the panel palette');
+    await setValue('.theme-select', 'light');
+    assert.equal(await pageColor(), light, 'Explicit light theme did not override system theme');
+    await setValue('.theme-select', 'dark');
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, sessionId);
+    await cdp.send('Page.reload', {}, sessionId);
+    await cdp.until(sessionId, 'document.querySelector(".theme-select")?.value === "dark" && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    assert.equal(await pageColor(), dark, 'Dark theme was lost after reloading');
+    const captureTheme = async state => {
+      const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+      writeFileSync(join(out, `dark-${state}-${width}.png`), Buffer.from(shot.data, 'base64'));
+    };
+    await captureTheme('dashboard');
+    await click('#tab-config');
+    await cdp.until(sessionId, 'document.querySelector(".config-details-summary")?.checkVisibility()');
+    await click('.config-details-summary > :first-child');
+    await captureTheme('config');
+    await read('document.querySelector("#version-trigger").focus()');
+    assert(await read('!document.querySelector(".version-notes") && !performance.getEntriesByType("resource").some(entry => /CHANGELOG-.+\\.md/.test(entry.name))'), 'Focusing the version opened or loaded history');
+    await key('Enter', 13);
+    await cdp.until(sessionId, 'document.querySelector(".version-notes li code")?.textContent === "CHANGELOG.md" && document.querySelector(".version-notes li strong")?.textContent === "界面外观"');
+    await captureTheme('history');
+    await key('Escape', 27);
+    await cdp.until(sessionId, '!document.querySelector(".version-notes") && document.activeElement.id === "version-trigger"');
+    await setValue('.theme-select', 'system');
+    assert.equal(await pageColor(), light, 'Returning to system did not clear the override');
+    console.log(`${width}px: system and saved themes, click-only Markdown history and focus return PASS`);
   }
 } finally {
   await browser?.close();

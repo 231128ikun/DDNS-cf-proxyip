@@ -27,6 +27,7 @@ import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } fr
 import { useBatchCheck } from './state/use-batch-check';
 import { formatProbeLog } from './components/probe-log';
 import { executionStatus } from './state/execution-status';
+import { setTheme } from './state/theme';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -529,7 +530,19 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       />
 
       <div class="container">
-        <TopNav page={page} onPageChange={next => { if (next === page || poolLeaveGuard.current()) setPage(next); }} />
+        <div class="page-nav">
+          <TopNav page={page} onPageChange={next => {
+            if (next !== page && !poolLeaveGuard.current()) return false;
+            setPage(next);
+            return true;
+          }} />
+          <select class="form-select form-select-sm theme-select" aria-label="界面外观"
+            value={document.documentElement.style.colorScheme || 'system'} onChange={event => setTheme(event.currentTarget.value)}>
+            <option value="system">跟随系统</option>
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </div>
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
             config={config} health={health}
@@ -566,7 +579,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
               pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
               onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (
-            <p class="text-secondary text-center py-4">正在加载配置中心…</p>
+            <p id="page-config" role="tabpanel" aria-labelledby="tab-config" class="text-secondary text-center py-4">正在加载配置中心…</p>
           )}
         </div>
       </div>

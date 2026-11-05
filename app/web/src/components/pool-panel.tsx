@@ -10,6 +10,7 @@ import type { useBatchCheck } from '../state/use-batch-check';
 import { PoolWorkspace } from '../state/pool-workspace';
 import { poolOptions } from '../state/pool-options';
 import { Icon } from './icon';
+import { AddressText } from './address-text';
 import type { ConsoleTone } from './dashboard-page';
 import { ResourceFeedback } from './resource-feedback';
 import { probeStatusLabel } from './probe-status';
@@ -65,11 +66,18 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const inputCount = inputSnapshot.entries.size;
   const rows = useMemo(() => report ? [
     ...report.items.map(item => ({ key: item.address, line: item.line, label: item.address, status: item.status,
-      detail: [item.colo, item.latencyMs === undefined ? '' : `${item.latencyMs}ms`, item.country, item.city || item.region, item.asn].filter(Boolean).join(' · '),
+      detail: [
+        [item.colo, ''],
+        [item.latencyMs === undefined ? '' : `${item.latencyMs}ms`, 'syntax-number'],
+        [item.exitFamily === 'dual' ? 'IPv4/IPv6' : item.exitFamily === 'unknown' ? '' : item.exitFamily.toUpperCase(), 'syntax-type'],
+        [item.country, ''],
+        [item.city || item.region, ''],
+        [item.asn, 'syntax-meta'],
+      ] as const,
       reason: item.status === 'alive' ? '' : item.message ?? item.code ?? '',
     })),
-    ...report.invalid.map(line => ({ key: line, line, label: line, status: 'invalid', detail: '', reason: '' })),
-    ...report.incomplete.map(line => ({ key: line, line, label: line, status: 'incomplete', detail: '', reason: '' })),
+    ...report.invalid.map(line => ({ key: line, line, label: line, status: 'invalid', detail: [], reason: '' })),
+    ...report.incomplete.map(line => ({ key: line, line, label: line, status: 'incomplete', detail: [], reason: '' })),
   ].filter(item => matches(item.line)) : [], [report, matches]);
   const shown = useMemo(() => rows.filter(item => category === 'all' || item.status === category), [rows, category]);
   const selectedRows = useMemo(() => rows.filter(item => selected.has(item.key)), [rows, selected]);
@@ -214,7 +222,12 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         </div>
         <ul class="pool-result-list" aria-label="检测结果列表">{shown.map(item => <li key={item.key}><label>
           <input type="checkbox" aria-label={`选择 ${item.label}`} disabled={locked} checked={selected.has(item.key)} onChange={event => choose(item.key, event.currentTarget.checked)} />
-          <span><strong>{item.label}</strong><small>{item.status === 'alive' || item.status === 'dead' || item.status === 'unknown' ? probeStatusLabel(item.status) : statusName(item.status)}{item.detail && ' · ' + item.detail}</small>{item.reason && <small class="pool-diagnostic">{item.reason}</small>}</span>
+          <span><strong>{item.detail.length ? <AddressText value={item.label} /> : item.label}</strong>
+            <small><span class={item.status === 'alive' ? 'text-success' : item.status === 'dead' || item.status === 'invalid' ? 'text-danger' : item.status === 'unknown' ? 'text-warning' : ''}>
+              {item.status === 'alive' || item.status === 'dead' || item.status === 'unknown' ? probeStatusLabel(item.status) : statusName(item.status)}
+            </span>{item.detail.map(([value, style], index) => value && <span key={index}> · <span class={style}>{value}</span></span>)}</small>
+            {item.reason && <small class="pool-diagnostic">{item.reason}</small>}
+          </span>
         </label></li>)}{!shown.length && <li class="text-secondary">没有匹配结果</li>}</ul>
       </div>}
     </div>
@@ -226,6 +239,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     {invalid.length > 0 && view === 'input' && <details class="small text-danger"><summary>无效内容 {invalid.length} 行</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
     {model.message && <p class="pool-feedback small" role="status">{model.message}</p>}
     <footer class="pool-footer" id="main-actions">
+      <div class="pool-footer-primary" role="group" aria-label="检测和出入库">
       {cleaning && <button type="button" class="btn btn-sm btn-danger" data-action="stop-clean" onClick={() => cleanController.current?.abort()}>停止洗库</button>}
       {view === 'input' ? <>
         <button type="button" class={batch.checkingBatch ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || !probeConfigured || locked || badFilter || !inputCount)}
@@ -235,7 +249,8 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
           <button type="button" class="btn btn-sm btn-outline-danger" data-action="remove-input" disabled={locked || badFilter || !inputCount || Boolean(invalid.length)} onClick={() => void write('remove')}>从库剔除</button>
         </>}
       </> : <>{batch.checkingBatch && <button type="button" class="btn btn-sm btn-danger" aria-label="停止批量检测" onClick={batch.handleStopBatch}>停止</button>}<button type="button" class="btn btn-sm btn-primary" data-action="retain-results" disabled={locked || !selectedRows.length} onClick={() => { setQuery(''); changeInput(selectedRows.map(item => item.line).join('\n')); }}>保留到输入 {selectedRows.length || ''}</button></>}
-      <div class="pool-footer-secondary">
+      </div>
+      <div class="pool-footer-secondary" role="group" aria-label="输入和导出">
         <button type="button" class="btn btn-sm btn-outline-secondary" disabled={view === 'input' ? !inputText : !rows.length} onClick={download}>导出</button>
         <button type="button" class="btn btn-sm btn-outline-secondary" data-action="clear-input" disabled={locked || !batch.ipText} onClick={() => { setQuery(''); changeInput(''); }}>清空</button>
       </div>
@@ -245,9 +260,10 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
 
 function Help({ label, children }: { readonly label: string; readonly children: ComponentChildren }) {
   const [open, setOpen] = useState(false);
-  return <div class="pool-help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setOpen(false); }}>
-    <button type="button" class="guide-toggle" aria-label={label} aria-expanded={open} aria-describedby={open ? 'pool-filter-help' : undefined} onClick={() => setOpen(true)}><Icon name="help" /></button>
-    <div id="pool-filter-help" class="pool-help-content" role="tooltip" hidden={!open}>{children}</div>
+  return <div class="pool-help" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}
+    onKeyDown={event => { if (event.key === 'Escape') setOpen(false); }}>
+    <button type="button" class="guide-toggle" aria-label={label} aria-expanded={open} aria-controls="pool-filter-help" onClick={() => setOpen(value => !value)}><Icon name="help" /></button>
+    <div id="pool-filter-help" class="pool-help-content" role="region" aria-label={label} hidden={!open}>{children}</div>
   </div>;
 }
 
