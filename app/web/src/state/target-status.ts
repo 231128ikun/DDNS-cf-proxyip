@@ -1,7 +1,3 @@
-import type { TargetConfig } from '../../../src/contracts/config';
-import { bindingKey } from '../../../src/domain/domain-binding';
-import { errorMessage, isUnavailable } from '../api/errors';
-import type { RequestState } from './request-state';
 import type { PoolCheckItemResponse } from '../../../src/contracts/pool-check';
 import type { TargetStatusRecord, TargetStatusResponse } from '../../../src/contracts/target-status';
 import { formatProxyAuthority } from '../../../src/domain/proxy-target';
@@ -29,6 +25,7 @@ export async function loadTargetStatus(
   client: ApiClient, key: string, port: number | 'any', signal?: AbortSignal,
   onProgress?: (status: TargetStatusView) => void,
 ): Promise<TargetStatusView> {
+  signal?.throwIfAborted();
   const status = await client.currentStatus(key, signal);
   if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
   onProgress?.({ ...status, probes: [] });
@@ -39,37 +36,6 @@ export async function loadTargetStatus(
     probes.push(item);
     onProgress?.({ ...status, probes: [...probes] });
   }, 'all');
+  signal?.throwIfAborted();
   return { ...status, probes: checked.items };
-}
-
-export interface TargetStatusesView {
-  readonly byKey: Readonly<Record<string, RequestState<TargetStatusView>>>;
-}
-
-/** 所有管理域名同时加载，逐域名、逐地址发布结果；切换目标复用已加载状态。 */
-export async function loadTargetStatuses(
-  client: ApiClient, targets: readonly Pick<TargetConfig, 'domain' | 'mode' | 'port'>[], signal?: AbortSignal,
-  onProgress?: (status: TargetStatusesView) => void,
-): Promise<TargetStatusesView> {
-  if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
-  const byKey: Record<string, RequestState<TargetStatusView>> = Object.fromEntries(targets.map(target => [bindingKey(target), { status: 'loading' }]));
-  const publish = (): void => { if (!signal?.aborted) onProgress?.({ byKey: { ...byKey } }); };
-  publish();
-  await Promise.all(targets.map(async target => {
-    const key = bindingKey(target);
-    try {
-      const data = await loadTargetStatus(client, key, target.port, signal, data => {
-        byKey[key] = { status: 'ready', data, refreshing: true };
-        publish();
-      });
-      if (signal?.aborted) return;
-      byKey[key] = { status: 'ready', data };
-    } catch (error) {
-      if (signal?.aborted) return;
-      byKey[key] = { status: 'error', message: errorMessage(error), unavailable: isUnavailable(error) };
-    }
-    publish();
-  }));
-  if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
-  return { byKey };
 }
