@@ -1,4 +1,4 @@
-import type { MaintenanceRunReport } from '../application/maintain-managed-targets';
+import { shouldNotifyMaintenance, type MaintenanceRunReport } from '../application/maintain-managed-targets';
 import { toMaintenanceTargetResult } from '../application/maintenance-summary';
 import type { MaintenanceAddressCheck, MaintenanceRunResult } from '../contracts/maintenance';
 import { getPoolFixedName, TRASH_POOL_KEY } from '../contracts/pool';
@@ -13,7 +13,8 @@ export interface TelegramMaintenanceMessageOptions {
 
 /** 完整列出各域名确认的解析地址；长报告由通知适配器按完整行分段。 */
 export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, options: TelegramMaintenanceMessageOptions): string {
-  const title = options.isManual ? 'DDNS 手动维护报告' : 'DDNS 自动维护报告';
+  const alert = !run.changed && shouldNotifyMaintenance(run);
+  const title = `DDNS ${options.isManual ? '手动' : '自动'}维护${alert ? '告警' : '报告'}`;
   const lines = [
     (options.isManual ? '🔧' : '⚙️') + ' <b>' + title + '</b>',
     '────────',
