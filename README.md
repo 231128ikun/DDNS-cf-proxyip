@@ -1,6 +1,6 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，从绑定的 IP 池补充可用地址，维护一个或多个域名的 `A`、`AAAA` 或 `TXT` 记录，无需自建服务器或另行部署检测服务。
+DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，从绑定的 IP 池补充可用地址，维护一个或多个域名的 `A`、`AAAA` 或 `TXT` 记录。
 
 ## ✨ 核心功能
 
@@ -11,7 +11,7 @@ DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，�
 
 ## 🚀 快速部署
 
-> 检测功能已内置，无需预先配置检测接口。面板密码可选，未设置时管理接口免登录。
+> 面板密码可选，未设置时管理接口免登录。
 
 ### ① 一键部署
 
@@ -133,9 +133,11 @@ npm run deploy
 <details>
 <summary>自定义检测设置（可选）</summary>
 
-Worker 自身完成候选地址的 TCP/TLS 检测，并通过出口请求确认连通性和出口信息。默认设置可直接使用，无需单独搭建检测服务。
+Worker 通过原生 TCP/TLS 检测候选地址，并读取出口信息。
 
-高级设置保留备用检测接口：原生检测未成功时，使用预置地址复检一次；可修改或清空，清空后改为原生复检。出口地址也可按需调整。接口不可用时会报告异常，不作为节点失效。
+原生检测未成功时使用备用接口复检一次。备用接口可在高级设置中修改或清空，清空后改为原生复检；接口异常不作为节点失效。
+
+备用检测接口可参考 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
 
 </details>
 
