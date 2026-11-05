@@ -28,6 +28,19 @@ describe('PoolService', () => {
     expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('203.0.113.10:443,AS64500,US,v4 # new');
   });
 
+  it('deduplicates equivalent IPv6 spellings and removes only the matching port', async () => {
+    const catalog = new MemoryPoolCatalog({
+      [DEFAULT_POOL_KEY]: '[2001:0db8:0:0:0:0:0:1]:443,AS64500,JP,v6 # keep\n[2001:db8::1]:8443',
+    });
+    const service = new PoolService(catalog);
+    expect(await service.save(DEFAULT_POOL_KEY, '[2001:db8::1]:443', 'append'))
+      .toMatchObject({ count: 2, added: 0 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('[2001:db8::1]:443,AS64500,JP,v6 # keep');
+    expect(await service.save(DEFAULT_POOL_KEY, '[2001:0db8:0:0:0:0:0:1]:443', 'remove'))
+      .toMatchObject({ count: 1, removed: 1 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('[2001:db8::1]:8443,null,null,null');
+  });
+
   it('removes selected entries without rewriting unrelated entries', async () => {
     const catalog = new MemoryPoolCatalog({
       [DEFAULT_POOL_KEY]: '203.0.113.10:443,AS64500,US,v4 # keep\n203.0.113.11:443 # drop',

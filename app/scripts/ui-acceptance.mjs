@@ -35,8 +35,38 @@ try {
     Object.assign(server.fixture, createUiFixture());
     server.fixture.poolContents.ip_pool_default = '# 保留标题\n203.0.113.10:443,AS64500,JP,v4 # 保留备注\n203.0.113.10:8443,AS64500,JP,v4 # 其他端口';
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
+    const startupStart = server.requests.length;
     await cdp.send('Page.navigate', { url: server.base }, sessionId);
     await until('document.querySelector("#ip-input") && document.querySelector("#log-window").textContent.includes("就绪") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    const statusReads = start => server.requests.slice(start).filter(request => request.path === '/api/current-status');
+    assert.deepEqual(statusReads(startupStart).map(request => request.query.target), ['edge.example.com|A'], 'Startup read unselected domains');
+    assert.equal(server.requests.slice(startupStart).filter(request => request.path === '/api/check').length, 2, 'Startup probed unselected domains');
+    const switchStart = server.requests.length;
+    await choose('.target-select-overlay', 'proxy.example.com|TXT');
+    await until('document.querySelector("#status-table").textContent.includes("8443") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    assert.deepEqual(statusReads(switchStart).map(request => request.query.target), ['proxy.example.com|TXT']);
+    const liveRefreshStart = server.requests.length;
+    server.fixture.probeDelay = 200;
+    await click('[aria-label="刷新当前 DNS 记录"]');
+    await until('document.querySelector(".console-colo .execution-dot").classList.contains("text-secondary")');
+    await until('document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    assert.deepEqual(statusReads(liveRefreshStart).map(request => request.query.target), ['proxy.example.com|TXT'], 'Refresh read another domain');
+    server.fixture.probeDelay = 0;
+    server.fixture.currentStatusDelay = 400;
+    const cancelStart = server.requests.length;
+    await choose('.target-select-overlay', 'edge.example.com|A');
+    for (let attempt = 0; attempt < 100 && statusReads(cancelStart).length === 0; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(statusReads(cancelStart).length, 1, 'Switch did not begin the selected DNS read');
+    await choose('.target-select-overlay', 'proxy.example.com|TXT');
+    await until('document.querySelector("#status-table").textContent.includes("8443") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
+    assert.equal(statusReads(cancelStart)[0].aborted, true, 'Switch did not cancel the obsolete DNS read');
+    assert.deepEqual(server.requests.slice(cancelStart).filter(request => request.path === '/api/check').map(request => request.input.proxyip).sort(),
+      ['203.0.113.10:443', '[2001:db8::10]:8443'].sort(), 'A cancelled DNS read started obsolete probes');
+    server.fixture.currentStatusDelay = 0;
+    await choose('.target-select-overlay', 'edge.example.com|A');
+    await until('!document.querySelector("#status-table").textContent.includes("8443") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
     await read('window.__confirmAnswer = true; window.confirm = () => window.__confirmAnswer');
     assert.equal(await read('Boolean(document.querySelector("#pool-editor, [data-action=overwrite-input], [data-action=manage-inventory]"))'), false);
     assert.ok(await read('document.querySelector("#ip-input").placeholder.includes("[2001:db8::1]:8443")'));

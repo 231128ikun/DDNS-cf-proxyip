@@ -440,6 +440,33 @@ describe('external probe safety regressions', () => {
     expect(result).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
   });
 
+  it.each([
+    { exitIp: '198.51.100.9' },
+    { exit_ip: '198.51.100.9' },
+    { exit: { ip: '198.51.100.9', ipType: 'ipv4' } },
+    { exits: [{ ip: '198.51.100.9', stack: 'ipv4' }] },
+  ])('does not let top-level exit metadata override explicit failure: %j', async metadata => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ success: false, message: 'TCP connect failed', ...metadata }));
+    const adapter = new ExternalApiProbeAdapter({ endpoints: [{ name: 'backup', urlTemplate: 'https://probe.example/?proxyip=' }],
+      timeoutMs: 1_000, fetchImpl });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'dead', code: 'TARGET_CONNECT_ERROR' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a trustworthy successful branch when the summary reports failure', async () => {
+    expect(await adapterFor({ success: false, message: 'TCP connect failed', exitIp: '198.51.100.9',
+      exits: [{ ip: '198.51.100.9', stack: 'ipv4' }], probe_results: {
+      ipv4: { ok: false, error: 'TCP connect failed' },
+      ipv6: { ok: true, exit: { ip: '2001:db8::1', ipType: 'ipv6' } },
+    } }).probe(target)).toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exitIp: '2001:db8::1', exitFamily: 'ipv6',
+      exits: [{ family: 'ipv6', ip: '2001:db8::1' }] });
+  });
+
+  it('keeps loop errors unknown even with top-level exit metadata', async () => {
+    expect(await adapterFor({ success: false, message: 'TCP Loop detected', exitIp: '198.51.100.9' }).probe(target))
+      .toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+  });
+
   it('recognizes a standalone apiError:true response as an API error', async () => {
     expect(await adapterFor({ apiError: true }).probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
   });

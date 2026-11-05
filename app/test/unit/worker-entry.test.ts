@@ -67,6 +67,61 @@ describe('发布 Worker 装配', () => {
     expect([...store.keys()]).toEqual(['app_config']);
   });
 
+  it('rejects invalid target writes through the client and keeps the stored configuration unchanged', async () => {
+    const stored = JSON.stringify({ targets: [{ domain: 'edge.example.com', mode: 'A', baseDomain: '', prefix: '' }] });
+    const store = new Map([['app_config', stored]]);
+    const put = vi.fn(async (key: string, value: string) => { store.set(key, value); });
+    const kv = { get: async (key: string) => store.get(key) ?? null, put } as unknown as KVNamespace;
+    const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+    const before = await client.config();
+    const target = before.config.targets[0]!;
+    await expect(client.saveConfig({ targets: [{ ...target, domain: 'a'.repeat(254) }] })).rejects.toMatchObject({ status: 400 });
+    expect(put).not.toHaveBeenCalled();
+    expect(store.get('app_config')).toBe(stored);
+    expect((await client.config()).config.targets).toEqual(before.config.targets);
+    await expect(client.saveConfig({ targets: [{ ...target, domain: 'next.example.com' }] }))
+      .resolves.toMatchObject({ config: { targets: [{ domain: 'next.example.com' }] } });
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(store.get('app_config')!).targets[0].domain).toBe('next.example.com');
+  });
+
+  it('checks DNS record ownership through the client, Worker and actual DNS adapter', async () => {
+    const stored = JSON.stringify({ zones: [{ baseDomain: 'example.com', zoneId: 'fixture-zone', apiKey: 'fixture-token' }],
+      targets: [{ domain: 'a.example.com', mode: 'A', zoneIndex: 0 }, { domain: 'a.example.com', mode: 'TXT', zoneIndex: 0 }] });
+    const kv = { get: async (key: string) => key === 'app_config' ? stored : null } as unknown as KVNamespace;
+    const records = new Map([
+      ['a1', { id: 'a1', type: 'A', name: 'a.example.com', content: '203.0.113.10' }],
+      ['a6', { id: 'a6', type: 'AAAA', name: 'a.example.com', content: '2001:db8::10' }],
+      ['txt1', { id: 'txt1', type: 'TXT', name: 'a.example.com', content: '"203.0.113.10:443"' }],
+      ['foreign', { id: 'foreign', type: 'A', name: 'b.example.com', content: '203.0.113.20' }],
+    ]);
+    const deleted: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe('https://api.cloudflare.com');
+      if (init?.method === 'DELETE') {
+        const id = url.pathname.split('/').at(-1)!;
+        deleted.push(id);
+        records.delete(id);
+        return Response.json({ success: true, result: { id } });
+      }
+      return Response.json({ success: true, result: [...records.values()].filter(record =>
+        record.name === url.searchParams.get('name') && record.type === url.searchParams.get('type')) });
+    }));
+    try {
+      const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
+      for (const id of ['foreign', 'txt1', 'missing']) {
+        await expect(client.deleteRecord('a.example.com|A', id)).rejects.toMatchObject({ status: 400 });
+      }
+      expect(deleted).toEqual([]);
+      await expect(client.deleteRecord('a.example.com|A', 'a1')).resolves.toEqual({ ok: true });
+      await expect(client.deleteRecord('a.example.com|A', 'a6')).resolves.toEqual({ ok: true });
+      await expect(client.deleteRecord('a.example.com|TXT', 'txt1', '203.0.113.10:443')).resolves.toEqual({ ok: true });
+      expect(deleted).toEqual(['a1', 'a6', 'txt1']);
+      expect([...records.keys()]).toEqual(['foreign']);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('rejects an ambiguous masked zone update before writing KV', async () => {
     const stored = JSON.stringify({ zones: [
       { label: '根域', baseDomain: 'example.com', zoneId: 'shared-fixture-zone', apiKey: 'root-fixture-token' },

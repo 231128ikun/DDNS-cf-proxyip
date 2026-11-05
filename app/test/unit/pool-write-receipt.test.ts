@@ -58,6 +58,26 @@ describe('optional pool write receipts', () => {
     expect(writes).not.toHaveBeenCalled();
   });
 
+  it('matches equivalent IPv6 spellings through the client, route and storage', async () => {
+    const { client, catalog } = setup();
+    catalog.data.set(DEFAULT_POOL_KEY, '[2001:0db8:0:0:0:0:0:1]:443,AS64500,JP,v6 # keep');
+    const added = await client.savePool(DEFAULT_POOL_KEY, '[2001:db8::1]:443\n[2001:db8::1]:8443', 'append');
+    expect(added).toMatchObject({ count: 2, added: 1 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('[2001:db8::1]:443,AS64500,JP,v6 # keep');
+    const removed = await client.savePool(DEFAULT_POOL_KEY, '[2001:0db8:0:0:0:0:0:1]:443', 'remove');
+    expect(removed).toMatchObject({ count: 1, removed: 1 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe('[2001:db8::1]:8443,null,null,null');
+  });
+
+  it.each(['2001:db8::1]/unexpected', '2001:db8::1]:8443/path'])('rejects a malformed IPv6 removal without touching inventory: %s', async malformed => {
+    const { client, catalog, writes } = setup();
+    const content = '[2001:db8::1]:443,AS64500,JP,v6 # keep';
+    catalog.data.set(DEFAULT_POOL_KEY, content);
+    await expect(client.savePool(DEFAULT_POOL_KEY, malformed, 'remove')).rejects.toMatchObject({ status: 400 });
+    expect(writes).not.toHaveBeenCalled();
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
+  });
+
   it('does not return a successful receipt when a write throws', async () => {
     const { client, writes } = setup();
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);

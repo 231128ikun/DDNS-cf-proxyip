@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultConfig, parseAppConfig, type AppConfig, type ZoneConfig } from '../../src/contracts/config';
+import { createDefaultConfig, parseAppConfig, parseConfigUpdate, type AppConfig, type ZoneConfig } from '../../src/contracts/config';
 
 const first: ZoneConfig = { name: '主域名', label: '主域名', baseDomain: 'example.com', zoneId: 'zone-first', apiKey: 'first-fixture-token' };
 const second: ZoneConfig = { name: '备用域名', label: '备用域名', baseDomain: 'example.net', zoneId: 'zone-second', apiKey: 'second-fixture-token' };
@@ -106,6 +106,40 @@ describe('masked zone credentials', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.zones[0]?.apiKey).toBe(legacy.apiKey);
+  });
+});
+
+describe('configuration write validation', () => {
+  it.each([
+    { targets: null },
+    { targets: 'edge.example.com' },
+    { targets: [null] },
+    { targets: [{}] },
+    { targets: [{ domain: 'a'.repeat(254) }] },
+    { targets: [{ domain: 'a'.repeat(254), baseDomain: 'example.com', prefix: 'edge' }] },
+    { targets: [{ domain: 'edge.example.com', prefix: 'a'.repeat(64) }] },
+    { targets: [{ domain: 123, baseDomain: 'example.com', prefix: 'edge' }] },
+    { targets: [{ baseDomain: 'a'.repeat(200), prefix: 'b'.repeat(63) }] },
+    { targets: Array.from({ length: 101 }, (_, index) => ({ domain: `edge${index}.example.com` })) },
+  ])('rejects an invalid target update without silently dropping or replacing it: %j', input => {
+    expect(parseConfigUpdate(input).ok).toBe(false);
+  });
+
+  it('keeps legacy reads tolerant while validating explicit target writes', () => {
+    const input = { targets: [{ domain: 'edge.example.com' }, { domain: 'a'.repeat(254) }] };
+    const read = parseAppConfig(input);
+    expect(read.ok && read.value.targets.map(target => target.domain)).toEqual(['edge.example.com']);
+    expect(parseConfigUpdate(input).ok).toBe(false);
+    if (!read.ok) return;
+    const partial = parseConfigUpdate({ tgEnabled: false }, read.value);
+    expect(partial.ok && partial.value.targets).toEqual(read.value.targets);
+  });
+
+  it('allows complete valid lists, explicit removal and normalized trailing dots', () => {
+    const parsed = parseConfigUpdate({ targets: [{ domain: 'EDGE.EXAMPLE.COM.' }, { baseDomain: 'example.net', prefix: 'proxy', mode: 'TXT' }] });
+    expect(parsed.ok && parsed.value.targets.map(target => target.domain)).toEqual(['edge.example.com', 'proxy.example.net']);
+    if (!parsed.ok) return;
+    expect(parseConfigUpdate({ targets: [] }, parsed.value)).toMatchObject({ ok: true, value: { targets: [] } });
   });
 });
 

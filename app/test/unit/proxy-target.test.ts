@@ -22,6 +22,17 @@ describe('parseProxyTarget', () => {
     });
   });
 
+  it.each([
+    '[2001:0DB8:0:0:0:0:0:1]:443',
+    '2001:db8:0:0::1',
+    'https://[2001:0db8:0:0:0:0:0:1]/',
+  ])('uses the same key for equivalent IPv6 input: %s', (input) => {
+    expect(parseProxyTarget(input)).toMatchObject({
+      host: '2001:db8::1', key: '[2001:db8::1]:443', family: 'ipv6',
+    });
+    expect(parseProxyTarget(input)?.key).not.toBe(parseProxyTarget('[2001:db8::1]:8443')?.key);
+  });
+
   it('uses the default port for a bare IPv6 address', () => {
     const target = parseProxyTarget('2001:db8::1');
     expect(target).toMatchObject({ port: 443, family: 'ipv6' });
@@ -32,7 +43,9 @@ describe('parseProxyTarget', () => {
     expect(target).toMatchObject({ host: 'proxy.example.com', port: 2053, family: 'hostname' });
   });
 
-  it.each(['', '300.1.1.1:443', '[2001:db8::1', 'example.com:0', 'example.com:70000'])(
+  it.each(['', '300.1.1.1:443', '[2001:db8::1', 'example.com:0', 'example.com:70000',
+    '2001:db8::1]/unexpected', '2001:db8::1]:8443/path', '2001:db8::1]#fragment',
+    '2001:db8::1]?query', '2001: db8::1'])(
     'rejects invalid input: %s',
     (input) => {
       expect(parseProxyTarget(input)).toBeNull();

@@ -161,8 +161,9 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const statusText = readText(record.status)?.toLowerCase();
   const decision = readBooleanDecision(record) ?? readStatusDecision(statusText)
     ?? readProbeResultsDecision(record);
-  const exits = readProbeExits(record);
-  const hasHealthyBranch = readProbeExits(record, true).some(exit => exit.ip);
+  const branchExits = readProbeExits(record, true);
+  const hasHealthyBranch = branchExits.some(exit => exit.ip);
+  const exits = decision === false ? branchExits : readProbeExits(record);
   const detectorFailure = readDetectorFailure(record, !hasHealthyBranch);
   if (detectorFailure) return unknown(target, 'PROBE_API_ERROR', detectorFailure, { endpoint, latencyMs });
   const exitIp = pickExitIp(record, exits);
@@ -175,7 +176,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   if (decision === true && probeRecords.length && !exits.length) {
     return unknown(target, 'PROBE_API_ERROR', message ?? '检测接口成功标记与探测结果不一致', { endpoint, latencyMs });
   }
-  if (decision === true || exitIp) {
+  if (decision === true || hasHealthyBranch || (decision !== false && exitIp)) {
     return alive(target, {
       ...details,
       ...(candidateFailure && exits.length ? { code: 'PARTIAL_EXIT', message: '部分出口探测失败：' + candidateFailure.message } : {}),

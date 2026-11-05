@@ -76,6 +76,8 @@ describe('native candidate probe', () => {
     'HTTP/1.1 200 OK\r\n\r\nnot json',
     'HTTP/1.1 200 OK\r\n\r\n{"ip":"invalid"}',
     'HTTP/1.1 200 OK\r\n\r\n{"ip":"198.51.100.1:443"}',
+    'HTTP/1.1 200 OK\r\n\r\n{"ip":"[2001:db8::42]:443"}',
+    'HTTP/1.1 200 OK\r\n\r\n{"ip":"https://[2001:db8::42]/"}',
     'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n20\r\nshort\r\n0\r\n\r\n',
     'HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{"ip":"198.51.100.1"}',
   ])('rechecks normal candidate failures without broad anomaly matching: %s', async text => {
@@ -160,8 +162,8 @@ describe('native candidate probe', () => {
   });
 });
 
-it('accepts and normalizes uppercase IPv6 exit JSON', async () => {
-  const io = connector(() => http('{"ip":"2001:DB8::42","ipType":"ipv6"}'));
+it.each(['2001:DB8::42', '2001:0db8:0:0:0:0:0:42'])('accepts and normalizes bare IPv6 exit JSON: %s', async ip => {
+  const io = connector(() => http(JSON.stringify({ ip, ipType: 'ipv6' })));
   expect(await new NativeProbeAdapter({ urls: [urls[1]!], timeoutMs: 1000, connect: io.connect }).probe(target))
     .toMatchObject({ status: 'alive', exitIp: '2001:db8::42', exits: [{ ip: '2001:db8::42', family: 'ipv6' }] });
 });

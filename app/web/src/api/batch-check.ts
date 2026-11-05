@@ -1,7 +1,7 @@
 import { ApiError, type ApiClient } from './client';
 import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse } from '../../../src/contracts/pool-check';
 import { isProbeResponse, type CheckTargetResponse } from '../../../src/contracts/probe';
-import { formatPoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
+import { formatPoolEntry, mergePoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
@@ -124,9 +124,8 @@ function parsePoolCheckTargets(text: string): {
   readonly targets: readonly ParsedPoolCheckTarget[];
   readonly invalid: readonly string[];
 } {
-  const targets: ParsedPoolCheckTarget[] = [];
+  const targets = new Map<string, ParsedPoolCheckTarget>();
   const invalid: string[] = [];
-  const seen = new Set<string>();
   for (const [sourceIndex, line] of parsePoolText(text).entries()) {
     if (!line.entry) {
       invalid.push(line.raw);
@@ -137,9 +136,10 @@ function parsePoolCheckTargets(text: string): {
       invalid.push(line.entry.address);
       continue;
     }
-    if (seen.has(target.key)) continue;
-    seen.add(target.key);
-    targets.push({ entry: line.entry, target, sourceLine: line.raw, sourceIndex });
+    const previous = targets.get(target.key);
+    const entry = previous ? mergePoolEntry(previous.entry, line.entry) : line.entry;
+    targets.set(target.key, { entry, target, sourceLine: previous ? formatPoolEntry(entry) : line.raw,
+      sourceIndex: previous?.sourceIndex ?? sourceIndex });
   }
-  return { targets, invalid };
+  return { targets: [...targets.values()], invalid };
 }

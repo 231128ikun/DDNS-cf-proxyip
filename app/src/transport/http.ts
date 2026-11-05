@@ -7,7 +7,7 @@ import { PoolInputError, type PoolService } from '../application/pool-service';
 import type { RemotePoolLoader } from '../application/remote-pool-loader';
 import type { RemoteLoadFailure } from '../ports/remote-pool-source';
 import {
-  parseAppConfig,
+  parseConfigUpdate,
   toPublicConfig,
   type AppConfig,
   type ConfigResponse,
@@ -336,7 +336,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     // 未提交的密钥字段沿用已存值，空字符串才代表清空，避免前端回写时抹掉密钥。
     const resolved = await config.resolve();
-    const parsed = parseAppConfig(body.value, resolved.config);
+    const parsed = parseConfigUpdate(body.value, resolved.config);
     if (!parsed.ok) return errorResponse(parsed.message, 400);
 
     await config.save(parsed.value);

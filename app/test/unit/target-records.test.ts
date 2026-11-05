@@ -26,7 +26,7 @@ function dns(mode: 'A' | 'TXT'): DnsRepository {
     ? [{ id: 't1', type: 'TXT' as const, name: 'a.example.com', content: '"203.0.113.10:443"' }]
     : [];
   return {
-    listAddressRecords: async () => [],
+    listAddressRecords: async () => [{ id: 'r1', type: 'A', name: 'a.example.com', content: '203.0.113.10' }],
     listTxtRecords: async () => txtRecords,
     addAddressRecord: vi.fn(async () => ({ id: 'new', type: 'A' as const, name: 'a.example.com', content: '203.0.113.10' })),
     upsertTxtRecord: vi.fn(async () => ({ id: 't1', type: 'TXT' as const, name: 'a.example.com', content: '"203.0.113.10:443"' })),
@@ -87,6 +87,33 @@ describe('TargetRecords', () => {
     });
     await txtService.remove('a.example.com|TXT', 't1', '203.0.113.10:443');
     expect(txtRepository.deleteRecord).toHaveBeenCalledWith(expect.objectContaining({ zoneId: 'zone-a' }), 't1');
+  });
+
+  it.each([
+    { records: [] },
+    { records: [{ id: 'r1', type: 'A' as const, name: 'b.example.com', content: '203.0.113.10' }] },
+    { records: [{ id: 'r1', type: 'TXT' as const, name: 'a.example.com', content: '203.0.113.10:443' }] },
+  ])('rejects missing, foreign and non-address record IDs: %j', async ({ records }) => {
+    const repository = { ...dns('A'), listAddressRecords: async () => records };
+    const service = new TargetRecords({ source: { load: async () => data('A') }, dns: repository, fallbackZone });
+    await expect(service.remove('a.example.com|A', 'r1')).rejects.toBeInstanceOf(TargetStatusInputError);
+    expect(repository.deleteRecord).not.toHaveBeenCalled();
+  });
+
+  it('accepts a matching AAAA record with equivalent domain spelling', async () => {
+    const repository = { ...dns('A'), listAddressRecords: async () => [
+      { id: 'r6', type: 'AAAA' as const, name: 'A.EXAMPLE.COM.', content: '2001:db8::1' },
+    ] };
+    const service = new TargetRecords({ source: { load: async () => data('A') }, dns: repository, fallbackZone });
+    await expect(service.remove('a.example.com|A', 'r6')).resolves.toEqual({ ok: true });
+    expect(repository.deleteRecord).toHaveBeenCalledWith(expect.anything(), 'r6');
+  });
+
+  it('does not delete records when their lookup fails', async () => {
+    const repository = { ...dns('A'), listAddressRecords: async () => { throw new Error('DNS unavailable'); } };
+    const service = new TargetRecords({ source: { load: async () => data('A') }, dns: repository, fallbackZone });
+    await expect(service.remove('a.example.com|A', 'r1')).rejects.toThrow('DNS unavailable');
+    expect(repository.deleteRecord).not.toHaveBeenCalled();
   });
 
   it('rejects unknown targets', async () => {

@@ -4,7 +4,7 @@ import {
   MAX_ZONES,
   SETTINGS_LIMITS,
   createDefaultConfig,
-  parseAppConfig,
+  parseConfigUpdate,
   type ConfigResponse,
   type ConfigUpdateRequest,
   type PublicAppConfig,
@@ -178,7 +178,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     const zones = [...form.zones];
     zones[index] = { ...draft, baseDomain: draft.baseDomain.trim(), zoneId: draft.zoneId.trim(),
       label: draft.label.trim() || draft.baseDomain.trim(), name: draft.label.trim() || draft.baseDomain.trim() };
-    const validated = parseAppConfig({ zones, targets: form.targets });
+    const validated = parseConfigUpdate({ zones, targets: form.targets });
     if (!validated.ok) { setZoneError(validated.message); return; }
     patch({ zones });
     setEditingZone(null);
@@ -242,7 +242,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     } catch (error) { setTargetError(errorMessage(error)); return; }
     const targets = [...form.targets];
     targets[editingTarget.index] = target;
-    const validated = parseAppConfig({ zones: form.zones, targets });
+    const validated = parseConfigUpdate({ zones: form.zones, targets });
     if (!validated.ok) { setTargetError(validated.message); return; }
     patch({ targets });
     setEditingTarget(null);
@@ -280,7 +280,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     let update: ConfigUpdateRequest;
     try {
       update = buildUpdate(form, drafts);
-      const validated = parseAppConfig(update);
+      const validated = parseConfigUpdate(update);
       if (!validated.ok) throw new Error(validated.message);
     } catch (error) {
       setSaveError(error instanceof Error ? error : new Error(errorMessage(error)));

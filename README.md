@@ -1,23 +1,29 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-DDNS Pro 部署于 Cloudflare Workers，通过原生 TCP/TLS 检测验证 ProxyIP，外部 API 仅用于备用复检；维护域名的 `A`、`AAAA` 或 `TXT` 记录，无需自建服务器。
+DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，从绑定的 IP 池补充可用地址，维护一个或多个域名的 `A`、`AAAA` 或 `TXT` 记录。
 
 ## ✨ 核心功能
 
 - **多域名维护**：检测当前节点，从绑定的 IP 池补充可用地址。
 - **IP 池管理**：导入、检测、去重、筛选、自定义池与垃圾桶恢复。
 - **出口筛选**：支持国家、ASN、IPv4、IPv6 和双栈条件。
-- **自动任务**：每 3 小时维护一次，可在配置中心关闭；支持 Telegram 通知。
+- **自动任务**：默认每 3 小时维护一次，可在配置中心关闭；解析变化或维护异常时发送 Telegram 通知。
 
 ## 🚀 快速部署
 
-> 面板密码和检测接口均为可选配置。未设置密码时不启用鉴权，默认启用原生检测，失败时使用备用接口复检。
+> 面板密码可选，未设置时管理接口免登录。
 
 ### ① 一键部署
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
 
-通过 Cloudflare 部署向导创建仓库及 Worker，按提示完成账号授权和资源设置。面板密码与检测 API 无需预先填写。
+通过 Cloudflare 部署向导创建仓库及 Worker，按提示完成账号授权和资源设置。
+
+| 设置项 | 内容 |
+| --- | --- |
+| 构建命令 | `npm run build` |
+| 部署命令 | `npm run deploy` |
+| 根目录 | 留空，生成的仓库已以 `app/` 为根目录 |
 
 此方式适用于新实例，会创建 GitHub 仓库。已有仓库或 Worker 可使用以下 GitHub 部署及迁移/更新方式。
 
@@ -31,18 +37,18 @@ DDNS Pro 部署于 Cloudflare Workers，通过原生 TCP/TLS 检测验证 ProxyI
 
    | 设置项 | 内容 |
    | --- | --- |
-   | 根目录 | `app` |
-   | 构建命令 | 留空，由 Wrangler 自动构建 |
+   | 构建命令 | `npm run build` |
    | 部署命令 | `npm run deploy` |
+   | 根目录 | `app` |
 
 3. Worker 名称应与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
 4. 部署完成后打开 Worker 地址，在配置中心保存域名配置。
 
-Cloudflare 自动选择 Node.js 并安装依赖。统一部署入口自动构建面板与 Worker，检查体积后发布；完整测试由本地和 GitHub CI 执行，不进入线上发布文件。
+Cloudflare 自动安装依赖。部署入口构建面板与 Worker，并检查体积；已完成且未变化的构建结果会被复用。
 
-一键部署生成的仓库以 `app/` 为根目录，根目录设置留空；完整仓库的根目录填写 `app`。
+一键部署生成的仓库以 `app/` 为根目录，根目录设置留空；完整仓库的根目录填写 `app`。构建命令也可留空，由部署入口自动构建。
 
-**KV 资源：**部署入口自动初始化 `IP_DATA`；创建遇到同名冲突时复用已有命名空间，已有明确绑定保持不变。
+**KV 资源：**部署入口自动初始化 `IP_DATA`；遇到同名冲突时，仅在对应账号下找到唯一匹配的命名空间后复用。已有明确绑定保持不变。
 
 </details>
 
@@ -81,7 +87,7 @@ npm run deploy
 
 1. **维护域名配置**：托管域名、Zone ID 和 Cloudflare API Token。
 2. **管理域名**：子域名、记录类型、端口、最小活跃数与出口筛选。
-3. **可选设置**：面板密码、Telegram 通知、出口信息接口、备用检测 API 和自动维护开关。
+3. **可选设置**：面板密码、Telegram 通知、检测参数和自动维护开关。
 
 面板密码 `AUTH_KEY` 支持设置、修改和清空；为空时管理接口不启用鉴权。密码、Token 和实际资源 ID 不应提交到公共仓库。
 
@@ -125,18 +131,13 @@ npm run deploy
 </details>
 
 <details>
-<summary>自建检测接口（可选）</summary>
+<summary>自定义检测设置（可选）</summary>
 
-检测服务可参考 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)。接口地址支持：
+Worker 通过原生 TCP/TLS 检测候选地址，并读取出口信息。
 
-```text
-https://probe.example.com/check?proxyip=
-https://probe.example.com/check?proxyip={proxyip}
-```
+原生检测未成功时使用备用接口复检一次。备用接口可在高级设置中修改或清空，清空后改为原生复检。接口不可用时会报告异常，不作为节点失效。
 
-原生检测未成功时调用备用 API 一次；备用 API 留空则原生复检一次。`TCP Loop`、运行异常和备用接口的网络/HTTP/JSON 异常不作为节点失效。公共出口与备用服务不保证长期可用。
-
-配置保存到 KV，优先于环境变量启动默认值。
+备用检测接口可参考 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
 
 </details>
 
@@ -159,19 +160,9 @@ https://probe.example.com/check?proxyip={proxyip}
 
 IPv6 带端口必须加方括号。标准池格式为 `ip:port,asn,country,stack`，`stack` 为 `v4`、`v6` 或 `v4/v6`，未知字段用 `null`；旧池格式仍可读取。
 
-“解析实况”读取并检测当前 DNS 地址，同时支持输入 `example.com`、`txt@example.com` 或 `example.com:8080` 进行探测。
+“解析实况”只读取并检测当前选中的域名，切换域名或点击刷新时重新加载，不预先检测其他域名。同时支持输入 `example.com`、`txt@example.com` 或 `example.com:8080` 进行探测。
 
 </details>
-
-### 操作提醒
-
-- **失败与未知**：候选连接、TLS、目标 HTTP、出口 JSON 失败或候选超时，复检仍失败时按失效处理，洗库和维护可移入垃圾桶；检测运行异常、备用 API 自身的网络、非 2xx、坏响应或显式异常仍为未知。普通检测和解析实况刷新不改库，出口筛选不匹配也不当作死节点。
-- 面板不提供整库文本编辑和覆盖。保存后使用回执更新页面；刷新图标只更新池列表和计数，“从池读取”才读取所选池的内容。写入失败不自动重试。KV 不提供多页面并发编辑的事务保障。
-- 国家与地区显示探针已有的出口归属信息，优先显示城市，缺少时回退到地区；不额外查询定位服务。控制台显示当前检测请求执行的 Worker 机房，解析结果的 COLO 则是出口探针返回的机房，两者含义不同。
-- “一键洗库”复用普通批检：浏览器按配置并发，每个地址单独请求，逐条显示进度。全部确认后只提交一次清理；服务端核对完整报告和库存快照，不重复探测。遇到未知结果、无效内容或库存变化时保留原池。
-- 控制台框内常显运行配置，批量检测逐条输出，维护结果也在此保留；查看历史时不会强制滚到底部。机房旁圆点表示检测请求状态，节点失效不等于接口异常。
-- 原生检测显式发送 SNI 并校验证书链，使用 TLS 1.3；信任库来自 Mozilla CA 数据（curl.se），在当前运行实例内缓存一天，加载失败报告检测异常。默认出口探针无需配置，自定义覆盖收纳在高级设置中。
-- 鼠标悬停版本号、键盘聚焦或点击版本号可查看更新记录，记录来源为 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 参考与许可
 

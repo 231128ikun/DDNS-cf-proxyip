@@ -73,6 +73,12 @@ export class TargetRecords {
       return { ok: true };
     }
 
+    const records = await this.dependencies.dns.listAddressRecords(zone, config.target.domain);
+    const domain = config.target.domain.replace(/\.$/, '').toLowerCase();
+    if (!records.some(record => record.id === recordId && (record.type === 'A' || record.type === 'AAAA')
+      && record.name.replace(/\.$/, '').toLowerCase() === domain)) {
+      throw new TargetStatusInputError('记录不存在或不属于当前管理域名');
+    }
     await this.dependencies.dns.deleteRecord(zone, recordId);
     return { ok: true };
   }

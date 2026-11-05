@@ -6,7 +6,7 @@ import { CheckProxy } from '../../src/application/check-proxy';
 import { ResolveTarget } from '../../src/application/resolve-target';
 import { normalizeManagedTarget } from '../../src/domain/managed-target';
 import { parseProxyTarget } from '../../src/domain/proxy-target';
-import { alive } from '../../src/domain/probe-result';
+import { alive, dead } from '../../src/domain/probe-result';
 import type { DnsRecord, DnsRepository } from '../../src/ports/dns-repository';
 import type { PoolRepository } from '../../src/ports/pool-repository';
 import type { ProbeAdapter } from '../../src/ports/probe';
@@ -34,7 +34,7 @@ async function fixture(failAdd = false) {
   const runner = new MaintainManagedTargets({ maintainer: new MaintainManagedTarget({ probe, pools, dns }) });
   const summary = await runner.execute(data, zone);
   const run: MaintenanceRunReport = { ...summary, poolStats: { before: { ip_pool_default: 1 }, after: { ip_pool_default: 1 },
-    pools: [{ key: 'ip_pool_default', name: '默认池', count: 1 }], changed: false } };
+    pools: [{ key: 'ip_pool_default', name: '默认池', count: 1 }] } };
   return { run, runner, data, zone, probe };
 }
 
@@ -141,8 +141,57 @@ describe('complete and concise maintenance output', () => {
     expect(JSON.stringify(response)).not.toContain('fixture-zone');
   });
 
+  it.each(['A', 'AAAA', 'TXT'] as const)('notifies only confirmed %s changes through the client, job and storage', async mode => {
+    const target = normalizeManagedTarget({ mode: mode === 'TXT' ? 'TXT' : 'A', domain: 'edge.example.com', minActive: 1 })!;
+    const oldAddress = mode === 'AAAA' ? '[2001:db8::10]:443' : '203.0.113.10:443';
+    const newAddress = mode === 'AAAA' ? '[2001:db8::11]:443' : mode === 'TXT' ? '203.0.113.10:8443' : '203.0.113.11:443';
+    let record: DnsRecord | null = { id: 'current', type: mode, name: target.domain,
+      content: mode === 'TXT' ? `"${oldAddress}"` : parseProxyTarget(oldAddress)!.host };
+    let failOld = false;
+    let poolText = newAddress;
+    const archived: string[] = [];
+    const probe: ProbeAdapter = { name: 'fixture', probe: async address =>
+      failOld && address.authority === oldAddress ? dead(address) : alive(address, { exitFamily: 'ipv4' }) };
+    const dns: DnsRepository = {
+      listAddressRecords: async () => record && mode !== 'TXT' ? [record] : [],
+      listTxtRecords: async () => record && mode === 'TXT' ? [record] : [],
+      deleteRecord: async () => { record = null; },
+      addAddressRecord: async (_zone, domain, host, type) => (record = { id: 'added', type, name: domain, content: host }),
+      upsertTxtRecord: async (_zone, domain, id, values) => (record = { id: id ?? 'added', type: 'TXT', name: domain, content: `"${values.join(',')}"` }),
+    };
+    const pools: PoolRepository = { load: async () => poolText, save: async (_key, text) => { poolText = text; },
+      addToTrash: async entries => { archived.push(...entries.map(entry => entry.entryLine)); } };
+    const runner = new MaintainManagedTargets({ maintainer: new MaintainManagedTarget({ probe, pools, dns }) });
+    const data = { zones: [], targets: [{ target, zoneIndex: null, enabled: true }], poolMapping: {}, poolNames: {} };
+    let baseline = { ip_pool_default: 99, ip_pool_trash: 0 };
+    const saveBaseline = vi.fn(async counts => { baseline = counts; });
+    const send = vi.fn(async () => ({ sent: true, reason: 'sent' as const }));
+    const app = createHttpApp({ version: 'fixture',
+      maintenance: { run: isManual => runMaintenanceJob({ source: { load: async () => data }, maintainer: runner,
+        fallbackZone: { zoneId: 'fixture-zone', apiToken: 'fixture-token' }, isManual,
+        stats: { current: async () => [{ key: 'ip_pool_default', name: '默认池', count: poolText.split('\n').length },
+          { key: 'ip_pool_trash', name: '垃圾桶', count: archived.length }], loadBaseline: async () => baseline, saveBaseline },
+        notifier: { send } }) },
+      checkTarget: new CheckTarget({ checkProxy: new CheckProxy(probe), resolver: new ResolveTarget({ query: async () => ({ ok: true, values: [] }) }) }),
+    });
+    const client = new ApiClient({ fetchImpl: async (url, init) => app.request(String(url), init) });
+    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: null, completed: true });
+    expect(send).not.toHaveBeenCalled();
+    expect(saveBaseline).not.toHaveBeenCalled();
+    failOld = true;
+    const changed = await client.runMaintenance();
+    expect(changed).toMatchObject({ changed: true, notification: { sent: true }, completed: true });
+    expect(changed.results[0]?.dns?.after).toEqual([mode === 'TXT' ? newAddress : parseProxyTarget(newAddress)!.host]);
+    expect(record?.content).toBe(mode === 'TXT' ? `"${newAddress}"` : parseProxyTarget(newAddress)!.host);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(saveBaseline).toHaveBeenCalledTimes(1);
+    poolText += '\n203.0.113.99:443 # imported later';
+    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: null });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('does not advance the notification baseline after partial delivery', async () => {
-    const { runner, data, zone } = await fixture();
+    const { runner, data, zone } = await fixture(true);
     const saveBaseline = vi.fn(async () => undefined);
     const result = await runMaintenanceJob({ source: { load: async () => data }, maintainer: runner, fallbackZone: zone, isManual: true,
       stats: { current: async () => [{ key: 'ip_pool_default', name: '默认池', count: 1 }], loadBaseline: async () => null, saveBaseline },

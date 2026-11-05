@@ -7,7 +7,6 @@ export interface MaintenancePoolStats {
   readonly after: Readonly<Record<string, number>>;
   /** 结束时的池清单，用于通知里显示名称；已删除的池会回退显示 key。 */
   readonly pools: readonly PoolSummary[];
-  readonly changed: boolean;
 }
 
 /**

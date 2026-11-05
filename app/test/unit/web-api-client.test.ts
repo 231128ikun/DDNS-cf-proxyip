@@ -181,6 +181,22 @@ describe('web API client pool endpoints', () => {
     expect(report.items[0]?.line).toBe('203.0.113.10:443,null,null,v4 # node0');
   });
 
+  it.each(['alive', 'unknown'] as const)('merges duplicate metadata and comments before a %s batch result', async status => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status, exitFamily: 'ipv4',
+          exits: [{ family: 'ipv4', ip: '198.51.100.9' }] } }], skipped: [] });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock });
+    const events: number[] = [];
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.10:443,AS64500,JP,v4 # keep',
+      undefined, event => events.push(event.sourceIndex));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([0]);
+    expect(report.items[0]?.line).toBe('203.0.113.10:443,AS64500,JP,v4 # keep');
+  });
+
   it('reports the source line index and completion boundary for resumable batches', async () => {
     const client = new ApiClient({ fetchImpl: async (_input, init) => {
       const proxyip = JSON.parse(String(init?.body)).proxyip as string;
