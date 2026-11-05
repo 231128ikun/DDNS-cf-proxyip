@@ -24,7 +24,7 @@ import { Modal } from './components/modal';
 import type { OrderRequest } from './components/order-dialog';
 import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
-import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
+import { loadTargetStatus, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
 import { formatProbeLog } from './components/probe-log';
 import { executionStatus } from './state/execution-status';
@@ -127,11 +127,19 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const { ipText, batch, batchProgressState, batchInterrupt, replaceIpText, handleResumeBatch, handleAbandonBatch } = batchState;
   const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
   const targetPort = configuredTarget?.port ?? 443;
-  const [targetStatuses, refreshTargetStatuses] = useResource<TargetStatusesView>((signal, progress) =>
-    loadTargetStatuses(client, configuredTargets ?? [], signal, progress), true);
-  const targetStatus: RequestState<TargetStatusView> = targetStatuses.status === 'ready'
-    ? targetStatuses.data.byKey[selectedTargetKey ?? ''] ?? { status: 'idle' }
-    : targetStatuses;
+  const [currentStatus, loadCurrentStatus] = useResource<TargetStatusView>((signal, progress) =>
+    loadTargetStatus(client, selectedTargetKey ?? '', targetPort, signal, progress));
+  const activeStatus = useRef<AbortController | null>(null);
+  const refreshCurrentStatus = useCallback((): Promise<boolean> => {
+    activeStatus.current?.abort();
+    if (!currentTargetKey.current) return Promise.resolve(false);
+    const controller = new AbortController();
+    activeStatus.current = controller;
+    return loadCurrentStatus(controller.signal);
+  }, [loadCurrentStatus]);
+  const targetStatus: RequestState<TargetStatusView> = !configuredTarget ? { status: 'idle' }
+    : currentStatus.status === 'ready' && bindingKey(currentStatus.data) !== selectedTargetKey
+      ? { status: 'loading' } : currentStatus;
   const executionItems = probeContext === 'batch' ? batchState.batchReport?.items ?? []
     : probeContext === 'lookup' ? check.status === 'ready' ? check.data.items.map(item => item.result) : []
       : targetStatus.status === 'ready' ? targetStatus.data.probes : [];
@@ -155,15 +163,14 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     });
   }, [configuredTargets, confirmedBindings, targetKeys]);
 
-  /** 配置就绪即并发预取全部域名；切换目标不取消其他域名或重复请求。 */
   useLayoutEffect(() => {
-    if (!configuredTargets) return;
     resetLookup();
-    const controller = new AbortController();
-    void refreshTargetStatuses(controller.signal);
-    void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
-    return () => controller.abort();
-  }, [configuredTargets, refreshTargetStatuses, resetLookup]);
+    if (configuredTarget) {
+      void refreshCurrentStatus();
+      void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
+    }
+    return () => activeStatus.current?.abort();
+  }, [configuredTarget, refreshCurrentStatus, resetLookup]);
 
 
   /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
@@ -273,7 +280,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     setProbeContext('current');
     resetLookup();
     appendConsoleLog('[解析] 刷新实况');
-    void refreshTargetStatuses();
+    void refreshCurrentStatus();
   };
 
   const handleSelectTarget = (key: string | null): void => {
@@ -324,7 +331,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已添加 ${input}`, 'success');
         notify('已添加 DNS 记录');
-        await refreshTargetStatuses();
+        if (currentTargetKey.current === selectedTargetKey) await refreshCurrentStatus();
         return true;
       })
       .catch((error: unknown) => {
@@ -343,7 +350,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
         appendConsoleLog(`[记录] 已删除 ${address ?? recordId}`, 'success');
         notify('已删除 DNS 记录');
-        await refreshTargetStatuses();
+        if (currentTargetKey.current === selectedTargetKey) await refreshCurrentStatus();
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
@@ -493,6 +500,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         appendConsoleLog('[维护] 结束', data.insufficient || data.errors.length || data.probeErrors ? 'warning' : 'success');
         await refreshBindings();
         await refreshPools();
+        await refreshCurrentStatus();
         notify(data.message ?? '维护结束', data.completed === false ? 'error' : 'success');
       })
       .catch((error: unknown) => {
