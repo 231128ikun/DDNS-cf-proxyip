@@ -60,7 +60,7 @@ export function unknown(
 /** 未探测和无效 DNS 值不属于探针故障；其余 unknown 结果均计为检测接口异常。 */
 const NON_PROBE_ERROR_CODES = new Set(['NOT_PROBED', 'INVALID_DNS_VALUE']);
 
-export function isProbeErrorResult(result: ProbeResult): boolean {
+export function isProbeErrorResult(result: Pick<ProbeResult, 'status' | 'code'>): boolean {
   return result.status === 'unknown' && !NON_PROBE_ERROR_CODES.has(result.code ?? '');
 }
 

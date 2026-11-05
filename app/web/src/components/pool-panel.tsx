@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { NUMBERED_POOL_KEY_RE, TRASH_POOL_KEY, type PoolsResponse } from '../../../src/contracts/pool';
 import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
@@ -7,7 +7,7 @@ import type { ApiClient } from '../api/client';
 import { errorMessage } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import type { useBatchCheck } from '../state/use-batch-check';
-import { PoolWorkspace, invalidPoolLines } from '../state/pool-workspace';
+import { PoolWorkspace } from '../state/pool-workspace';
 import { poolOptions } from '../state/pool-options';
 import { Icon } from './icon';
 import type { ConsoleTone } from './dashboard-page';
@@ -55,24 +55,25 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const report = batch.batchReport;
   const inTrash = poolKey === TRASH_POOL_KEY;
   const locked = containerBusy || model.writing || loading || sideBusy || batch.checkingBatch;
-  const filter = query.trim() ? parsePoolFilter(query) : null;
+  const filter = useMemo(() => query.trim() ? parsePoolFilter(query) : null, [query]);
   const badFilter = Boolean(query.trim() && !filter);
-  const matches = (line: string): boolean => !query.trim() || Boolean(filter && matchesPoolFilter(line, filter));
-  const inputText = batch.ipText.split(/\r?\n/).filter(matches).join('\n');
-  const invalid = invalidPoolLines(inputText);
-  const inputCount = readPoolSnapshot(inputText).entries.size;
-  const rows = report ? [
+  const matches = useCallback((line: string): boolean => !query.trim() || Boolean(filter && matchesPoolFilter(line, filter)), [query, filter]);
+  const inputText = useMemo(() => batch.ipText.split(/\r?\n/).filter(matches).join('\n'), [batch.ipText, matches]);
+  const inputSnapshot = useMemo(() => readPoolSnapshot(inputText), [inputText]);
+  const invalid = inputSnapshot.invalid;
+  const inputCount = inputSnapshot.entries.size;
+  const rows = useMemo(() => report ? [
     ...report.items.map(item => ({ key: item.address, line: item.line, label: item.address, status: item.status,
       detail: [item.colo, item.latencyMs === undefined ? '' : `${item.latencyMs}ms`, item.country, item.city || item.region, item.asn].filter(Boolean).join(' · '),
       reason: item.status === 'alive' ? '' : item.message ?? item.code ?? '',
     })),
     ...report.invalid.map(line => ({ key: line, line, label: line, status: 'invalid', detail: '', reason: '' })),
     ...report.incomplete.map(line => ({ key: line, line, label: line, status: 'incomplete', detail: '', reason: '' })),
-  ].filter(item => matches(item.line)) : [];
-  const shown = rows.filter(item => category === 'all' || item.status === category);
-  const selectedRows = rows.filter(item => selected.has(item.key));
-  const count = model.content !== undefined ? readPoolSnapshot(model.content).entries.size
-    : pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.count : undefined;
+  ].filter(item => matches(item.line)) : [], [report, matches]);
+  const shown = useMemo(() => rows.filter(item => category === 'all' || item.status === category), [rows, category]);
+  const selectedRows = useMemo(() => rows.filter(item => selected.has(item.key)), [rows, selected]);
+  const count = useMemo(() => model.content !== undefined ? readPoolSnapshot(model.content).entries.size
+    : pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.count : undefined, [model.content, pools, poolKey]);
   const name = poolOptions(pools, poolKey).find(pool => pool.key === poolKey)?.name ?? poolKey;
   const statusName = (status: string): string => ({ all: '全部', alive: '可用', dead: '失效', unknown: '异常', invalid: '无效', incomplete: '未完成' })[status] ?? status;
 
