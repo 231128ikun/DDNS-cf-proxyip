@@ -128,7 +128,8 @@ export class NativeProbeAdapter implements ProbeAdapter {
         const payload = readHttpJson(bytes);
         const ip = payload.ip ?? payload.ipAddress;
         const address = typeof ip === 'string' ? parseProxyTarget(ip) : null;
-        if (!address || address.family === 'hostname' || address.host !== String(ip).toLowerCase()) throw new Error('候选响应缺少有效出口 IP');
+        if (!address || address.family === 'hostname' || !/^[\da-f:.]+$/i.test(String(ip))
+          || (address.family === 'ipv4' && address.host !== ip)) throw new Error('候选响应缺少有效出口 IP');
         const exit = readProbeExit(payload, undefined)!;
         const trusted: ProbeExit = { ...exit, ip: address.host, family: address.family };
         const colo = readText(payload.colo)?.toUpperCase();
