@@ -39,18 +39,17 @@ async function fixture(failAdd = false) {
 }
 
 describe('complete and concise maintenance output', () => {
-  it('groups domains without wrapping decorative rules and keeps address metadata compact', async () => {
+  it('uses compact domain groups and keeps address metadata in the legacy order', async () => {
     const { run } = await fixture();
     const message = buildTelegramMaintenanceMessage(run, { isManual: true, now: new Date('2026-11-04T04:00:00Z') });
-    expect(message).not.toMatch(/[━─—]{2}/u);
-    expect(message).toContain('<b>edge.example.com</b>\nA/AAAA');
+    expect(message).toContain('━━ <code>edge.example.com</code> ━━\nA/AAAA');
     expect(message).toContain('端口 443');
     expect(message).toContain('最小活跃数 3');
-    expect(message).toContain('活跃：3/3');
-    for (const last of ['10', '11', '12']) {
-      expect(message).toContain('✅ <code>203.0.113.' + last + '</code>' + (last === '12' ? ' [新增]' : '')
-        + '\n   JP · AS64500 · ICN · 12ms');
+    expect(message).toContain('✅ 完成: 3/3');
+    for (const last of ['10', '11']) {
+      expect(message).toContain('✅ <code>203.0.113.' + last + ':443</code>\n   ICN · 12ms · JP · AS64500');
     }
+    expect(message).toContain('📈 新增 1 个 IP\n   ✅ <code>203.0.113.12:443</code>\n      ICN · 12ms · JP · AS64500');
   });
 
   it('escapes domain-group labels and keeps pool inventories readable', async () => {
@@ -62,7 +61,16 @@ describe('complete and concise maintenance output', () => {
     expect(message).toContain('A&amp;B &lt;pool&gt;');
     expect(message).not.toContain('A&B <pool>');
     expect(message).toContain('IP 池库存');
-    expect(message).toContain('：1');
+    expect(message).toContain('维护前: 1 个\n   维护后: 1 个');
+  });
+
+  it('labels actual start counts separately from the previous notification baseline', async () => {
+    const { run } = await fixture();
+    const message = buildTelegramMaintenanceMessage({ ...run, poolStats: { ...run.poolStats,
+      before: { ip_pool_default: 9 }, start: { ip_pool_default: 2 }, after: { ip_pool_default: 1 } } }, { isManual: true });
+    expect(message).toContain('维护前: 2 个\n   维护后: 1 个\n   📉 变化: -1');
+    expect(message).toContain('较上次通知: -8');
+    expect(message).not.toContain('维护前: 9 个');
   });
 
   it('preserves TXT ports, IPv6 and unknown diagnostics in domain groups', async () => {
@@ -84,11 +92,11 @@ describe('complete and concise maintenance output', () => {
       plan: { ...report.plan, current, activeCount: 1, dnsValues: values, additions: [], trash: [] },
     } }] };
     const message = buildTelegramMaintenanceMessage(changed, { isManual: true });
-    expect(message).toContain('<b>proxy.example.com</b>\nTXT · 最小活跃数 2');
+    expect(message).toContain('━━ <code>proxy.example.com</code> ━━\nTXT · 最小活跃数 2');
     expect(message).toContain('✅ <code>203.0.113.10:443</code>');
     expect(message).toContain('⚠️ <code>[2001:db8::10]:8443</code>');
-    expect(message).toContain('未判定 · [INVALID_RESPONSE] 检测接口返回坏 JSON');
-    expect(message).toContain('活跃：1/2');
+    expect(message).toContain('未确认 · [INVALID_RESPONSE] 检测接口返回坏 JSON');
+    expect(message).toContain('⚠️ 未完成: 1/2');
     expect(message).toContain('未达到最小活跃数');
     expect(message).not.toContain('端口 443');
     expect(message).toContain('检测异常 1 次（未计为失效）');
@@ -98,11 +106,11 @@ describe('complete and concise maintenance output', () => {
   it('includes every final DNS address, actual active count and successful additions', async () => {
     const { run } = await fixture();
     const message = buildTelegramMaintenanceMessage(run, { isManual: true, now: new Date('2026-11-03T00:00:00Z') });
-    for (const last of ['10', '11', '12']) expect(message).toContain('<code>203.0.113.' + last + '</code>');
-    expect(message).toContain('活跃：3/3');
-    expect(message).toContain('[新增]');
+    for (const last of ['10', '11', '12']) expect(message).toContain('<code>203.0.113.' + last + ':443</code>');
+    expect(message).toContain('✅ 完成: 3/3');
+    expect(message).toContain('📈 新增 1 个 IP');
     expect(message).toContain('JP');
-    expect(message).not.toContain('IP 池数量无变化');
+    expect(message).not.toContain('✨ 所有 IP 正常，无变化');
     expect(message).not.toContain('fixture-private-token');
   });
 
@@ -110,10 +118,10 @@ describe('complete and concise maintenance output', () => {
     const { run } = await fixture(true);
     expect(run.insufficient).toBe(true);
     const message = buildTelegramMaintenanceMessage(run, { isManual: true });
-    expect(message).toContain('活跃：2/3');
+    expect(message).toContain('⚠️ 未完成: 2/3');
     expect(message).toContain('未达到最小活跃数');
     expect(message).not.toContain('<code>203.0.113.12</code>');
-    expect(message).not.toContain('活跃：3/3');
+    expect(message).not.toContain('✅ 完成: 3/3');
   });
 
   it('returns prepared public lines and partial delivery status through the real client and route', async () => {
@@ -160,4 +168,8 @@ it('reports an archived failed pool candidate with its address and reason', asyn
   expect(message).toContain('候选链路 HTTP 404');
   expect(message).toContain('归档 1 个地址');
   expect(target.domain).toBe('edge.example.com');
+  const removed = { ...changed, results: [{ ...changed.results[0]!, report: { ...changed.results[0]!.report!,
+    dns: { ...report.dns!, removed: ['203.0.113.99'] } } }] };
+  const withoutDuplicate = buildTelegramMaintenanceMessage(removed, { isManual: true });
+  expect(withoutDuplicate.split('<code>' + failedAddress + '</code>')).toHaveLength(2);
 });

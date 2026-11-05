@@ -10,13 +10,6 @@ export interface PoolContentWrite {
   readonly after: string;
 }
 
-export interface PoolEntryChange {
-  readonly key: string;
-  readonly kind: 'add' | 'update' | 'remove';
-  readonly before?: PoolEntry;
-  readonly after?: PoolEntry;
-}
-
 export function planPoolSave(poolKey: string, before: PoolSnapshot, incoming: PoolSnapshot, mode: PoolSaveMode) {
   const existing = snapshotEntries(before);
   const next = mode === 'replace' ? snapshotEntries(incoming) : new Map(existing);
@@ -28,27 +21,10 @@ export function planPoolSave(poolKey: string, before: PoolSnapshot, incoming: Po
   } else if (mode === 'remove') {
     for (const key of incoming.entries.keys()) next.delete(key);
   }
-  const changes: PoolEntryChange[] = [];
-  for (const [key, entry] of next) {
-    const previous = existing.get(key);
-    if (!previous) changes.push({ key, kind: 'add', after: entry });
-    else if (formatPoolEntry(previous) !== formatPoolEntry(entry)) changes.push({ key, kind: 'update', before: previous, after: entry });
-  }
-  for (const [key, entry] of existing) if (!next.has(key)) changes.push({ key, kind: 'remove', before: entry });
   const content = serializePoolEntries(next, mode === 'replace' ? incoming : before);
   return {
     write: { poolKey, before: before.text, after: content } satisfies PoolContentWrite,
     changed: content !== before.text,
-    currentCount: existing.size,
-    standaloneComments: {
-      before: before.invalid.filter(line => line.startsWith('#')).length,
-      after: (mode === 'replace' ? incoming.invalid : before.invalid).filter(line => line.startsWith('#')).length,
-    },
-    unrecognized: {
-      before: before.invalid.filter(line => !line.startsWith('#')).length,
-      after: (mode === 'replace' ? incoming.invalid : before.invalid).filter(line => !line.startsWith('#')).length,
-    },
-    changes,
     summary: { mode, count: next.size, added: mode === 'replace' ? next.size : mode === 'append' ? next.size - existing.size : 0,
       removed: mode === 'remove' ? existing.size - next.size : 0, replaced: mode === 'replace' ? existing.size : 0 },
   };

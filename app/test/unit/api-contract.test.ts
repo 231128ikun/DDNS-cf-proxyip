@@ -34,7 +34,6 @@ const CLIENT_OPERATIONS: readonly ClientOperation[] = [
     method: 'PUT',
     path: '/api/pools/ip_pool_001',
   },
-  { name: 'previewPool', invoke: (client) => client.previewPool('ip_pool_001', '203.0.113.10:443'), method: 'POST', path: '/api/pools/ip_pool_001/preview' },
   { name: 'createPool', invoke: (client) => client.createPool('测试池'), method: 'POST', path: '/api/pools' },
   {
     name: 'renamePool',

@@ -44,6 +44,7 @@ import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
 export interface HttpAppDependencies {
   readonly checkTarget: CheckTarget;
   readonly version: string;
+  readonly executionColo?: string;
   readonly authKey?: string;
   readonly configSource?: EffectiveConfigSource;
   /** 未绑定 KV 时为空；此时 IP 池相关接口返回 503。 */
@@ -87,6 +88,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const response: HealthResponse = {
       ok: true,
       version: dependencies.version,
+      ...(dependencies.executionColo ? { executionColo: dependencies.executionColo } : {}),
       ...(dependencies.configSource ? { configSource: dependencies.configSource } : {}),
     };
     return jsonResponse(response);
@@ -106,7 +108,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const outcome = await dependencies.checkTarget.execute(parsed.value, { signal: context.request.signal });
     if (!outcome.ok) return errorResponse(outcome.message, 400);
 
-    return jsonResponse(toCheckTargetResponse(outcome.report));
+    return jsonResponse(toCheckTargetResponse(outcome.report, dependencies.executionColo));
   });
 
   router.get('/api/pools', async () => {
@@ -192,18 +194,6 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  /** 只读变更预览复用保存用例的校验和纯计划，不启动探针或写入。 */
-  router.post('/api/pools/:key/preview', async (context) => {
-    const pools = dependencies.pools;
-    if (!pools) return errorResponse('pool storage unavailable', 503);
-    const body = await readJsonBody(context.request);
-    if (!body.ok) return errorResponse('invalid json', 400);
-    return await mapApplicationInputError(async () => {
-      const input = body.value as SavePoolRequest | null;
-      return jsonResponse(await pools.preview(context.params.key, input?.content, input?.mode));
-    });
-  });
-
   router.put('/api/pools/:key', async (context) => {
     const pools = dependencies.pools;
     if (!pools) return errorResponse('pool storage unavailable', 503);
@@ -213,6 +203,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 
     return await mapApplicationInputError(async () => {
       const input = body.value as SavePoolRequest | null;
+      if (input?.mode !== undefined && input.mode !== 'append' && input.mode !== 'remove') return errorResponse('仅支持追加或按地址剔除', 400);
       const result = await pools.save(context.params.key, input?.content, input?.mode, input?.returnReceipt);
       const response: PoolSaveResponse = result;
       return jsonResponse(response);
@@ -426,7 +417,7 @@ function remoteLoadStatus(reason: RemoteLoadFailure): number {
 }
 
 /** 维护结果只暴露面板需要的信息，绝不回传 Cloudflare 凭据。 */
-function toCheckTargetResponse(report: CheckTargetReport): CheckTargetResponse {
+function toCheckTargetResponse(report: CheckTargetReport, executionColo?: string): CheckTargetResponse {
   const { source } = report;
   return {
     ok: true,
@@ -434,7 +425,7 @@ function toCheckTargetResponse(report: CheckTargetReport): CheckTargetResponse {
     source: source.kind === 'direct'
       ? { kind: 'direct' }
       : { kind: source.kind, host: source.host, addresses: source.addresses },
-    items: report.items.map((item) => ({ address: item.address, result: toProbeResponse(item.result) })),
+    items: report.items.map((item) => ({ address: item.address, result: { ...toProbeResponse(item.result), ...(executionColo ? { executionColo } : {}) } })),
     skipped: report.skipped,
   };
 }

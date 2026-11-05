@@ -9,8 +9,8 @@ import { pathToFileURL } from 'node:url';
 export const UI_BASELINE_REF = '81a41bd014c9d7ee2ec0cd50e9d43fff58c2b8f5';
 const appRoot = resolve(import.meta.dirname, '..');
 const webRoot = join(appRoot, 'dist', 'web');
-const probeExits = [{ family: 'ipv4', ip: '198.51.100.42', asn: 'AS64500', country: 'US' }];
-const baselineProbe = { success: true, colo: 'SJC', time: 12, exits: probeExits.map((exit) => ({ ...exit, stack: exit.family })) };
+const probeExits = [{ family: 'ipv4', ip: '198.51.100.42', asn: 'AS64500', country: 'US', region: 'California', city: 'San Jose' }];
+const baselineProbe = { success: true, colo: 'SJC', executionColo: 'HKG', time: 12, exits: probeExits.map((exit) => ({ ...exit, stack: exit.family })) };
 
 export function createUiFixture() {
   const zones = [{ name: '测试权限', label: '测试权限', baseDomain: 'example.com', zoneId: 'fixture-zone', apiKey: 'fixture-token' }];
@@ -34,7 +34,7 @@ export function createUiFixture() {
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
     poolContents: {}, poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     cleanResponse: null, restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
-    probeDelay: 0, probeDelays: {}, probeErrors: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
+    probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
 }
 
@@ -204,7 +204,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         return json(output, result.status);
       }
       const { config, pools, bindings } = fixture;
-      if (url.pathname === '/api/health') return json({ ok: true, version: 'fixture', configSource: 'kv' });
+      if (url.pathname === '/api/health') return json({ ok: true, version: 'fixture', configSource: 'kv', executionColo: 'HKG' });
       if (url.pathname === '/api/save-config' && request.method === 'POST') {
         if (fixture.failConfigSave) {
           fixture.failConfigSave = false;
@@ -248,7 +248,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         const failure = fixture.probeErrors[address];
         const result = failure ? { status: failure.code === 'TIMEOUT' ? 'dead' : 'unknown', exitFamily: 'unknown', exits: [], ...failure }
-          : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', exits: probeExits };
+          : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', executionColo: fixture.executionColo, exits: probeExits };
         return url.pathname === '/api/check'
           ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
           : json({ ...baselineProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });

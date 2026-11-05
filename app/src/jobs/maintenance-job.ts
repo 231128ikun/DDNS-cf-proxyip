@@ -46,6 +46,7 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
   const run: MaintenanceRunReport = {
     ...summary,
     poolStats: {
+      start: poolCounts(currentPools),
       before: beforeCounts,
       after: afterCounts,
       pools: afterPools,

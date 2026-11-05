@@ -147,10 +147,10 @@ describe('HTTP app pool routes', () => {
     const save = await app.request('/api/pools/ip_pool_001', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: '198.51.100.7:443\r\n\r\n', mode: 'replace' }),
+      body: JSON.stringify({ content: '198.51.100.7:443\r\n\r\n', mode: 'append' }),
     });
     expect(save.status).toBe(200);
-    await expect(save.json()).resolves.toMatchObject({ ok: true, mode: 'replace', count: 1 });
+    await expect(save.json()).resolves.toMatchObject({ ok: true, mode: 'append', count: 1 });
     expect(catalog.data.get('ip_pool_001')).toBe('198.51.100.7:443,null,null,null');
 
     const rename = await app.request('/api/pools/ip_pool_001', {

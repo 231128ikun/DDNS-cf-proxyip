@@ -59,6 +59,18 @@ describe('native candidate probe', () => {
     expect(io.closes.every(close => close.mock.calls.length === 1)).toBe(true);
   });
 
+  it('preserves region and city from the native exit payload', async () => {
+    const io = connector(host => http(JSON.stringify({
+      ip: host.includes('ipv6') ? '2001:db8::42' : '198.51.100.42', country: 'jp', region: 'Tokyo', city: 'Chiyoda',
+    })));
+    const result = await new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect }).probe(target);
+    expect(result.exits).toHaveLength(2);
+    expect(result.exits).toEqual(expect.arrayContaining([
+      expect.objectContaining({ family: 'ipv4', country: 'JP', region: 'Tokyo', city: 'Chiyoda' }),
+      expect.objectContaining({ family: 'ipv6', country: 'JP', region: 'Tokyo', city: 'Chiyoda' }),
+    ]));
+  });
+
   it.each([
     'HTTP/1.1 503 Unavailable\r\n\r\nservice unavailable',
     'HTTP/1.1 200 OK\r\n\r\nnot json',

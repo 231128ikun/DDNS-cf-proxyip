@@ -36,6 +36,9 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
     const details = [countries.join('/').slice(0, 60), asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80),
       probe.colo, probe.latencyMs === undefined ? undefined : '耗时 ' + probe.latencyMs + 'ms'].filter(Boolean).join(' · ');
     checks.set(redactAddress(value), { value: redactAddress(value), address: redactAddress(address), status: probe.status, matchesTarget: probeMatchesTarget(probe, target), details: redact(details),
+      ...(probe.colo ? { colo: redact(probe.colo) } : {}), ...(probe.latencyMs === undefined ? {} : { latencyMs: probe.latencyMs }),
+      ...(countries.length ? { country: redact(countries.join('/').slice(0, 60)) } : {}),
+      ...(asns.length ? { asn: redact(asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80)) } : {}),
       ...(probe.code ? { code: probe.code } : {}), ...(probe.message ? { message: redact(probe.message) } : {}),
     });
   };

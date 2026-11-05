@@ -314,16 +314,15 @@ describe('发布 Worker 装配', () => {
 
 });
 
-it('exposes preview through the deployed Worker without any KV writes', async () => {
+it('removes the inventory preview endpoint without writing KV', async () => {
   const put = vi.fn(async () => undefined);
   const values = new Map([
     ['app_config', JSON.stringify({ checkApi: '', checkApiBackup: '' })],
     ['ip_pool_default', '203.0.113.10:443,AS64500,JP,v4 # keep'],
   ]);
   const kv = { get: async (key: string) => values.get(key) ?? null, put } as unknown as KVNamespace;
-  const client = new ApiClient({ fetchImpl: async (url, init) => request(String(url), init, { ...env, IP_DATA: kv }) });
-  const preview = await client.previewPool('ip_pool_default', '203.0.113.11:443', 'append');
-  expect(preview).toMatchObject({ currentCount: 1, count: 2, added: 1, updated: 0, removed: 0 });
+  const response = await request('/api/pools/ip_pool_default/preview', { method: 'POST', body: JSON.stringify({ content: '203.0.113.11:443' }) }, { ...env, IP_DATA: kv });
+  expect(response.status).toBe(404);
   expect(put).not.toHaveBeenCalled();
   expect(values.get('ip_pool_default')).toBe('203.0.113.10:443,AS64500,JP,v4 # keep');
 });

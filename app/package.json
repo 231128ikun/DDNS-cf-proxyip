@@ -26,7 +26,7 @@
     "audit:acceptance": "node scripts/ui-acceptance.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only && node scripts/ui-pool-review-fixes.mjs",
+    "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-acceptance.mjs",
     "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs scripts/ui-browser.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
   },
   "dependencies": {

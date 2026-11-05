@@ -8,6 +8,7 @@ export interface PoolCheckItemResponse {
   readonly exitIp?: string;
   readonly latencyMs?: number;
   readonly colo?: string;
+  readonly executionColo?: string;
   readonly exits?: readonly ProbeExit[];
   readonly code?: string;
   readonly message?: string;
@@ -15,6 +16,8 @@ export interface PoolCheckItemResponse {
   readonly diagnostics?: readonly ProbeDiagnostic[];
   readonly asn?: string;
   readonly country?: string;
+  readonly region?: string;
+  readonly city?: string;
   /** 已合并检测元数据、可直接入库的池条目文本。 */
   readonly line: string;
 }

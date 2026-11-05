@@ -2,6 +2,7 @@ import type { PoolSummary } from '../contracts/pool';
 
 /** 一次维护运行里，各池“距上次成功通知”和“本次结束后”的数量对比。 */
 export interface MaintenancePoolStats {
+  readonly start?: Readonly<Record<string, number>>;
   readonly before: Readonly<Record<string, number>>;
   readonly after: Readonly<Record<string, number>>;
   /** 结束时的池清单，用于通知里显示名称；已删除的池会回退显示 key。 */

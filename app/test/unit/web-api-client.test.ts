@@ -86,6 +86,24 @@ describe('web API client', () => {
 });
 
 describe('web API client pool endpoints', () => {
+  it('keeps exit region and city in batch results', async () => {
+    const client = new ApiClient({ fetchImpl: async (_input, init) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
+      return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' }, items: [{
+        address: proxyip,
+        result: { status: 'alive', exitFamily: 'ipv4', exits: [
+          { family: 'ipv4', country: 'JP', region: 'Tokyo', city: 'Chiyoda' },
+        ] },
+      }], skipped: [] });
+    } });
+
+    const report = await client.checkBatch('203.0.113.10:443');
+    expect(report.items[0]).toMatchObject({
+      country: 'JP', region: 'Tokyo', city: 'Chiyoda',
+      exits: [{ country: 'JP', region: 'Tokyo', city: 'Chiyoda' }],
+    });
+  });
+
   it.each([[2, 2], [7, 7], [0, 1], [999, 128], [Number.NaN, 32]])(
     'uses configured concurrency %s, bounds it to %s and preserves progress and source order',
     async (concurrency, expectedPeak) => {
@@ -381,7 +399,7 @@ describe('web API client pool endpoints', () => {
 
     expect(calls[0]).toMatchObject({
       url: '/api/pools/ip_pool_001',
-      init: { method: 'PUT', body: JSON.stringify({ content: '203.0.113.9:443\n', mode: 'replace' }) },
+      init: { method: 'PUT', body: JSON.stringify({ content: '203.0.113.9:443\n', mode: 'append' }) },
     });
     expect(calls[1]).toMatchObject({
       url: '/api/check',

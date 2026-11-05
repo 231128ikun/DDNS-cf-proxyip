@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
-import type { CheckTargetResponse } from '../../../src/contracts/probe';
+import type { CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
+import type { ConfigResponse } from '../../../src/contracts/config';
 import type { RequestState } from '../state/request-state';
 import type { TargetStatusView } from '../state/target-status';
 import { Icon } from './icon';
@@ -34,6 +35,9 @@ export interface DashboardActions {
 
 interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'targetChoices' | 'onSelectTarget'> {
   readonly poolPanel: ComponentChildren;
+  readonly config: RequestState<ConfigResponse>;
+  readonly health: RequestState<HealthResponse>;
+  readonly executionColos: readonly string[];
   readonly check: RequestState<CheckTargetResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
   readonly lookup: string;
@@ -52,6 +56,9 @@ interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'tar
 
 export function DashboardPage({
   poolPanel,
+  config,
+  health,
+  executionColos,
   check,
   batch,
   lookup,
@@ -84,11 +91,12 @@ export function DashboardPage({
       <div class="dashboard-core-row">
           {poolPanel}
 
-          <div class="card p-4 dashboard-card dashboard-console-card">
+          <div class="card dashboard-card dashboard-console-card">
             <div class="dashboard-card-header">
               <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 工作台</h2>
+              <span class="console-colo" title="当前检测请求执行的 Worker 机房">执行机房 {executionColos.join(' / ') || (health.status === 'ready' ? health.data.executionColo ?? '未知' : '读取中')}</span>
             </div>
-            <Console logs={consoleLogs} />
+            <Console logs={consoleLogs} config={config} />
               {batch.status !== 'idle' && <div
                 class="progress console-progress mb-3"
                 role="progressbar"
@@ -114,8 +122,9 @@ export function DashboardPage({
   );
 }
 
-function Console({ logs }: {
+function Console({ logs, config }: {
   readonly logs: readonly ConsoleLogEntry[];
+  readonly config: RequestState<ConfigResponse>;
 }) {
   const consoleRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -125,6 +134,16 @@ function Console({ logs }: {
 
   return (
     <div id="log-window" class="console mb-3" role="log" aria-label="工作台日志" aria-live="polite" aria-relevant="additions text" ref={consoleRef}>
+      <details class="console-config" open>
+        <summary>配置详情</summary>
+        {config.status === 'ready' && <div class="console-settings">
+          <span>检测：内置探针{config.data.config.checkApiBackup ? ' + 备用接口' : ''}</span>
+          <span>并发：{config.data.config.settings.CONCURRENT_CHECKS} · 超时：{config.data.config.settings.CHECK_TIMEOUT / 1000}s</span>
+          <span>定时维护：{config.data.config.scheduledEnabled ? '开启' : '关闭'}</span>
+          <span>Telegram：{config.data.config.tgEnabled ? '开启' : '关闭'}</span>
+          <span>维护目标：{config.data.config.targets.filter(target => target.enabled).length} 个</span>
+        </div>}
+      </details>
       <div class="console-event-list">
         {logs.length === 0 && <div class="console-empty">正在连接系统…</div>}
         {logs.map((entry) => (

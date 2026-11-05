@@ -26,10 +26,11 @@ interface BatchCheckOptions {
   readonly notify: (message: string, type?: 'success' | 'error') => void;
   readonly appendConsoleLog: (message: string, tone?: ConsoleTone) => void;
   readonly onInterrupt: () => void;
+  readonly onStart?: () => void;
 }
 
 /** 批量检测的完整生命周期；所有输入替换都取消旧请求并使旧结果失效。 */
-export function useBatchCheck({ client, config, webCheckConcurrency, notify, appendConsoleLog, onInterrupt }: BatchCheckOptions) {
+export function useBatchCheck({ client, config, webCheckConcurrency, notify, appendConsoleLog, onInterrupt, onStart }: BatchCheckOptions) {
   const [ipText, setIpText] = useState('');
   const [batch, setBatch] = useState<RequestState<PoolCheckResponse>>({ status: 'idle' });
   const [checkingBatch, setCheckingBatch] = useState(false);
@@ -74,6 +75,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       notify(resume ? '没有未完成的检测项' : '请先输入或从库加载 IP', 'error');
       return;
     }
+    onStart?.();
     if (!resume) {
       setBatchInterrupt(null);
       batchSource.current = sourceText;
