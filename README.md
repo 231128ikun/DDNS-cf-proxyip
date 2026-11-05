@@ -135,7 +135,7 @@ npm run deploy
 
 Worker 通过原生 TCP/TLS 检测候选地址，并读取出口信息。
 
-原生检测未成功时使用备用接口复检一次。备用接口可在高级设置中修改或清空，清空后改为原生复检；接口异常不作为节点失效。
+原生检测未成功时使用备用接口复检一次。备用接口可在高级设置中修改或清空，清空后改为原生复检。接口不可用时会报告异常，不作为节点失效。
 
 备用检测接口可参考 [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)。
 
