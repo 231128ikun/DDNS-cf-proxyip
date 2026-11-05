@@ -129,18 +129,21 @@ describe('web and Worker API contract', () => {
             skipped: [],
           });
         }
-        if (url.endsWith('/clean')) return new Response(JSON.stringify({ type: 'complete', result: { ok: true, poolKey: 'ip_pool_001', checked: 0, kept: 0, trashed: 0, unknown: 0, skipped: false } }) + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
+        if (url === '/api/pools/ip_pool_001' && init?.method === 'GET') return Response.json({key:'ip_pool_001',content:'203.0.113.10:443'});
+        if (url.endsWith('/clean')) return Response.json({ok:true, poolKey:'ip_pool_001', checked:1, kept:1, trashed:0, unknown:0, skipped:false});
         return Response.json({ ok: true });
       },
     });
 
     for (const operation of CLIENT_OPERATIONS) await operation.invoke(client);
 
-    expect(requests).toHaveLength(CLIENT_OPERATIONS.length);
+    const expected = CLIENT_OPERATIONS.flatMap(operation => operation.name === 'cleanPool'
+      ? [{path:'/api/pools/ip_pool_001',method:'GET'}, {path:'/api/check',method:'POST'}, operation] : [operation]);
+    expect(requests).toHaveLength(expected.length);
     requests.forEach((request, index) => {
       expect(request).toMatchObject({
-        url: CLIENT_OPERATIONS[index]!.path,
-        method: CLIENT_OPERATIONS[index]!.method,
+        url: expected[index]!.path,
+        method: expected[index]!.method,
       });
     });
 

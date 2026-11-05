@@ -4,7 +4,7 @@ import type {
 } from '../../../src/contracts/pool-check';
 import type {
   CleanPoolResponse,
-  CleanPoolEvent,
+  CleanPoolRequest,
   CreatePoolResponse,
   PoolContentResponse,
   SavePoolRequest,
@@ -19,7 +19,6 @@ import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-setting
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
-import { readCleanPoolStream } from './clean-pool';
 
 export interface ApiClientOptions {
   readonly baseUrl?: string;
@@ -105,9 +104,22 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
-  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: Extract<CleanPoolEvent, { type: 'progress' }>) => void): Promise<CleanPoolResponse> {
-    const result = await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', undefined, signal, true, response => readCleanPoolStream(response, onProgress));
-    if (result.poolKey !== key) throw new ApiError('洗库回执的 IP 池不符', 0);
+  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<CleanPoolResponse> {
+    const source = await this.readPool(key, signal);
+    if (source.key !== key) throw new ApiError('返回的 IP 池不符', 0);
+    const {readPoolSnapshot, serializePoolEntries, snapshotEntries} = await import('../../../src/domain/pool-snapshot');
+    const snapshot = readPoolSnapshot(source.content);
+    if (!snapshot.entries.size) throw new ApiError('池中没有有效地址，无需洗库', 0);
+    const report = await this.checkBatch(serializePoolEntries(snapshotEntries(snapshot)), signal, onProgress, concurrency);
+    signal?.throwIfAborted();
+    const unknown = report.unknown + snapshot.invalid.length + report.invalid.length;
+    if (unknown) return {ok:true, poolKey:key, checked:report.total, kept:0, trashed:0, unknown, skipped:true};
+    const input: CleanPoolRequest = {content:source.content, report};
+    const result = await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', input, signal);
+    if (result?.ok !== true || result.poolKey !== key || result.checked !== report.total || typeof result.skipped !== 'boolean'
+      || ![result.kept, result.trashed, result.unknown, result.remaining ?? 0].every(count => Number.isSafeInteger(count) && count >= 0)) {
+      throw new ApiError('未取得有效洗库回执，请核对库存', 0);
+    }
     return result;
   }
   async savePoolOrder(order: readonly string[], signal?: AbortSignal): Promise<OkResponse> {
@@ -198,8 +210,8 @@ export class ApiClient {
     }, signal);
   }
 
-  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true, readResponse?: (response: Response) => Promise<T>): Promise<T> {
-    const headers = new Headers({ Accept: readResponse ? 'application/x-ndjson' : 'application/json' });
+  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true): Promise<T> {
+    const headers = new Headers({ Accept: 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };
@@ -226,7 +238,6 @@ export class ApiClient {
       page?.location?.assign?.('/');
     }
 
-    if (response.ok && readResponse) return await readResponse(response);
     let payload: unknown;
     try {
       payload = await response.json();

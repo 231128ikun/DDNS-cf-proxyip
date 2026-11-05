@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CheckPoolText } from '../../src/application/check-pool';
+import { ApiClient } from '../../web/src/api/client';
+import { createHttpApp } from '../../src/transport/http';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CheckTarget } from '../../src/application/check-target';
 import { MaintainManagedTarget } from '../../src/application/maintain-managed-target';
@@ -30,7 +31,10 @@ describe.each(['pool', 'domain', 'maintenance'] as const)('shared check concurre
       };
       const checkProxy = new CheckProxy(probe);
       if (kind === 'pool') {
-        await new CheckPoolText(checkProxy, concurrency).execute(addresses.join('\n'));
+        const app = createHttpApp({version:'test', checkTarget:new CheckTarget({checkProxy,
+          resolver:new ResolveTarget({query:async () => ({ok:true, values:[]})})})});
+        await new ApiClient({fetchImpl:async (url, init) => app.request(String(url), init)})
+          .checkBatch(addresses.join('\n'), undefined, undefined, concurrency);
       } else if (kind === 'domain') {
         await new CheckTarget({ ...(concurrency === undefined ? {} : { concurrency }), checkProxy,
           resolver: new ResolveTarget({ query: async (_name, type) => ({ ok: true, values: type === 'A' ? addresses : [] }) }),

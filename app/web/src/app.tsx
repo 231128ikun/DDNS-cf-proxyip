@@ -539,7 +539,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
                 containerBusy={poolBusy !== null || maintenanceBusy} refreshPools={() => void refreshPools()}
               onPoolCount={(key, count) => patchPools(current => ({ pools: current.pools.map(pool => pool.key === key ? { ...pool, count } : pool) }))} batch={batchState}
-              configReady={config.status === 'ready'} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
+                configReady={config.status === 'ready'} checkConcurrency={webCheckConcurrency} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
                 leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} onWriteBusy={setPoolWriteBusy} />}
             check={check}
             batch={batch}

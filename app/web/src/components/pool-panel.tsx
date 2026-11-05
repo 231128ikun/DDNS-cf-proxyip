@@ -26,6 +26,7 @@ interface PoolPanelProps {
   readonly onPoolCount: (key: string, count: number) => void;
   readonly batch: ReturnType<typeof useBatchCheck>;
   readonly configReady: boolean;
+  readonly checkConcurrency: number | 'all';
   readonly bindingsReady: boolean;
   readonly probeConfigured: boolean;
   readonly leaveGuard: { current: () => boolean };
@@ -36,7 +37,7 @@ interface PoolPanelProps {
 
 /** 输入负责整理和出入库，结果只负责选择。 */
 export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools,
-  onPoolCount, batch, configReady, bindingsReady, probeConfigured, leaveGuard, containerChanged, log, onWriteBusy }: PoolPanelProps) {
+  onPoolCount, batch, configReady, checkConcurrency, bindingsReady, probeConfigured, leaveGuard, containerChanged, log, onWriteBusy }: PoolPanelProps) {
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
   const [view, setView] = useState<'input' | 'results'>('input');
@@ -148,8 +149,8 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
       const result = await client.cleanPool(poolKey, controller.signal, event => {
         model.message = `检测中 ${event.completed}/${event.total} · 全部确认后写入`;
         render(value => value + 1);
-        log(`[洗库] ${event.completed}/${event.total} · ${event.address} · ${formatProbeLog(event.result)}`, event.result.status === 'alive' ? 'success' : event.result.status === 'dead' ? 'error' : 'warning');
-      });
+        log(`[洗库] ${event.completed}/${event.total} · ${event.item.address} · ${formatProbeLog(event.item)}`, event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning');
+      }, checkConcurrency);
       model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
         : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}`;
       if (!result.skipped) {

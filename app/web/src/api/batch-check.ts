@@ -1,6 +1,6 @@
 import { ApiError, type ApiClient } from './client';
 import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse } from '../../../src/contracts/pool-check';
-import type { CheckTargetResponse } from '../../../src/contracts/probe';
+import { isProbeResponse, type CheckTargetResponse } from '../../../src/contracts/probe';
 import { formatPoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
@@ -109,11 +109,7 @@ function unknownCheckItem(address: string, code: string, message: string): Check
 
 function isCheckTargetItemResponse(value: unknown): value is CheckTargetResponse['items'][number] {
   if (!isRecord(value) || typeof value.address !== 'string' || !parseProxyTarget(value.address, 443)) return false;
-  if (!isRecord(value.result)) return false;
-  const result = value.result;
-  if (!['alive', 'dead', 'unknown'].includes(String(result.status))) return false;
-  if (!['ipv4', 'ipv6', 'dual', 'unknown'].includes(String(result.exitFamily))) return false;
-  return Array.isArray(result.exits) && result.exits.every((exit) => isRecord(exit));
+  return isProbeResponse(value.result);
 }
 
 interface ParsedPoolCheckTarget {

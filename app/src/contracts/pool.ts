@@ -117,9 +117,8 @@ export interface CleanPoolResponse {
   readonly remaining?: number;
 }
 
-/** 同一次洗库请求的进度和最终回执，不写入 KV。 */
-export type CleanPoolEvent =
-  | { readonly type: 'start' }
-  | { readonly type: 'progress'; readonly completed: number; readonly total: number; readonly address: string; readonly result: import('./probe').ProbeResponse }
-  | { readonly type: 'complete'; readonly result: CleanPoolResponse }
-  | { readonly type: 'error'; readonly error: string };
+/** 手动洗库提交原始快照和普通批检报告；服务端只核对、规划和写入。 */
+export interface CleanPoolRequest {
+  readonly content: string;
+  readonly report: import('./pool-check').PoolCheckResponse;
+}
