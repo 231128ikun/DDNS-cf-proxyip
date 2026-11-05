@@ -136,6 +136,26 @@ function matchWithLatency(address: string, latencyMs: number): ProbeResult {
 }
 
 describe('MaintainManagedTarget', () => {
+  it('does not report an address-set change when only a duplicate record was removed', async () => {
+    const target = requireTarget({ mode: 'A', domain: 'edge.example.com', minActive: 0 });
+    const dns = new MemoryDnsRepository([
+      { id: 'a1', type: 'A', name: target.domain, content: '203.0.113.10' },
+      { id: 'a2', type: 'A', name: target.domain, content: '203.0.113.10' },
+    ]);
+    const remove = dns.deleteRecord.bind(dns);
+    vi.spyOn(dns, 'deleteRecord').mockImplementation(async (zone, id) => {
+      if (id === 'a2') throw new Error('fixture delete failure');
+      await remove(zone, id);
+    });
+    const report = await new MaintainManagedTarget({ dns, pools: new MemoryPoolRepository(),
+      probe: new StubProbeAdapter(new Map([['203.0.113.10:443', dead(requireProxy('203.0.113.10:443'))]])) })
+      .execute({ target, zone, poolKey: 'ip_pool_default' });
+    expect(report).toMatchObject({ deleted: 1, dnsUpdated: false, dns: {
+      before: ['203.0.113.10'], after: ['203.0.113.10'], added: [], removed: [],
+    } });
+    expect(report.errors).toHaveLength(1);
+  });
+
   it('maintains A records, refills with the fastest candidate and never walks the whole pool', async () => {
     const target = requireTarget({
       mode: 'A',
