@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   MAX_TARGETS,
   MAX_ZONES,
@@ -77,6 +77,10 @@ interface ConfigForm {
 type SecretKey = 'authKey' | 'tgToken';
 type SecretDrafts = Readonly<Record<SecretKey, string>>;
 
+class FieldError extends Error {
+  constructor(readonly field: string, message: string) { super(message); }
+}
+
 const EMPTY_DRAFTS: SecretDrafts = { authKey: '', tgToken: '' };
 const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   authKey: '面板密钥',
@@ -101,6 +105,9 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   const [drafts, setDrafts] = useState<SecretDrafts>(EMPTY_DRAFTS);
   const [editingZone, setEditingZone] = useState<ZoneEditor | null>(null);
   const [editingTarget, setEditingTarget] = useState<TargetEditor | null>(null);
+  const [saveError, setSaveError] = useState<Error | null>(null);
+  const [zoneError, setZoneError] = useState('');
+  const [targetError, setTargetError] = useState('');
 
   const applyResponse = useCallback((response: ConfigResponse): void => {
     const nextForm = formFromConfig(response.config);
@@ -112,6 +119,9 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     setDrafts(EMPTY_DRAFTS);
     setEditingZone(null);
     setEditingTarget(null);
+    setSaveError(null);
+    setZoneError('');
+    setTargetError('');
   }, []);
 
   /** 配置只由 App 读取；重试也更新共享状态，同一保存响应只应用一次。 */
@@ -134,6 +144,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   }, [applyResponse, baseline, load, onReload]);
 
   const patch = (partial: Partial<ConfigForm>): void => {
+    setSaveError(null);
     setForm((current) => (current ? { ...current, ...partial } : current));
   };
 
@@ -141,15 +152,18 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     if (!form) return;
     const zone = form.zones[index];
     if (!zone) return;
+    setZoneError('');
     setEditingZone((current) => current?.index === index ? null : { index, draft: { ...zone } });
   };
 
   const patchZone = (partial: Partial<ZoneDraft>): void => {
+    setZoneError('');
     setEditingZone((current) => current ? { ...current, draft: { ...current.draft, ...partial } } : current);
   };
 
   const addZone = (): void => {
     if (!form || form.zones.length >= MAX_ZONES) return;
+    setZoneError('');
     setEditingZone({ index: form.zones.length,
       draft: { name: '', label: '', baseDomain: '', zoneId: '', apiKey: '', hasApiKey: false } });
   };
@@ -158,17 +172,16 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     if (!form || !editingZone) return;
     const { draft, index } = editingZone;
     if (!draft.baseDomain.trim() && !draft.zoneId.trim() && !draft.apiKey.trim() && !draft.hasApiKey) {
-      notify('请至少填写目标维护域名、Zone ID 或 CF Key', 'error');
+      setZoneError('请至少填写目标维护域名、Zone ID 或 CF Key');
       return;
     }
     const zones = [...form.zones];
     zones[index] = { ...draft, baseDomain: draft.baseDomain.trim(), zoneId: draft.zoneId.trim(),
       label: draft.label.trim() || draft.baseDomain.trim(), name: draft.label.trim() || draft.baseDomain.trim() };
     const validated = parseAppConfig({ zones, targets: form.targets });
-    if (!validated.ok) { notify(validated.message, 'error'); return; }
+    if (!validated.ok) { setZoneError(validated.message); return; }
     patch({ zones });
     setEditingZone(null);
-    notify('权限配置已保存到页面，点击“保存到 KV”后生效');
   };
 
   const removeZone = (index: number): void => {
@@ -192,11 +205,13 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     if (!form) return;
     const target = form.targets[index];
     if (!target) return;
+    setTargetError('');
     setEditingTarget((current) => current?.index === index ? null : { index, draft: { ...target },
       aPort: typeof target.port === 'number' ? target.port : 443 });
   };
 
   const patchTargetDraft = (partial: Partial<TargetConfig>): void => {
+    setTargetError('');
     setEditingTarget((current) => {
       if (!current) return null;
       const aPort = typeof partial.port === 'number' ? partial.port : current.aPort;
@@ -212,6 +227,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
       return;
     }
     if (form.targets.length >= MAX_TARGETS) return;
+    setTargetError('');
     const target = { ...createEmptyTarget(form.settings.DEFAULT_MIN_ACTIVE), zoneIndex: 0 };
     setEditingTarget({ index: form.targets.length, draft: target, aPort: 443 });
   };
@@ -219,18 +235,17 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   const commitTarget = (): void => {
     if (!form || !editingTarget) return;
     const target = { ...normalizeTargetDraft(editingTarget.draft, form.zones), sourceKey: editingTarget.draft.sourceKey };
-    if (!target.domain) { notify('请先填写权限配置和域名前缀', 'error'); return; }
+    if (!target.domain) { setTargetError('请先填写权限配置和域名前缀'); return; }
     try {
       if (target.mode === 'A') readInteger(String(target.port), '端口', 1, 65535);
       readInteger(String(target.minActive), '最少可用数', 0, 100);
-    } catch (error) { notify(errorMessage(error), 'error'); return; }
+    } catch (error) { setTargetError(errorMessage(error)); return; }
     const targets = [...form.targets];
     targets[editingTarget.index] = target;
     const validated = parseAppConfig({ zones: form.zones, targets });
-    if (!validated.ok) { notify(validated.message, 'error'); return; }
+    if (!validated.ok) { setTargetError(validated.message); return; }
     patch({ targets });
     setEditingTarget(null);
-    notify('维护域名已保存到页面，点击“保存到 KV”后生效');
   };
 
   const removeTarget = (index: number): void => {
@@ -238,25 +253,37 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     setEditingTarget(null);
   };
 
-  const dirty = useMemo(() => {
-    if (!form) return false;
-    try {
-      return snapshot(form, drafts) !== baseline;
-    } catch {
-      // 数字框正在输入半截时无法构成合法请求，此时一律按"有改动"处理。
-      return true;
-    }
-  }, [baseline, drafts, form]);
+  const dirty = useMemo(() => form !== null && snapshot(form, drafts) !== baseline, [baseline, drafts, form]);
+  const editing = Boolean(
+    (editingZone && JSON.stringify(editingZone.draft) !== JSON.stringify(form?.zones[editingZone.index]))
+    || (editingTarget && JSON.stringify(editingTarget.draft) !== JSON.stringify(form?.targets[editingTarget.index])),
+  );
+  useEffect(() => {
+    if (!dirty && !editing) return;
+    const confirmLeave = (event: BeforeUnloadEvent): void => { event.preventDefault(); event.returnValue = true; };
+    window.addEventListener('beforeunload', confirmLeave);
+    return () => window.removeEventListener('beforeunload', confirmLeave);
+  }, [dirty, editing]);
+
+  useLayoutEffect(() => {
+    if (!(saveError instanceof FieldError)) return;
+    const field = document.getElementById(saveError.field);
+    const details = field?.closest('details');
+    if (details) details.open = true;
+    field?.focus({ preventScroll: true });
+    field?.scrollIntoView({ block: 'center' });
+  }, [saveError]);
 
   const handleSave = (): void => {
-    if (!form || saving) return;
+    if (!form || saving || editing) return;
+    setSaveError(null);
     let update: ConfigUpdateRequest;
     try {
       update = buildUpdate(form, drafts);
       const validated = parseAppConfig(update);
       if (!validated.ok) throw new Error(validated.message);
     } catch (error) {
-      notify(errorMessage(error), 'error');
+      setSaveError(error instanceof Error ? error : new Error(errorMessage(error)));
       return;
     }
 
@@ -268,13 +295,17 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
         onSaved(response, targetKeys);
         notify('配置已保存到 KV');
       })
-      .catch((error: unknown) => notify(errorMessage(error), 'error'));
+      .catch((error: unknown) => setSaveError(new Error(errorMessage(error))));
   };
 
-  if (load.status === 'loading') return <div class="card p-4"><p class="text-secondary mb-0">正在读取配置…</p></div>;
+  if (load.status === 'loading' || load.status === 'idle' || (load.status === 'ready' && !form)) {
+    return <div id="page-config" role="tabpanel" aria-labelledby="tab-config" class="card p-4" tabIndex={0}>
+      <p class="text-secondary mb-0">正在读取配置…</p>
+    </div>;
+  }
   if (load.status === 'error') {
     return (
-      <div class="card p-4">
+      <div id="page-config" role="tabpanel" aria-labelledby="tab-config" class="card p-4">
         <p class="text-danger mb-2">{load.message}</p>
         <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => void onReload()}>重试</button>
       </div>
@@ -291,19 +322,23 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     key: target.sourceKey ?? bindingKey(target) })), bindings.status === 'ready' ? bindings.data.items.map(item => item.key) : []);
 
   return (
-    <fieldset id="page-config" class="page-panel active" role="tabpanel" aria-labelledby="tab-config" disabled={saving} aria-busy={saving}>
+    <fieldset id="page-config" role="tabpanel" aria-labelledby="tab-config" disabled={saving} aria-busy={saving}>
       <ResourceFeedback state={load} id="retry-config" onRetry={() => void onReload()} />
+      <div class="config-toolbar card" hidden={!dirty && !editing}>
+        <span role="status">{editing ? '请先确认或取消编辑' : '配置有未保存改动'}</span>
+        <div class="config-edit-actions">
+          <button id="btn-cancel-config" class="btn btn-sm btn-outline-secondary" type="button"
+            disabled={saving || editing} onClick={() => applyResponse(load.data)}>还原改动</button>
+          <button id="btn-save-config" class="btn btn-sm btn-success" type="button"
+            disabled={saving || editing} onClick={handleSave}>
+            <Icon name="save" /> {saving ? '保存中…' : '保存到 KV'}
+          </button>
+        </div>
+        {saveError && !(saveError instanceof FieldError) && <small class="text-danger" role="alert">{saveError.message}</small>}
+      </div>
       <details class="card p-4 mb-3 config-details">
         <summary class="config-details-summary">
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
-          <div class="config-toolbar" hidden={!dirty}>
-            <button id="btn-cancel-config" class="btn btn-sm btn-outline-secondary" type="button" disabled={saving}
-              onClick={(event) => { event.preventDefault(); applyResponse(load.data); }}>还原改动</button>
-            <button id="btn-save-config" class="btn btn-sm btn-success config-save-btn" type="button" disabled={saving}
-              onClick={(event) => { event.preventDefault(); handleSave(); }}>
-              <Icon name="save" /> {saving ? '保存中…' : '保存到 KV'}
-            </button>
-          </div>
         </summary>
         <div class="config-details-body">
           <fieldset class="config-task-settings" aria-label="自动化设置" disabled={saving}>
@@ -334,7 +369,9 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
             <h3 id="config-runtime-title">运行参数</h3>
             <div class="config-grid config-runtime-grid">
               {SETTINGS_FIELDS.map(([key, label, help, id]) => (
-                <NumberField key={key} id={id} label={label} help={help} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max} onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
+                <NumberField key={key} id={id} label={label} help={help} value={form.settings[key]} min={SETTINGS_LIMITS[key].min} max={SETTINGS_LIMITS[key].max}
+                  error={saveError instanceof FieldError && saveError.field === id ? saveError.message : undefined}
+                  onChange={(value) => patch({ settings: { ...form.settings, [key]: value } })} />
               ))}
             </div>
           </section>
@@ -382,7 +419,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                 <TextField id={`zone-id-${editingZone.index}`} label="Zone ID" help="Cloudflare 区域 ID。" value={activeZone.zoneId} placeholder="Zone ID" onValue={(value) => patchZone({ zoneId: value })} />
                 <TextField id={`zone-token-${editingZone.index}`} label="CF Key" help="留空保持原值；需要 DNS 编辑权限。" type="password" autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : 'CF API Token'} onValue={(value) => patchZone({ apiKey: value })} />
               </div>
-              <ConfigEditorActions disabled={saving} onCancel={() => setEditingZone(null)} onSave={commitZone} />
+              <ConfigEditorActions error={zoneError} disabled={saving} onCancel={() => setEditingZone(null)} onSave={commitZone} />
             </>
           )}
         </div>
@@ -497,7 +534,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                 <TextField id={`target-asn-${editingTarget.index}`} label="ASN" help="可填多个，逗号分隔；任一命中即可。" value={activeTarget.asn} placeholder="13335,209242" onValue={(value) => patchTargetDraft({ asn: value })} />
                 <NumberField id={`target-port-${editingTarget.index}`} label="端口" help="A/AAAA 模式使用。" value={activeTarget.mode === 'TXT' ? '任意' : String(activeTarget.port)} min={1} max={65535} disabled={activeTarget.mode === 'TXT'} onChange={(value) => patchTargetDraft({ port: Number(value) })} />
               </div>
-              <ConfigEditorActions disabled={saving} onCancel={() => setEditingTarget(null)} onSave={commitTarget} />
+              <ConfigEditorActions error={targetError} disabled={saving} onCancel={() => setEditingTarget(null)} onSave={commitTarget} />
             </>
           )}
         </div>
@@ -552,18 +589,20 @@ function TargetPoolField({ target, bindings, pools, busy, onBind }: {
   );
 }
 
-function ConfigEditorActions({ disabled, onCancel, onSave }: {
+function ConfigEditorActions({ error, disabled, onCancel, onSave }: {
+  readonly error: string;
   readonly disabled: boolean;
   readonly onCancel: () => void;
   readonly onSave: () => void;
 }) {
   return (
     <div class="config-edit-actions">
+      {error && <small class="text-danger" role="alert">{error}</small>}
       <button class="btn btn-sm btn-outline-secondary" type="button" disabled={disabled} onClick={onCancel}>
         取消
       </button>
       <button class="btn btn-sm btn-primary" type="button" disabled={disabled} onClick={onSave}>
-        保存到页面
+        确认修改
       </button>
     </div>
   );
@@ -610,6 +649,7 @@ function NumberField({
   id,
   label,
   help,
+  error,
   value,
   min,
   max,
@@ -619,6 +659,7 @@ function NumberField({
   readonly id: string;
   readonly label: string;
   readonly help: string;
+  readonly error?: string | undefined;
   readonly value: string;
   readonly min: number;
   readonly max: number;
@@ -636,10 +677,12 @@ function NumberField({
         class="form-control form-control-sm"
         min={min}
         max={max}
-        aria-describedby={`${id}-help`}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-help ${id}-error` : `${id}-help`}
         value={value}
         onInput={(event) => onChange(event.currentTarget.value)}
       />
+      {error && <small id={`${id}-error`} class="text-danger" role="alert">{error}</small>}
     </div>
   );
 }
@@ -697,10 +740,10 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
 /** 密钥留空时沿用旧值；新值非空时才提交替换。 */
 function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateRequest {
   const settings = Object.fromEntries(
-    SETTINGS_FIELDS.map(([key, label]) => [
-      key,
-      readInteger(form.settings[key], label, SETTINGS_LIMITS[key].min, SETTINGS_LIMITS[key].max),
-    ]),
+    SETTINGS_FIELDS.map(([key, label, , id]) => {
+      try { return [key, readInteger(form.settings[key], label, SETTINGS_LIMITS[key].min, SETTINGS_LIMITS[key].max)]; }
+      catch (error) { throw new FieldError(id, errorMessage(error)); }
+    }),
   ) as unknown as RuntimeSettings;
 
   const authKey = secretValue(drafts, 'authKey');
@@ -829,7 +872,6 @@ function readExitFilter(value: string): ExitFilter {
   return value === 'v4' || value === 'v6' || value === 'dual' ? value : 'any';
 }
 
-/** 保存入口始终可见；只有表单与已落库基线不同时才允许提交。 */
 function snapshot(form: ConfigForm, drafts: SecretDrafts): string {
   return JSON.stringify([form, drafts]);
 }

@@ -82,7 +82,7 @@ export function DashboardPage({
 }: DashboardPageProps) {
 
   return (
-    <div id="page-dashboard" class="page-panel active" role="tabpanel" aria-labelledby="tab-dashboard">
+    <div id="page-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
       <StatusOverview
         check={check} current={targetStatus} selectedKey={selectedTargetKey} targetPort={targetPort}
         bindings={bindings} targetChoices={targetChoices} onSelectTarget={onSelectTarget}

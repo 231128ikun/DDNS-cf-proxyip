@@ -46,11 +46,21 @@ try {
     assert.ok(await read('document.querySelector(".console-colo").textContent.includes("NRT")'));
     assert.ok(await read('[...document.querySelectorAll(".exit-detail .exit-tag")].some(item => item.textContent.includes("San Jose"))'));
     await capture('input-' + width);
+    await click('#pool-action-trigger');
+    assert.ok(await read('document.querySelector(".pool-menu").open && !document.querySelector(".pool-menu [aria-label=刷新池列表]")'));
+    await capture('pool-menu-' + width);
+    await click('[data-action=view-draft]');
+    assert.ok(await read('!document.querySelector(".pool-menu").open'), 'Clicking outside did not close the pool menu');
+    await click('#pool-action-trigger');
+    await read('const item = document.querySelector(".pool-menu .action-menu-item"); item.focus(); item.dispatchEvent(new KeyboardEvent("keydown", { key:"Escape", bubbles:true }));');
+    assert.ok(await read('!document.querySelector(".pool-menu").open && document.activeElement.id === "pool-action-trigger"'), 'Escape did not close the menu and restore focus');
     await hover('[aria-label="筛选用法"]');
+    assert.ok(await read('document.querySelector("#pool-filter-help").hidden'), 'Hover opens the filter help');
+    await click('[aria-label="筛选用法"]');
     await until('!document.querySelector("#pool-filter-help").hidden');
     assert.ok(await read('["空格", "逗号", "竖线", "port:443-2053", "备注"].every(text => document.querySelector("#pool-filter-help").textContent.includes(text))'));
     await capture('help-' + width);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }, sessionId);
+    await click('[aria-label="筛选用法"]');
     await until('document.querySelector("#pool-filter-help").hidden');
     await click('[aria-label="筛选用法"]');
     await until('!document.querySelector("#pool-filter-help").hidden');
@@ -59,6 +69,15 @@ try {
     const sourceStart = server.requests.length;
     await click('[data-action=load-pool]');
     await until('document.querySelector("#ip-input").value.includes("保留备注") && !document.querySelector("[data-action=load-pool]").disabled');
+    const draftBeforeRefresh = await read('document.querySelector("#ip-input").value');
+    server.fixture.poolListCounts.ip_pool_default = 3;
+    const refreshStart = server.requests.length;
+    await click('[aria-label="刷新池列表"]');
+    await waitForUiRequest(server.requests, refreshStart, '/api/pools', 'GET', 200);
+    await until('parseInt(document.querySelector("#pool-count").textContent) === 3');
+    assert.equal(await read('document.querySelector("#ip-input").value'), draftBeforeRefresh, 'Refreshing the list changed the draft');
+    assert.ok(!server.requests.slice(refreshStart).some(item => item.path.startsWith('/api/pools/')), 'Refreshing the list read pool contents');
+    delete server.fixture.poolListCounts.ip_pool_default;
     const original = '203.0.113.10:443,AS64500,JP,v4 # 本地备注\n203.0.113.20:443,AS64500,US,v4 # 美国\n203.0.113.30:443,AS64500,KR,v4';
     const file = join(out, 'import-' + width + '.txt'); writeFileSync(file, original);
     const chooser = cdp.wait(sessionId, 'Page.fileChooserOpened');
@@ -99,7 +118,18 @@ try {
     assert.ok(await read('document.querySelector(".console-colo").textContent.includes("NRT")'));
     await click('[aria-label="选择 203.0.113.10:443"]');
     await click('[aria-label="选择 203.0.113.30:443"]');
+    assert.ok(await read(`(() => {
+      const row = document.querySelector('[aria-label="选择 203.0.113.10:443"]')?.closest('li');
+      const address = row.querySelector('.syntax-address');
+      const fields = [address, address?.querySelector('.syntax-number'), row.querySelector('.syntax-type'), row.querySelector('.syntax-meta')];
+      return address?.textContent === '203.0.113.10:443' && fields.every(field => field?.checkVisibility())
+        && new Set(fields.map(field => getComputedStyle(field).color)).size === fields.length;
+    })()`), '检测结果的地址、端口、栈与 ASN 未正确区分');
     await capture('results-' + width);
+    await click('#theme-toggle');
+    await capture('results-dark-' + width);
+    await click('#theme-toggle');
+    await click('#theme-toggle');
     await click('[data-action=retain-results]');
     await until('!document.querySelector(".pool-report")');
     assert.ok(await read('document.querySelector("#ip-input").value.includes("203.0.113.10") && document.querySelector("#ip-input").value.includes("203.0.113.30") && !document.querySelector("#ip-input").value.includes("203.0.113.20")'));
@@ -208,9 +238,13 @@ try {
     await click('[data-page=config]');
     await until('Boolean(document.querySelector("#cfg-probe-ipv4"))');
     assert.equal(await read('document.querySelector("#cfg-probe-ipv4").value'), '');
-    await click('[aria-label="版本更新历史"]');
-    await until('!document.querySelector("#version-notes").hidden');
-    assert.equal(await read('document.querySelector("#version-notes").getBoundingClientRect().left < 0 || document.querySelector("#version-notes").getBoundingClientRect().right > innerWidth'), false);
+    await hover('#version-trigger');
+    assert.equal(await read('Boolean(document.querySelector(".version-notes"))'), false, 'Hover opens version history');
+    await click('#version-trigger');
+    await until('Boolean(document.querySelector("dialog[open] .version-notes li"))');
+    assert.equal(await read('document.querySelector(".version-notes").getBoundingClientRect().left < 0 || document.querySelector(".version-notes").getBoundingClientRect().right > innerWidth'), false);
+    await click('.version-notes > button');
+    await until('!document.querySelector(".version-notes") && document.activeElement.id === "version-trigger"');
     results.push({ width, passed: true });
     console.log(`PASS ${width}px: input/results, imports, exact writes, real 216-address pool/trash cleaning, streamed logs, cancel/unknown protection, duplicate-click locks`);
   }

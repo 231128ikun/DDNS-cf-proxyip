@@ -10,6 +10,8 @@ export type IconName =
   | 'globe'
   | 'help'
   | 'link'
+  | 'monitor'
+  | 'moon'
   | 'sort'
   | 'plus'
   | 'pencil'
@@ -20,6 +22,7 @@ export type IconName =
   | 'search'
   | 'settings'
   | 'stop'
+  | 'sun'
   | 'trash'
   | 'wrench';
 

@@ -18,6 +18,7 @@ const flag = (name, fallback) => {
 };
 let BASE = flag("base", "");
 const compareBaseline = args.includes("--compare-baseline");
+const dark = args.includes("--dark");
 if (compareBaseline && BASE) throw new Error('--compare-baseline 必须使用本地同数据 fixture，不能配合 --base');
 const OUT = resolve(flag("out", ".wrangler/tmp/ui-audit"));
 const MIN_TARGET = 32;
@@ -518,6 +519,8 @@ async function main() {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Runtime.enable", {}, sessionId);
+    const setDark = session => cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: 'localStorage.setItem("ddns-theme", "dark")' }, session);
+    if (dark) await setDark(sessionId);
 
     const results = [];
     const referenceResults = [];
@@ -569,6 +572,7 @@ async function main() {
       const flowSession = await cdp.send("Target.attachToTarget", { targetId: flowTarget.targetId, flatten: true });
       await cdp.send("Page.enable", {}, flowSession.sessionId);
       await cdp.send("Runtime.enable", {}, flowSession.sessionId);
+      if (dark) await setDark(flowSession.sessionId);
       const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport, Boolean(fixture));
       interactionFailures.push(...failures.map((failure) => `${viewport.name}: ${failure}`));
       const cardFailures = await runConfigCardCheck(cdp, flowSession.sessionId, viewport);

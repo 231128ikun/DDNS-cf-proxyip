@@ -16,6 +16,7 @@ import {
 } from './components/dashboard-page';
 import { PoolPanel } from './components/pool-panel';
 import { Hero } from './components/hero';
+import { Icon } from './components/icon';
 import { VersionHistory } from './components/version-history';
 import type { GlobalSettingKey } from './components/config-page';
 import { TopNav, type AppPage } from './components/top-nav';
@@ -27,6 +28,7 @@ import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } fr
 import { useBatchCheck } from './state/use-batch-check';
 import { formatProbeLog } from './components/probe-log';
 import { executionStatus } from './state/execution-status';
+import { currentTheme, cycleTheme } from './state/theme';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -37,6 +39,8 @@ interface Toast {
 }
 
 export function App({ client, initialConfig }: { readonly client: ApiClient; readonly initialConfig?: ConfigResponse }) {
+  const [theme, setTheme] = useState(currentTheme);
+  const themeLabel = `切换外观（当前：${theme === 'system' ? '跟随系统' : theme === 'light' ? '浅色' : '深色'}）`;
   const [page, setPage] = useState<AppPage>('dashboard');
   const [ConfigPage, setConfigPage] = useState<ConfigPageComponent | null>(null);
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
@@ -529,7 +533,15 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       />
 
       <div class="container">
-        <TopNav page={page} onPageChange={next => { if (next === page || poolLeaveGuard.current()) setPage(next); }} />
+        <div class="page-nav">
+          <TopNav page={page} onPageChange={next => {
+            if (next !== page && !poolLeaveGuard.current()) return false;
+            setPage(next);
+            return true;
+          }} />
+          <button id="theme-toggle" type="button" class="btn btn-sm btn-icon btn-outline-secondary" aria-label={themeLabel} title={themeLabel}
+            onClick={() => setTheme(cycleTheme(theme))}><Icon name={theme === 'system' ? 'monitor' : theme === 'light' ? 'sun' : 'moon'} /></button>
+        </div>
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
             config={config} health={health}
@@ -566,7 +578,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
               pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
               onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (
-            <p class="text-secondary text-center py-4">正在加载配置中心…</p>
+            <p id="page-config" role="tabpanel" aria-labelledby="tab-config" class="text-secondary text-center py-4">正在加载配置中心…</p>
           )}
         </div>
       </div>
