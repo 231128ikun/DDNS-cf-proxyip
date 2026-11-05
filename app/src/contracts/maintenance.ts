@@ -45,6 +45,10 @@ export interface MaintenanceAddressCheck {
   readonly status: ProbeStatus;
   readonly matchesTarget: boolean;
   readonly details: string;
+  readonly colo?: string;
+  readonly latencyMs?: number;
+  readonly country?: string;
+  readonly asn?: string;
   readonly code?: string;
   readonly message?: string;
 }

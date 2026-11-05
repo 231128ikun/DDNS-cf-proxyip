@@ -54,7 +54,7 @@ export interface PoolContentResponse {
 
 export interface SavePoolRequest {
   readonly content: string;
-  readonly mode?: PoolSaveMode;
+  readonly mode?: 'append' | 'remove';
   readonly returnReceipt?: boolean;
 }
 
@@ -73,29 +73,6 @@ export interface PoolSaveResponse {
   readonly removed: number;
   readonly replaced: number;
   readonly receipt?: PoolWriteReceipt;
-}
-
-export interface PoolPreviewChange {
-  readonly address: string;
-  readonly kind: 'add' | 'update' | 'remove';
-  readonly before?: string;
-  readonly after?: string;
-}
-
-/** 预览是当前读取快照上的差异，不是事务锁；提交仍须明确传递同一个 mode。 */
-export interface PoolPreviewResponse {
-  readonly ok: true;
-  readonly poolKey: string;
-  readonly mode: PoolSaveMode;
-  readonly currentCount: number;
-  readonly count: number;
-  readonly added: number;
-  readonly updated: number;
-  readonly removed: number;
-  readonly changed: boolean;
-  readonly unrecognized: { readonly before: number; readonly after: number };
-  readonly standaloneComments: { readonly before: number; readonly after: number };
-  readonly changes: readonly PoolPreviewChange[];
 }
 
 export interface CreatePoolRequest {

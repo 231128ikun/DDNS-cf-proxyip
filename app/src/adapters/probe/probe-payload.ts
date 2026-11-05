@@ -20,14 +20,18 @@ export function readProbeExit(record: JsonRecord, stackHint: string | undefined)
   const family = normalizeSingleExitFamily(readText(record.exit_family) ?? readText(record.ipType) ?? readText(record.type) ?? stackHint, ip);
   const asn = normalizeAsn(record.exit_asn) ?? normalizeAsn(record.asn) ?? normalizeAsn(record.as) ?? normalizeAsn(record.asNumber);
   const country = firstText(record, ['exit_country', 'country', 'countryCode']);
+  const region = firstText(record, ['exit_region', 'region', 'regionName']);
+  const city = firstText(record, ['exit_city', 'city', 'cityName']);
   const organization = firstText(record, ['exit_org', 'asOrganization', 'asname', 'org', 'isp']);
 
-  if (!ip && !asn && !country && !organization && family === 'unknown') return null;
+  if (!ip && !asn && !country && !region && !city && !organization && family === 'unknown') return null;
   return {
     family,
     ...(ip ? { ip } : {}),
     ...(asn ? { asn } : {}),
     ...(country ? { country: country.toUpperCase() } : {}),
+    ...(region ? { region } : {}),
+    ...(city ? { city } : {}),
     ...(organization ? { organization } : {}),
   };
 }

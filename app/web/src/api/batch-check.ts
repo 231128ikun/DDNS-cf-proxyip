@@ -78,6 +78,8 @@ async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
     const primary = result.exits[0];
     const asn = primary?.asn ?? entry.asn ?? undefined;
     const country = primary?.country ?? entry.country ?? undefined;
+    const region = primary?.region;
+    const city = primary?.city;
     return {
       address,
       status: result.status,
@@ -85,6 +87,7 @@ async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
       ...(result.exitIp ? { exitIp: result.exitIp } : {}),
       ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
       ...(result.colo ? { colo: result.colo } : {}),
+      ...(result.executionColo ? { executionColo: result.executionColo } : {}),
       ...(result.exits.length ? { exits: result.exits } : {}),
       ...(result.code ? { code: result.code } : {}),
       ...(result.message ? { message: result.message } : {}),
@@ -92,6 +95,8 @@ async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
       ...(result.diagnostics?.length ? { diagnostics: result.diagnostics } : {}),
       ...(asn ? { asn } : {}),
       ...(country ? { country } : {}),
+      ...(region ? { region } : {}),
+      ...(city ? { city } : {}),
       line: result.status === 'unknown' ? target.sourceLine : formatPoolEntry(entry),
     };
   });

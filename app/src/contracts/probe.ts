@@ -10,7 +10,7 @@ export function parseCheckProxyInput(value: unknown): ParseResult<string> {
   return parseOk(proxyip);
 }
 
-export type ProbeResponse = Omit<ProbeResult, 'target'>;
+export type ProbeResponse = Omit<ProbeResult, 'target'> & { readonly executionColo?: string };
 
 /** 探测入口的解析来源：direct 表示输入本身就是目标，txt/dns 表示先解析出地址再探测。 */
 export interface CheckTargetSourceResponse {
@@ -39,6 +39,7 @@ export interface HealthResponse {
   readonly ok: true;
   readonly version: string;
   readonly configSource?: ConfigSource;
+  readonly executionColo?: string;
 }
 
 export interface ApiErrorResponse {

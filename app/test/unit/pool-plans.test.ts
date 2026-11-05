@@ -17,7 +17,6 @@ describe('pure pool mutation plans', () => {
     const appended = planPoolSave(DEFAULT_POOL_KEY, before, incoming, 'append');
     expect(appended.summary).toEqual({ mode: 'append', count: 2, added: 1, removed: 0, replaced: 0 });
     expect(appended.write.after).toContain(`${address},AS64500,JP,v4 # new`);
-    expect(appended.changes.map(item => item.kind)).toEqual(['update', 'add']);
     expect(before.entries.size).toBe(1);
     expect(before.text).toContain('# old');
     expect(planPoolSave(DEFAULT_POOL_KEY, before, incoming, 'replace').summary.replaced).toBe(1);
@@ -28,7 +27,7 @@ describe('pure pool mutation plans', () => {
     const before = readPoolSnapshot(`${address},AS64500,JP,v4`);
     const plan = planPoolSave(DEFAULT_POOL_KEY, before, before, 'append');
     expect(plan.changed).toBe(false);
-    expect(plan.changes).toEqual([]);
+    expect(plan.write.before).toBe(plan.write.after);
   });
 
   it('plans restore destinations before trash cleanup and reports already-present addresses', () => {

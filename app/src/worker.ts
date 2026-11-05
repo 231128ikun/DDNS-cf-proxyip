@@ -30,7 +30,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.05-00.13';
+export const APP_VERSION = '2026.11.05-10.10';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -60,6 +60,7 @@ export function createWorker(): ExportedHandler<RuntimeEnv> {
       const dependencies: HttpAppDependencies = {
         checkTarget,
         version: APP_VERSION,
+        ...(typeof request.cf?.colo === 'string' && /^[A-Z]{3}$/.test(request.cf.colo) ? { executionColo: request.cf.colo } : {}),
         authKey: resolved.config.authKey,
         configSource: resolved.source,
         // 鉴权与路由共享本次请求的配置快照，不重复读 KV；下一次请求重新解析。

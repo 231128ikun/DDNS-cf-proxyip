@@ -9,6 +9,8 @@ export interface ProbeExit {
   readonly ip?: string;
   readonly asn?: string;
   readonly country?: string;
+  readonly region?: string;
+  readonly city?: string;
   readonly organization?: string;
 }
 

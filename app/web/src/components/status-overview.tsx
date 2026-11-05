@@ -150,7 +150,7 @@ function ProbeExits({ result, onCopy }: { readonly result: ProbeResponse; readon
     return <div class="exit-detail" key={index}>
       <span class="exit-tag exit-stack">{exit.family === 'unknown' ? 'EXIT' : exit.family.toUpperCase()}</span>
       <button type="button" class="exit-ip" disabled={!exit.ip} title="点击复制出口 IP" aria-label={`复制出口 IP ${exit.ip ?? '未知'}`} onClick={() => exit.ip && onCopy(exit.ip)}>{exit.ip ?? '-'}</button>
-      <span class="exit-tag" title={exit.country}>{exit.country ?? '-'}</span>
+      <span class="exit-tag" title={[exit.country, exit.region, exit.city].filter(Boolean).join(' · ')}>{[exit.country, exit.city || exit.region].filter(Boolean).join(' · ') || '-'}</span>
       <span class="exit-tag" title={network}>{network || '-'}</span>
     </div>;
   })}</>;

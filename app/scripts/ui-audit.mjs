@@ -335,20 +335,20 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         button.click();
 
         const report = await waitFor(() => {
-          const idle = document.querySelector('button[aria-label="批量检测导入草稿"]');
-          return idle && document.querySelector('.pool-report')?.textContent.includes('检测异常 1') ? document.querySelector('.pool-report').textContent : null;
+          return !document.querySelector('button[aria-label="停止批量检测"]') && document.querySelector('.pool-report')?.textContent.includes('异常 1') ? document.querySelector('.pool-report').textContent : null;
         });
         if (!report || !report.includes('可用 1') || input.value !== original) failures.push('检测报告没有独立保留可用/未知数量与原始草稿');
-        const unknown = [...document.querySelectorAll('.pool-report button')].find(button => button.textContent.trim() === '检测异常 1');
-        unknown?.click();
+        const resultCategory = document.querySelector('[aria-label="检测结果分类"]');
+        if (resultCategory) { resultCategory.value = 'unknown'; resultCategory.dispatchEvent(new Event('change', { bubbles: true })); }
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         if (!document.querySelector('.pool-result-list')?.textContent.includes('检测超时')) failures.push('未知检测结果缺少具体原因');
 
         window.__batchDelayMs = 250;
+        document.querySelector('[data-action=view-draft]')?.click();
         input.value = original;
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: original }));
         await new Promise((resolve) => setTimeout(resolve, 50));
-        button.click();
+        document.querySelector('button[aria-label="批量检测导入草稿"]')?.click();
         await new Promise((resolve) => setTimeout(resolve, 80));
         const stopButton = document.querySelector('button[aria-label="停止批量检测"]');
         if (!stopButton) failures.push("检测运行中缺少停止按钮");
@@ -359,12 +359,13 @@ async function runBatchFlowCheck(cdp, sessionId, viewport, expectEmpty) {
         abandon?.click();
         await new Promise((resolve) => setTimeout(resolve, 400));
         window.__batchDelayMs = 0;
+        document.querySelector('[data-action=view-draft]')?.click();
         if (!(await waitFor(() => document.querySelector('button[aria-label="批量检测导入草稿"]')))) {
           failures.push("中止检测后没有回到清洗按钮");
         }
         if (input.value !== original) failures.push("放弃后未完成输入被旧请求覆盖");
 
-        const clear = [...document.querySelectorAll('.pool-import button')].find(button => button.textContent.trim() === '清空输入');
+        const clear = document.querySelector('[data-action=clear-input]');
         if (!clear) failures.push('找不到清空输入动作');
         else {
           clear.click(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -531,7 +532,7 @@ async function main() {
         const loaded = cdp.wait(sessionId, "Page.loadEventFired");
         await cdp.send("Page.navigate", { url: `${BASE}${surface === 'baseline' ? '/reference' : page.path}` }, sessionId);
         await loaded.catch(() => {});
-        if (fixture) await cdp.until(sessionId, "document.querySelector('#pool-count')?.textContent === '2'");
+        if (fixture) await cdp.until(sessionId, "parseInt(document.querySelector('#pool-count')?.textContent) === 2");
         else await sleep(1200);
         await cdp.evaluate(sessionId, 'document.fonts.ready.then(() => true)');
         if (page.tab) {

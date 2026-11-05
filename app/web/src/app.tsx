@@ -41,6 +41,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [orderRequest, setOrderRequest] = useState<OrderRequest | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [lookup, setLookup] = useState('');
+  const [probeContext, setProbeContext] = useState<'current' | 'lookup' | 'batch'>('current');
   const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(() => {
@@ -112,6 +113,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     : DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS;
   const batchState = useBatchCheck({
     client, config, webCheckConcurrency, notify, appendConsoleLog,
+    onStart: () => setProbeContext('batch'),
     onInterrupt: () => { orderGeneration.current++; setOrderRequest(null); },
   });
   const { ipText, batch, batchProgressState, batchInterrupt, replaceIpText, handleResumeBatch, handleAbandonBatch } = batchState;
@@ -220,6 +222,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       return;
     }
     setCheck({ status: 'loading' });
+    setProbeContext('lookup');
     activeLookup.current?.abort();
     const controller = new AbortController();
     activeLookup.current = controller;
@@ -251,12 +254,14 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   };
 
   const handleRefresh = (): void => {
+    setProbeContext('current');
     resetLookup();
     appendConsoleLog('[解析] 刷新实况');
     void refreshTargetStatuses();
   };
 
   const handleSelectTarget = (key: string | null): void => {
+    setProbeContext('current');
     initialOrderPending.current = false;
     resetLookup();
     setSelectedTargetKey(key);
@@ -514,6 +519,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         <TopNav page={page} onPageChange={next => { if (next === page || poolLeaveGuard.current()) setPage(next); }} />
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
+            config={config} health={health}
+            executionColos={[...new Set((probeContext === 'batch' ? batchState.batchReport?.items ?? [] : probeContext === 'lookup' ? check.status === 'ready' ? check.data.items.map(item => item.result) : [] : targetStatus.status === 'ready' ? targetStatus.data.probes : []).map(item => item.executionColo).filter((value): value is string => Boolean(value)))]}
             poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
               containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()}
