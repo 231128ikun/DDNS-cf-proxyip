@@ -3,9 +3,6 @@ import { DEFAULT_POOL_KEY, TRASH_POOL_KEY, NUMBERED_POOL_KEY_RE, isUserPoolKey }
 import type { CheckTargetResponse } from '../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../src/contracts/config';
 import { bindingKey } from '../../src/domain/domain-binding';
-import { extractPoolAddressKey } from '../../src/domain/pool-entry';
-import { dedupePoolText, filterPoolText, parsePoolFilter, type PoolFilterMode } from '../../src/domain/pool-filter';
-import { cleanPoolText, countPoolTextLines } from '../../src/domain/pool-text';
 import { sortByKeyOrder } from '../../src/util/key-order';
 import { ApiClient, loadBatchCheckModule } from './api/client';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../src/contracts/runtime-settings';
@@ -17,7 +14,9 @@ import {
   type DashboardActions,
   type PoolActionKey,
 } from './components/dashboard-page';
+import { PoolPanel } from './components/pool-panel';
 import { Hero } from './components/hero';
+import { VersionHistory } from './components/version-history';
 import type { GlobalSettingKey } from './components/config-page';
 import { TopNav, type AppPage } from './components/top-nav';
 import { Modal } from './components/modal';
@@ -43,23 +42,23 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [usageOpen, setUsageOpen] = useState(false);
   const [lookup, setLookup] = useState('');
   const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
-  const [filterText, setFilterText] = useState('');
-  const [remoteUrl, setRemoteUrl] = useState('');
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(() => {
     const first = initialConfig?.config.targets[0];
     return first ? bindingKey(first) : null;
   });
   const initialOrderPending = useRef(true);
+  const poolLeaveGuard = useRef<() => boolean>(() => true);
+  const poolContainerChanged = useRef<(key: string) => void>(() => {});
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
-  const [loadingPool, setLoadingPool] = useState(false);
-  const [savingPool, setSavingPool] = useState(false);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const configWritePending = useRef(false);
   const bindingWritePending = useRef(false);
-  const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>([]);
+  const [consoleLogs, setConsoleLogs] = useState<readonly ConsoleLogEntry[]>(() => [{
+    id: 0, time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), tone: 'info', message: '[系统] 正在加载配置…',
+  }]);
   const [toast, setToast] = useState<Toast | null>(null);
   const logSequence = useRef(0);
   const activeLookup = useRef<AbortController | null>(null);
@@ -71,8 +70,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const orderGeneration = useRef(0);
   const orderModule = useRef<OrderDialogModule | null>(null);
   const OrderDialog = orderModule.current?.OrderDialog;
-  const startupLogged = useRef(false);
-  const loggedProbeDiagnostics = useRef(new Map<string, string>());
+  const startupLogged = useRef('');
 
   const notify = useCallback((message: string, type: Toast['type'] = 'success'): void => {
     setToast({ message, type });
@@ -112,11 +110,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const webCheckConcurrency = config.status === 'ready'
     ? config.data.config.settings.CONCURRENT_CHECKS ?? DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS
     : DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS;
-  const { ipText, batch, checkingBatch, batchProgressState, batchInterrupt, replaceIpText,
-    handleCheckBatch, handleStopBatch, handleResumeBatch, handleAbandonBatch } = useBatchCheck({
+  const batchState = useBatchCheck({
     client, config, webCheckConcurrency, notify, appendConsoleLog,
     onInterrupt: () => { orderGeneration.current++; setOrderRequest(null); },
   });
+  const { ipText, batch, batchProgressState, batchInterrupt, replaceIpText, handleResumeBatch, handleAbandonBatch } = batchState;
   const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
   const targetPort = configuredTarget?.port ?? 443;
   const [targetStatuses, refreshTargetStatuses] = useResource<TargetStatusesView>((signal, progress) =>
@@ -147,33 +145,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!configuredTargets) return;
     resetLookup();
     const controller = new AbortController();
-    loggedProbeDiagnostics.current.clear();
     void refreshTargetStatuses(controller.signal);
     void loadBatchCheckModule().catch(() => { /* 实际检测仍按原路径加载并报告失败。 */ });
     return () => controller.abort();
   }, [configuredTargets, refreshTargetStatuses, resetLookup]);
 
-  /** 解析实况也是检测入口；异常逐项进工作台，同一加载过程不重复打印。 */
-  useEffect(() => {
-    if (targetStatuses.status !== 'ready') return;
-    for (const [key, state] of Object.entries(targetStatuses.data.byKey)) {
-      if (state.status === 'error') {
-        if (loggedProbeDiagnostics.current.get(key) !== state.message) {
-          loggedProbeDiagnostics.current.set(key, state.message);
-          appendConsoleLog('[解析 ' + key + '] ' + state.message, 'error');
-        }
-      } else if (state.status === 'ready') {
-        for (const item of state.data.probes) {
-          if (item.status === 'alive' && !item.diagnostics?.length && item.code !== 'PARTIAL_EXIT') continue;
-          const identity = key + ':' + item.address;
-          const message = formatProbeLog(item);
-          if (loggedProbeDiagnostics.current.get(identity) === message) continue;
-          loggedProbeDiagnostics.current.set(identity, message);
-          appendConsoleLog('[解析 ' + key + '] ' + item.address + ' · ' + message, item.status === 'dead' ? 'error' : 'warning');
-        }
-      }
-    }
-  }, [targetStatuses, appendConsoleLog]);
 
   /** 首次配置已由登录入口读取；其余只读资源立即并行拉取。 */
   useLayoutEffect(() => {
@@ -205,29 +181,36 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   }, [toast]);
 
   useEffect(() => {
-    if (startupLogged.current || health.status !== 'ready' || config.status !== 'ready' || pools.status !== 'ready' || !confirmedBindings) return;
-    if (targetChoices.length && !selectedTargetKey) return;
-    startupLogged.current = true;
-    appendConsoleLog('🚀 系统就绪', 'success');
-    appendConsoleLog(`⚙️ 配置: 并发${webCheckConcurrency} | 超时${config.data.config.settings.CHECK_TIMEOUT}ms`);
-    const target = targetChoices.find(item => item.key === selectedTargetKey);
-    if (target) appendConsoleLog(`切换到: ${target.domain} (${target.mode})`);
-    else appendConsoleLog('请先在配置中心添加管理域名', 'warning');
-    appendConsoleLog('✅ 已加载池配置', 'success');
-  }, [appendConsoleLog, config, health, pools, confirmedBindings, selectedTargetKey, targetChoices, webCheckConcurrency]);
+    if (config.status === 'loading' || config.status === 'idle') return;
+    setConsoleLogs(current => current.map(entry => entry.id !== 0 ? entry : { ...entry,
+      tone: config.status === 'ready' ? 'success' : 'error',
+      message: config.status === 'ready' ? '[配置] 已加载' + (config.data.source === 'kv' ? ' KV 配置' : '环境配置')
+        : '[配置] 加载失败：' + config.message,
+    }));
+  }, [config]);
+
+  useEffect(() => {
+    const resources = [health, config, pools, bindings];
+    if (resources.some(resource => resource.status === 'loading' || resource.status === 'idle')) return;
+    const failed = resources.some(resource => resource.status === 'error');
+    const message = failed ? '[系统] 部分资源加载失败，请在对应区域重试'
+      : targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加';
+    if (message === startupLogged.current) return;
+    startupLogged.current = message;
+    appendConsoleLog(message, failed || !targetChoices.length ? 'warning' : 'success');
+  }, [appendConsoleLog, config, health, pools, bindings, targetChoices]);
 
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
     setPoolBusy(key);
     try {
       const message = await task();
-      await refreshPools();
       notify(message);
     } catch (error) {
       notify(errorMessage(error), 'error');
     } finally {
       setPoolBusy((current) => (current === key ? null : current));
     }
-  }, [notify, refreshPools]);
+  }, [notify]);
 
   const handleLookupSubmit = (event: Event): void => {
     event.preventDefault();
@@ -269,8 +252,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
 
   const handleRefresh = (): void => {
     resetLookup();
-    loggedProbeDiagnostics.current.clear();
-    appendConsoleLog('[系统] 正在并发刷新全部域名解析');
+    appendConsoleLog('[解析] 刷新实况');
     void refreshTargetStatuses();
   };
 
@@ -285,11 +267,12 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const handleSelectPool = (key: string): void => {
     setPoolKey(key);
     const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === key)?.name ?? key : key;
-    appendConsoleLog(`📦 切换到: ${name}`);
+    appendConsoleLog(`[IP池] 已选择 ${name}`);
   };
 
   /** 只读地把当前记录复制到池工作台，不在 DNS 层做任何写入。 */
   const handleCopyToInput = (address: string): void => {
+    if (batchState.checkingBatch || !poolLeaveGuard.current()) return;
     const lines = ipText.split('\n').map((line) => line.trim()).filter(Boolean);
     if (lines.includes(address)) {
       notify('该地址已在输入框中', 'error');
@@ -315,7 +298,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       notify('请输入要添加的 IP', 'error');
       return Promise.resolve(false);
     }
-    appendConsoleLog(`[记录] 正在添加 ${input}`);
     return client.addRecord(selectedTargetKey, input)
       .then(async () => {
         if (currentTargetKey.current === selectedTargetKey) resetLookup();
@@ -349,103 +331,13 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       });
   };
 
-  const handleLoadPool = (): void => {
-    setLoadingPool(true);
-    appendConsoleLog(`[IP池] 正在读取 ${poolKey}`);
-    client.readPool(poolKey)
-      .then(({ content }) => {
-        replaceIpText(content.replace(/\n$/, ''));
-        appendConsoleLog(`[IP池] 已读取 ${countPoolTextLines(content)} 条地址`, 'success');
-        notify(content.trim() ? '已从库中加载' : '该池当前为空', content.trim() ? 'success' : 'error');
-      })
-      .catch((error: unknown) => {
-        const message = errorMessage(error);
-        appendConsoleLog(`[IP池] ${message}`, 'error');
-        notify(message, 'error');
-      })
-      .finally(() => setLoadingPool(false));
-  };
-
-  const handleSavePool = (): void => {
-    if (!ipText.trim()) {
-      notify('输入框为空，未写入池', 'error');
-      return;
-    }
-    const normalized = cleanPoolText(ipText);
-    if (!normalized) {
-      notify('输入框里没有可识别的 IP 或域名', 'error');
-      return;
-    }
-    setSavingPool(true);
-    appendConsoleLog(`[IP池] 正在保存 ${poolKey}`);
-    client.savePool(poolKey, normalized)
-      .then(async () => {
-        const { content } = await client.readPool(poolKey);
-        replaceIpText(content);
-        await refreshPools();
-        appendConsoleLog(`[IP池] 已保存 ${countPoolTextLines(normalized)} 条地址`, 'success');
-        notify('已保存并规范化到 IP 池');
-      })
-      .catch((error: unknown) => {
-        const message = errorMessage(error);
-        appendConsoleLog(`[IP池] ${message}`, 'error');
-        notify(message, 'error');
-      })
-      .finally(() => setSavingPool(false));
-  };
-
-  const handleRemoveLines = (): void => {
-    if (!ipText.trim()) {
-      appendConsoleLog('❌ 内容为空', 'error');
-      return;
-    }
-    const name = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.name ?? poolKey : poolKey;
-    if (!window.confirm(`确认从 ${name} 中删除这些IP？`)) return;
-    void runPoolAction('remove-lines', async () => {
-      const result = await client.savePool(poolKey, ipText, 'remove');
-      return result.removed ? `已从 ${poolKey} 移除 ${result.removed} 条` : '这些地址不在当前池中';
-    });
-  };
-
-  const handleLoadRemote = (): void => {
-    const url = remoteUrl.trim();
-    if (!url) {
-      notify('请输入远程 TXT URL', 'error');
-      return;
-    }
-    void runPoolAction('remote-load', async () => {
-      const result = await client.remoteLoad(url);
-      replaceIpText(result.content.replace(/\n$/, ''));
-      return `已加载 ${result.count} 条`;
-    });
-  };
-
-  const handleApplyFilter = (mode: PoolFilterMode): void => {
-    const filter = parsePoolFilter(filterText);
-    if (!filter) {
-      notify('筛选条件无效：端口需为 1-65535 的数字或范围', 'error');
-      return;
-    }
-    const next = filterPoolText(ipText, filter, mode);
-    replaceIpText(next);
-    notify(mode === 'keep' ? `已保留 ${countPoolTextLines(next)} 条` : `已排除，剩余 ${countPoolTextLines(next)} 条`);
-  };
-
-  const handleDedupe = (): void => {
-    const next = dedupePoolText(ipText);
-    if (next === ipText.trim()) {
-      notify('没有发现重复条目', 'error');
-      return;
-    }
-    replaceIpText(next);
-    notify(`去重后保留 ${countPoolTextLines(next)} 条`);
-  };
-
   const handleCreatePool = (): void => {
+    if (!poolLeaveGuard.current()) return;
     const name = window.prompt('新建 IP 池名称', '新池')?.trim();
     if (!name) return;
     void runPoolAction('pool-edit', async () => {
       const created = await client.createPool(name);
+      poolContainerChanged.current(created.key);
       patchPools(current => ({ pools: [
         ...current.pools.filter(pool => pool.key !== TRASH_POOL_KEY && pool.key !== created.key),
         { key: created.key, name: created.displayName, count: 0 },
@@ -457,6 +349,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   };
 
   const handleRenamePool = (): void => {
+    if (bindings.status !== 'ready') return;
     if (!isUserPoolKey(poolKey)) {
       notify('默认池与编号池之外不支持重命名', 'error');
       return;
@@ -466,6 +359,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!name || name === current?.name) return;
     void runPoolAction('pool-edit', async () => {
       await client.renamePool(poolKey, name);
+      patchPools(current => ({ pools: current.pools.map(pool => pool.key === poolKey ? { ...pool, name } : pool) }));
+      patchBindings(current => ({ items: current.items.map(item => item.poolKey === poolKey ? { ...item, poolName: name } : item) }));
       return `已重命名为 ${name}`;
     });
   };
@@ -488,6 +383,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   };
 
   const handleDeletePool = (): void => {
+    if (bindings.status !== 'ready') return;
+    if (!poolLeaveGuard.current()) return;
     if (!NUMBERED_POOL_KEY_RE.test(poolKey)) {
       notify('只能删除编号 IP 池', 'error');
       return;
@@ -495,40 +392,13 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (!window.confirm(`确认删除 ${poolKey}？池内 IP 将一并删除，已绑定的域名会回退到默认池。`)) return;
     void runPoolAction('pool-edit', async () => {
       await client.removePool(poolKey);
+      poolContainerChanged.current(poolKey);
+      patchPools(current => ({ pools: current.pools.filter(pool => pool.key !== poolKey) }));
+      const defaultName = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === DEFAULT_POOL_KEY)?.name : undefined;
+      patchBindings(current => ({ items: current.items.map(item => item.poolKey === poolKey
+        ? { ...item, poolKey: DEFAULT_POOL_KEY, poolName: defaultName ?? '默认池' } : item) }));
       setPoolKey(DEFAULT_POOL_KEY);
       return `已删除 ${poolKey}`;
-    });
-  };
-
-  const handleCleanPool = (): void => {
-    void runPoolAction('clean-pool', async () => {
-      const report = await client.cleanPool(poolKey);
-      // 服务端已经重写过池内容，回读一次让输入框和库保持一致。
-      const { content } = await client.readPool(poolKey);
-      replaceIpText(content);
-      if (report.skipped) return `${report.unknown} 条未确认，本次未写回也未入桶`;
-      const trashed = report.trashed > 0 ? `，移入垃圾桶 ${report.trashed} 条` : '';
-      return `洗库完成：保留 ${report.kept} 条${trashed}`;
-    });
-  };
-
-  const handleRestoreTrash = (): void => {
-    const addresses = ipText.split('\n').map((line) => extractPoolAddressKey(line)).filter(Boolean);
-    if (!addresses.length) {
-      notify('请先在输入框填入要恢复的地址', 'error');
-      return;
-    }
-    void runPoolAction('trash', async () => {
-      const result = await client.restoreTrash(addresses, { restoreToSource: true });
-      return result.restored ? `已恢复 ${result.restored} 条到原池` : '输入框中的地址不在垃圾桶中';
-    });
-  };
-
-  const handleClearTrash = (): void => {
-    if (!window.confirm('确认清空垃圾桶？该操作不可撤销。')) return;
-    void runPoolAction('trash', async () => {
-      await client.clearTrash();
-      return '垃圾桶已清空';
     });
   };
 
@@ -594,23 +464,14 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     client.runMaintenance()
       .then(async (data) => {
         for (const item of data.results) {
-          appendConsoleLog(
-            `[维护] ${item.domain} (${item.mode}) · +${item.added} / -${item.deleted}${item.probeErrors ? ` · 探针异常 ${item.probeErrors} 次` : ''}${item.error ? ` · ${item.error}` : ''}`,
-            item.error ? 'error' : item.probeErrors ? 'warning' : 'success',
-          );
+          for (const line of item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')]) appendConsoleLog('[维护] ' + line, item.error ? 'error' : item.probeErrors ? 'warning' : 'success');
         }
-        for (const error of data.errors) appendConsoleLog(`[维护] ${error}`, 'error');
-        if (data.insufficient) appendConsoleLog('[维护] 可用 IP 不足', 'warning');
-        appendConsoleLog(
-          `[维护] 完成 · 更新 ${data.results.filter((item) => item.dnsUpdated).length} 个目标 / 探针异常 ${data.probeErrors} 次 / 错误 ${data.errors.length} 项`,
-          data.errors.length || data.probeErrors ? 'warning' : 'success',
-        );
+        const notification = data.notificationMessage;
+        if (notification) appendConsoleLog('[通知] ' + notification, data.notification?.reason === 'failed' ? 'error' : 'info');
+        appendConsoleLog('[维护] 结束', data.insufficient || data.errors.length || data.probeErrors ? 'warning' : 'success');
         await refreshBindings();
         await refreshPools();
-        notify(
-          data.changed ? '维护完成：DNS 已更新' : '维护完成：无需变更',
-          data.errors.length || data.probeErrors ? 'error' : 'success',
-        );
+        notify(data.message ?? '维护结束', data.completed === false ? 'error' : 'success');
       })
       .catch((error: unknown) => {
         const message = errorMessage(error);
@@ -623,24 +484,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const actions: DashboardActions = {
     lookupSubmit: handleLookupSubmit,
     refresh: handleRefresh,
-    loadPool: handleLoadPool,
-    checkBatch: () => handleCheckBatch(),
-    stopBatch: handleStopBatch,
-    resumeBatch: handleResumeBatch,
-    abandonBatch: handleAbandonBatch,
-    savePool: handleSavePool,
-    loadRemote: handleLoadRemote,
-    applyFilter: handleApplyFilter,
-    dedupe: handleDedupe,
-    removeLines: handleRemoveLines,
-    createPool: handleCreatePool,
-    renamePool: handleRenamePool,
-    openPoolOrder: () => void openOrderDialog('pools'),
-    deletePool: handleDeletePool,
-    cleanPool: handleCleanPool,
-    restoreTrash: handleRestoreTrash,
-    clearTrash: handleClearTrash,
-    refreshPools: () => void refreshPools(),
     addRecord: handleAddRecord,
     deleteRecord: handleDeleteRecord,
     runMaintenance: handleRunMaintenance,
@@ -668,23 +511,18 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       />
 
       <div class="container">
-        <TopNav page={page} onPageChange={setPage} />
+        <TopNav page={page} onPageChange={next => { if (next === page || poolLeaveGuard.current()) setPage(next); }} />
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
+            poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
+              actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
+              containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()}
+              onPoolCount={(key, count) => patchPools(current => ({ pools: current.pools.map(pool => pool.key === key ? { ...pool, count } : pool) }))} batch={batchState}
+              configReady={config.status === 'ready'} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
+              leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} />}
             check={check}
-            pools={pools}
             batch={batch}
             lookup={lookup}
-            ipText={ipText}
-            probeConfigured={config.status !== 'ready' || Boolean(config.data.config.checkApi || config.data.config.checkApiBackup)}
-            configReady={config.status === 'ready'}
-            filterText={filterText}
-            remoteUrl={remoteUrl}
-            poolKey={poolKey}
-            loadingPool={loadingPool}
-            checkingBatch={checkingBatch}
-            savingPool={savingPool}
-            poolBusy={poolBusy}
             consoleLogs={consoleLogs}
             batchProgressState={batchProgressState}
             targetStatus={targetStatus}
@@ -698,10 +536,6 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             onCopyToInput={handleCopyToInput}
             onCopyAddress={handleCopyAddress}
             onLookupChange={setLookup}
-            onIpTextChange={replaceIpText}
-            onFilterChange={setFilterText}
-            onRemoteUrlChange={setRemoteUrl}
-            onPoolChange={handleSelectPool}
           />
         </div>
         <div hidden={page !== 'config'}>
@@ -716,19 +550,19 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       </div>
 
       <footer class="container text-center text-secondary small">
-        DDNS Pro · {health.status === 'ready' ? health.data.version : 'unknown'}
+        <VersionHistory version={health.status === 'ready' ? health.data.version : 'unknown'} />
       </footer>
       {orderRequest && OrderDialog && !batchInterrupt && <OrderDialog {...orderRequest}
         onSave={order => orderModule.current!.saveOrder(orderRequest.kind, order,
-          { client, patchPools, patchBindings, refreshPools, refreshBindings, notify })}
+          { client, patchPools, patchBindings, notify })}
         onClose={() => setOrderRequest(null)} />}
       {batchInterrupt && (
         <Modal id="batch-interrupt-title" title="检测已中断">
           <div class="custom-modal-stats">
-            <div><span class="label">已检测</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
-            <div><span class="label">有效 IP</span><span class="value">{batchInterrupt.valid} 个</span></div>
-            <div><span class="label">有效率</span><span class="value">{batchInterrupt.rate}%</span></div>
-            <div><span class="label">未检测</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
+            <div><span class="label">已完成来源</span><span class="value">{batchInterrupt.checked} / {batchInterrupt.total}</span></div>
+            <div><span class="label">可用地址结果</span><span class="value">{batchInterrupt.valid} 个</span></div>
+            <div><span class="label">已检测地址有效率</span><span class="value">{batchInterrupt.rate}%（{batchInterrupt.valid}/{batchInterrupt.results}）</span></div>
+            <div><span class="label">待检测来源</span><span class="value">{batchInterrupt.unchecked} 个</span></div>
           </div>
           <div class="custom-modal-buttons">
             <button class="btn-abandon" type="button" onClick={handleAbandonBatch}>放弃检测</button>

@@ -22,3 +22,10 @@ it('redacts quoted credentials and does not print embedded raw response bodies',
   for (const value of ['private key value', 'private-auth', 'private-body']) expect(output).not.toContain(value);
   expect(output).toContain('TLS failed');
 });
+
+it('omits ordinary successful batch progress but preserves diagnostics', async () => {
+  const { shouldLogProbe } = await import('../../web/src/components/probe-log');
+  expect(shouldLogProbe({ status: 'alive' })).toBe(false);
+  expect(shouldLogProbe({ status: 'unknown', code: 'HTTP_ERROR' })).toBe(true);
+  expect(shouldLogProbe({ status: 'alive', diagnostics: [{ endpoint: 'primary', status: 'unknown', code: 'HTTP_ERROR', message: 'HTTP 503' }] })).toBe(true);
+});

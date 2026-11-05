@@ -93,6 +93,19 @@ export class Cdp {
   }
 }
 
+export function parseDevToolsEndpoint(text) {
+  const announced = /DevTools listening on (ws:\/\/\S+)/.exec(text)?.[1];
+  const lines = text.trim().split('\n');
+  const value = announced ?? (lines.length >= 2 ? 'ws://127.0.0.1:' + lines[0] + lines[1] : '');
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'ws:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.username || url.password || url.search || url.hash) return null;
+    const port = Number(url.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^\/devtools\/browser\/[\w-]+$/.test(url.pathname)) return null;
+    return url.href;
+  } catch { return null; }
+}
+
 export async function launchBrowser(chrome) {
   const executable = [chrome, process.env.CHROME_PATH,
     `${process.env.ProgramFiles}/Google/Chrome/Application/chrome.exe`,
@@ -105,12 +118,17 @@ export async function launchBrowser(chrome) {
   const child = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', '--hide-scrollbars',
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-    '--force-device-scale-factor=1', ...(process.env.CI ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+    '--force-device-scale-factor=1', ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let startup = '';
+  let announced;
+  let spawnError;
+  child.stderr.on('data', data => { startup = (startup + data.toString()).slice(-8000); announced ??= parseDevToolsEndpoint(startup); });
+  child.once('error', error => { spawnError = error; });
   let cdp;
   const close = async () => {
     await cdp?.send('Browser.close').catch(() => {});
     cdp?.close();
-    if (child.exitCode === null) {
+    if (child.pid && child.exitCode === null) {
       await new Promise((resolve) => {
         if (process.platform !== 'win32') { child.once('exit', resolve); child.kill(); return; }
         const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
@@ -126,12 +144,16 @@ export async function launchBrowser(chrome) {
   try {
     const activePort = join(profile, 'DevToolsActivePort');
     const deadline = Date.now() + 20_000;
-    while (!existsSync(activePort)) {
-      if (child.exitCode !== null || Date.now() > deadline) throw new Error('Chrome 调试端口未就绪');
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    let endpoint;
+    while (!endpoint) {
+      endpoint = announced ?? (existsSync(activePort) ? parseDevToolsEndpoint(readFileSync(activePort, 'utf8')) : null);
+      if (endpoint) break;
+      if (spawnError || child.exitCode !== null || Date.now() > deadline) {
+        throw new Error('Chrome 调试端口未就绪：' + (spawnError?.message || startup.slice(-2000) || '未取得启动信息'));
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
-    const [port, socket] = readFileSync(activePort, 'utf8').trim().split('\n');
-    cdp = new Cdp(`ws://127.0.0.1:${port}${socket}`);
+    cdp = new Cdp(endpoint);
     await cdp.connect();
     return { cdp, close };
   } catch (error) {

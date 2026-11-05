@@ -1,5 +1,5 @@
 import { ExternalApiProbeAdapter } from '../adapters/probe/external-api';
-import { UnconfiguredProbeAdapter } from '../adapters/probe/unconfigured';
+import { NativeProbeAdapter, type ProbeConnect } from '../adapters/probe/native';
 import {
   createDefaultConfig,
   DEFAULT_RUNTIME_SETTINGS,
@@ -24,6 +24,8 @@ export interface RuntimeEnv {
   readonly TG_ENABLED?: string;
   readonly CHECK_API?: string;
   readonly CHECK_API_BACKUP?: string;
+  readonly PROBE_IPV4_URL?: string;
+  readonly PROBE_IPV6_URL?: string;
   readonly AUTH_KEY?: string;
   /** 公共 DNS 查询接口；`txt@域名` 与裸域名探测都依赖它。 */
   readonly DOH_API?: string;
@@ -49,8 +51,9 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
       ? [{ name: baseDomain || '环境变量配置', baseDomain, zoneId, apiKey, label: baseDomain || '环境变量配置' }]
       : defaults.zones,
     authKey: readLengthBounded(env.AUTH_KEY, defaults.authKey),
-    checkApi: readLengthBounded(env.CHECK_API, defaults.checkApi),
-    checkApiBackup: readLengthBounded(env.CHECK_API_BACKUP, defaults.checkApiBackup),
+    probeIpv4Url: readLengthBounded(env.PROBE_IPV4_URL, defaults.probeIpv4Url),
+    probeIpv6Url: readLengthBounded(env.PROBE_IPV6_URL, defaults.probeIpv6Url),
+    checkApiBackup: readLengthBounded(env.CHECK_API_BACKUP ?? env.CHECK_API, defaults.checkApiBackup),
     dohApi: readLengthBounded(env.DOH_API, defaults.dohApi),
     tgToken: readLengthBounded(env.TG_TOKEN, defaults.tgToken),
     tgId: readLengthBounded(env.TG_ID, defaults.tgId, 64),
@@ -79,20 +82,21 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
 
 export interface ProbeAdapterDeps {
   readonly fetchImpl?: typeof fetch;
+  readonly connect?: ProbeConnect;
 }
 
-/**
- * 运行时探针装配：没有配置检测接口时返回"未配置"适配器，
- * 这样缺配置只会得到 unknown，不会被误判成节点失效。
- */
+/** 原生检测优先，失败时备用 API 复检；未配置备用时原生重试一次。 */
 export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAdapterDeps = {}): ProbeAdapter {
-  if (config.endpoints.length === 0) return new UnconfiguredProbeAdapter();
-  return new ExternalApiProbeAdapter({
-    endpoints: config.endpoints.map(({ name, urlTemplate }) => ({ name, urlTemplate })),
+  const backup = config.endpoints.length ? new ExternalApiProbeAdapter({
+    endpoints: config.endpoints,
     timeoutMs: config.timeoutMs,
-    fallbackToNext: config.fallbackToNext,
+    fallbackToNext: false,
     fetchImpl: deps.fetchImpl ?? appFetch,
     onDiagnostic: diagnostic => console.warn('[probe-anomaly]', diagnostic),
+  }) : undefined;
+  return new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
+    connect: deps.connect ?? (async (address, options) => (await import('cloudflare:sockets')).connect(address, options)),
+    ...(backup ? { backup } : {}),
   });
 }
 

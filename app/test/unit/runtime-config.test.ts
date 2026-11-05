@@ -34,13 +34,13 @@ describe('runtime configuration', () => {
     const config = loadEnvConfig({
       CHECK_API: 'https://probe.example/check?proxyip={proxyip}',
       // 显式清空备用接口，才能单独断言主接口模板；未设置时会保留内置备用接口。
-      CHECK_API_BACKUP: '',
+      CHECK_API_BACKUP: 'https://probe.example/check?proxyip={proxyip}',
       CHECK_TIMEOUT: '10',
     });
 
     expect(config.settings.CHECK_TIMEOUT).toBe(500);
     expect(toProbeConfig(config).endpoints).toEqual([
-      { name: 'primary', urlTemplate: 'https://probe.example/check?proxyip={proxyip}' },
+      { name: 'backup', urlTemplate: 'https://probe.example/check?proxyip={proxyip}' },
     ]);
   });
 
@@ -57,13 +57,13 @@ describe('runtime configuration', () => {
     const defaults = createDefaultConfig();
     const config = loadEnvConfig({});
 
-    expect(config.checkApi).toBe(defaults.checkApi);
+    expect(config.probeIpv4Url).toBe(defaults.probeIpv4Url);
     expect(config.checkApiBackup).toBe(defaults.checkApiBackup);
   });
 
   it('returns unknown instead of dead when no endpoint is configured', async () => {
     const defaults = createDefaultConfig();
-    const adapter = createProbeAdapterFromConfig(toProbeConfig({ ...defaults, checkApi: '', checkApiBackup: '' }));
+    const adapter = createProbeAdapterFromConfig(toProbeConfig({ ...defaults, probeIpv4Url: '', probeIpv6Url: '', checkApiBackup: '' }));
 
     await expect(adapter.probe(target)).resolves.toMatchObject({
       status: 'unknown',
@@ -71,9 +71,9 @@ describe('runtime configuration', () => {
     });
   });
 
-  it('builds the external API adapter as soon as one endpoint is configured', () => {
+  it('uses native detection even when a backup is configured', () => {
     const config = toProbeConfig(loadEnvConfig({ CHECK_API: 'https://probe.example/?proxyip={proxyip}' }));
 
-    expect(createProbeAdapterFromConfig(config).name).toBe('external-api');
+    expect(createProbeAdapterFromConfig(config).name).toBe('native');
   });
 });

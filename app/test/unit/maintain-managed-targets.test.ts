@@ -325,7 +325,7 @@ describe('runMaintenanceJob', () => {
 
     expect(result.notification).toEqual({ sent: true, reason: 'sent' });
     expect(job.notifier.messages[0]).toContain('DDNS 自动维护报告');
-    expect(job.notifier.messages[0]).toContain('<code>edge.example.com</code>');
+    expect(job.notifier.messages[0]).toContain('<b>edge.example.com</b>');
   });
 
   it('notifies and reports the failure reason when every target throws', async () => {
@@ -375,8 +375,8 @@ describe('runMaintenanceJob', () => {
       changed: true,
     });
     expect(result.notification).toEqual({ sent: true, reason: 'sent' });
-    expect(job.notifier.messages[0]).toContain('默认池 1 → 0');
-    expect(job.notifier.messages[0]).toContain('垃圾桶 0 → 1');
+    expect(job.notifier.messages[0]).toContain('默认池：0（1 → 0）');
+    expect(job.notifier.messages[0]).toContain('垃圾桶：1（0 → 1）');
     expect(stats.saved).toEqual({ ip_pool_default: 0, ip_pool_trash: 1 });
   });
 

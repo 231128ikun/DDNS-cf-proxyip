@@ -5,6 +5,7 @@ export type IconName =
   | 'dashboard'
   | 'database'
   | 'download'
+  | 'upload'
   | 'folder'
   | 'globe'
   | 'help'

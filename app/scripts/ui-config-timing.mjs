@@ -51,6 +51,7 @@ export async function auditConfigTiming(cdp, sessionId, base, requests, fixture,
       assert(await read('!document.querySelector("#main-actions")'), '首次配置鉴权未完成时已经开放检测');
       assert(!requests.slice(initialStart).some(request => request.path === '/api/check'), '首次配置未就绪就发起了探测');
       await ready();
+      await click('[data-pool-mode=import]');
       await setValue('#ip-input', Array.from({ length: 40 }, (_, index) => `203.0.113.${index + 1}:443`).join('\n'));
       fixture.probeDelay = 100;
       fixture.probeMetrics.peak = 0;

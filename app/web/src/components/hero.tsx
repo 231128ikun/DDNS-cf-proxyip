@@ -22,8 +22,8 @@ export function Hero({ health, usageOpen, onToggleUsage }: HeroProps) {
       <div id="usage-guide" class="usage-guide" hidden={!usageOpen}>
         <ol>
           <li><strong>准备IP</strong>：在左侧 <code>IP库管理</code> 中手动输入或远程加载 IP，点击【检测】筛出可用 IP。</li>
-          <li><strong>保存到池</strong>：选择上方的 IP 池（默认为默认池），点击【入库】将可用 IP 入库。</li>
-          <li><strong>执行维护</strong>：在解析实况选择要维护的域名，点击右侧【执行全部维护】或依靠定时任务自动维护。</li>
+          <li><strong>保存到池</strong>：选择目标 IP 池，点击【追加入库】；需要替换原库时使用【覆盖入库】。</li>
+          <li><strong>执行维护</strong>：配置维护域名与 IP 池绑定，再点击【执行全部维护】或启用定时维护。</li>
         </ol>
       </div>
     </div>

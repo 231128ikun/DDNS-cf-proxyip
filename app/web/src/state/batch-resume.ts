@@ -1,10 +1,19 @@
 import type { PoolCheckItemResponse } from '../../../src/contracts/pool-check';
 import { parsePoolEntry, parsePoolText } from '../../../src/domain/pool-entry';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
+import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 
 interface BatchSourceLine {
   readonly raw: string;
   readonly duplicate: boolean;
+}
+
+export function describeBatch(text: string, groups: ReadonlyMap<number, readonly PoolCheckItemResponse[]>, completed: ReadonlySet<number>) {
+  const source = readPoolSnapshot(text);
+  return { source: text, items: [...groups.values()].flat(),
+    invalid: source.invalid.filter(line => !line.startsWith('#')),
+    incomplete: [...readPoolSnapshot(remainingBatchText(text, completed)).entries.values()].map(item => item.raw),
+    text: mergeBatchProgress(text, groups) };
 }
 
 /**

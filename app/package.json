@@ -23,13 +23,15 @@
     "check:size": "node scripts/check-size.mjs",
     "smoke": "node scripts/smoke.mjs",
     "audit:ui": "node scripts/ui-audit.mjs && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs",
+    "audit:acceptance": "node scripts/ui-acceptance.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only",
-    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
+    "audit:flows": "node scripts/ui-startup.mjs && node scripts/ui-flows.mjs --flows --current-only && node scripts/ui-pool-review-fixes.mjs",
+    "audit:ui:regression": "node --test scripts/ui-audit-diff.test.mjs scripts/ui-browser.test.mjs && node scripts/ui-audit.mjs --compare-baseline --out .wrangler/tmp/ui-regression && node scripts/ui-config-layout.mjs && node scripts/ui-header-settings.mjs"
   },
   "dependencies": {
-    "preact": "^10.29.8"
+    "preact": "^10.29.8",
+    "subtls": "0.5.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260921.1",

@@ -88,5 +88,5 @@ function loaded(config: AppConfig): ConfigLoadResult {
 }
 
 function configWithCheckApi(checkApi: string): AppConfig {
-  return { ...createDefaultConfig(), checkApi, checkApiBackup: '' };
+  return { ...createDefaultConfig(), checkApiBackup: checkApi };
 }

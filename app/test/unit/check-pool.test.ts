@@ -56,3 +56,12 @@ describe('CheckPoolText complete-input validation', () => {
     expect(report.invalid).toEqual(['203.0.113.999:443']);
   });
 });
+
+it('checks a duplicate address once while retaining complementary metadata from every source row', async () => {
+  const probe = vi.fn(async target => alive(target, { exitFamily: 'unknown' }));
+  const report = await new CheckPoolText(new CheckProxy({ name: 'fixture', probe })).execute(
+    '203.0.113.10:443,null,JP,v4 # old\n203.0.113.10:443,AS64500,null,null # new',
+  );
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(report.items[0]!.entry).toMatchObject({ asn: 'AS64500', country: 'JP', stack: 'v4', comment: '# new' });
+});

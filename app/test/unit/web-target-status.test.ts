@@ -90,10 +90,10 @@ describe('current DNS display through ApiClient and Worker routes', () => {
         { family: 'ipv6', ip: '2a03:b0c0:1:e0:0:1:38db:b001', asn: '14061', country: 'GB', organization: 'DigitalOcean' },
       ] },
       { address: '203.0.113.11:2053', status: 'dead', message: 'connection refused' },
-      { address: '203.0.113.12:2053', status: 'unknown', code: 'PROBE_API_ERROR', message: 'TLS handshake failed' },
+      { address: '203.0.113.12:2053', status: 'dead', code: 'TARGET_TLS_ERROR', message: 'TLS handshake failed' },
     ]);
     expect(view.probes[0]!.latencyMs).toEqual(expect.any(Number));
-    expect(view.probes.map(item => probeStatusLabel(item.status, item.code))).toEqual(['可用', '失效', '未知']);
+    expect(view.probes.map(item => probeStatusLabel(item.status, item.code))).toEqual(['可用', '失效', '失效']);
     expect(progress).toHaveBeenCalledTimes(4);
     expect(progress.mock.calls.at(-1)![0].probes).toHaveLength(3);
     expect(requests.filter(request => request.address).map(request => request.address)).toEqual(records.map(record => `${record.content}:2053`));

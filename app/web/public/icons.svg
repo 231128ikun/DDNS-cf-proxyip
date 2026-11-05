@@ -5,6 +5,7 @@
   <symbol id="dashboard" viewBox="0 0 24 24"><path d="M4 3v17h17M8 15V9m5 6V5m5 10v-4"/></symbol>
   <symbol id="database" viewBox="0 0 24 24"><path d="M3 6c0-5 18-5 18 0s-18 5-18 0Zm0 0v12c0 5 18 5 18 0V6M3 12c0 5 18 5 18 0"/></symbol>
   <symbol id="download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  <symbol id="upload" viewBox="0 0 24 24"><path d="M12 15V3m-5 5 5-5 5 5M4 16v5h16v-5"/></symbol>
   <symbol id="folder" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v11H3V6Z"/></symbol>
   <symbol id="globe" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c-5 5-5 13 0 18 5-5 5-13 0-18ZM3 12h18"/></symbol>
   <symbol id="help" viewBox="0 0 24 24"><path d="M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 3m0 4v.1"/></symbol>

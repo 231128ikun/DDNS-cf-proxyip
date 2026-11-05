@@ -1,4 +1,4 @@
-import { parsePoolEntry, parsePoolText, normalizePoolStack, type PoolStack } from './pool-entry';
+import { parsePoolEntry, normalizePoolStack, type PoolStack } from './pool-entry';
 import { parseProxyTarget } from './proxy-target';
 
 export interface PortFilterRange {
@@ -15,43 +15,20 @@ export interface PoolFilterCriterion {
 }
 
 export type PoolFilter = readonly PoolFilterCriterion[];
-export type PoolFilterMode = 'keep' | 'exclude';
 
 /** 解析面板筛选表达式；无效端口条件让整次筛选失败，避免产生误导结果。 */
 export function parsePoolFilter(query: string): PoolFilter | null {
   const groups: PoolFilterCriterion[] = [];
   for (const rawGroup of String(query ?? '').split('|')) {
     const criterion = parseFilterGroup(rawGroup);
-    if (criterion) groups.push(criterion);
+    if (!criterion) return null;
+    groups.push(criterion);
   }
   return groups.length ? groups : null;
 }
 
 export function matchesPoolFilter(line: string, filter: PoolFilter): boolean {
   return filter.some((criterion) => matchesCriterion(line, criterion));
-}
-
-export function filterPoolText(text: string, filter: PoolFilter, mode: PoolFilterMode): string {
-  return splitPoolLines(text)
-    .filter((line) => matchesPoolFilter(line, filter) === (mode === 'keep'))
-    .join('\n');
-}
-
-export function countPoolFilterMatches(text: string, filter: PoolFilter): number {
-  return splitPoolLines(text).filter((line) => matchesPoolFilter(line, filter)).length;
-}
-
-/** 重复地址保留后出现的条目，位置仍按首次出现排序。 */
-export function dedupePoolText(text: string): string {
-  const entries = new Map<string, string>();
-  for (const line of parsePoolText(text)) {
-    const entry = line.entry;
-    if (!entry) continue;
-    const target = parseProxyTarget(entry.address, 443);
-    if (!target) continue;
-    entries.set(target.key, line.raw);
-  }
-  return [...entries.values()].join('\n');
 }
 
 function parseFilterGroup(group: string): PoolFilterCriterion | null {
@@ -72,7 +49,7 @@ function parseFilterGroup(group: string): PoolFilterCriterion | null {
     }
     const key = match[1]!.toLowerCase();
     const values = match[2]!.split(',').map((value) => value.trim()).filter(Boolean);
-    if (!values.length) continue;
+    if (!values.length) return null;
 
     if (key === 'port') {
       const parsed = parsePortValues(values);
@@ -128,8 +105,8 @@ function matchesCriterion(line: string, criterion: PoolFilterCriterion): boolean
   if (criterion.asns.length && !criterion.asns.some((value) => asns.includes(value))) return false;
 
   if (criterion.stacks.length) {
-    const stack: PoolStack = entry?.stack ?? 'v4/v6';
-    if (!criterion.stacks.includes(stack)) return false;
+    const stack: PoolStack | null = entry?.stack ?? null;
+    if (!stack || !criterion.stacks.includes(stack)) return false;
   }
 
   if (criterion.text.length) {
@@ -141,8 +118,4 @@ function matchesCriterion(line: string, criterion: PoolFilterCriterion): boolean
 
 function splitMetadata(value: string): string[] {
   return value.split(/[\/,，\s]+/).map((item) => item.trim()).filter(Boolean);
-}
-
-function splitPoolLines(text: string): string[] {
-  return parsePoolText(String(text ?? '')).map((line) => line.raw);
 }

@@ -1,3 +1,5 @@
+import { toMaintenanceTargetResult } from './application/maintenance-summary';
+import { maintenanceDisplayLines, notificationDisplay } from './domain/maintenance-display';
 import { CloudflareDnsRepository } from './adapters/dns/cloudflare-dns';
 import { DohLookup } from './adapters/dns/doh-lookup';
 import { TelegramNotifier } from './adapters/notify/telegram';
@@ -28,7 +30,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.03-16.49';
+export const APP_VERSION = '2026.11.05-00.13';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -161,7 +163,8 @@ export function createMaintenanceRunner(
   });
 
   return {
-    run: (isManual) => runMaintenanceJob({
+    run: async (isManual) => {
+      const result = await runMaintenanceJob({
       source: maintenanceSource,
       maintainer,
       notifier,
@@ -169,6 +172,11 @@ export function createMaintenanceRunner(
       fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
       isManual,
       projectUrl: config.projectUrl,
-    }),
+      });
+      for (const target of result.run.results) console.info('[maintenance]', maintenanceDisplayLines(toMaintenanceTargetResult(target)).join('\n'));
+      const notification = notificationDisplay(result.notification);
+      if (notification) console.info('[notification]', notification);
+      return result;
+    },
   };
 }

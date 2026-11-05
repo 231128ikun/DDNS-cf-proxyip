@@ -71,3 +71,10 @@ describe('KvPoolRepository', () => {
     expect(put).not.toHaveBeenCalled();
   });
 });
+
+it('does not repeat an identical trash write on retry', async () => {
+  const content = '203.0.113.10:443,AS64500,JP,v4 # old';
+  const { kv, put } = createKv({ [TRASH_POOL_KEY]: content });
+  await new KvPoolRepository(kv).addToTrash([{ entryLine: '203.0.113.10:443', reason: 'again' }]);
+  expect(put).not.toHaveBeenCalled();
+});

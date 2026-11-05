@@ -17,10 +17,10 @@ export function firstText(record: JsonRecord, keys: readonly string[]): string |
 /** 把任意探针响应片段归一成 ProbeExit；完全没有出口信息时返回 null。 */
 export function readProbeExit(record: JsonRecord, stackHint: string | undefined): ProbeExit | null {
   const ip = firstText(record, ['ip', 'ipAddress', 'exitIp', 'exit_ip', 'address', 'query']);
-  const family = normalizeSingleExitFamily(readText(record.ipType) ?? readText(record.type) ?? stackHint, ip);
-  const asn = normalizeAsn(record.asn) ?? normalizeAsn(record.as) ?? normalizeAsn(record.asNumber);
-  const country = firstText(record, ['country', 'countryCode']);
-  const organization = firstText(record, ['asOrganization', 'asname', 'org', 'isp']);
+  const family = normalizeSingleExitFamily(readText(record.exit_family) ?? readText(record.ipType) ?? readText(record.type) ?? stackHint, ip);
+  const asn = normalizeAsn(record.exit_asn) ?? normalizeAsn(record.asn) ?? normalizeAsn(record.as) ?? normalizeAsn(record.asNumber);
+  const country = firstText(record, ['exit_country', 'country', 'countryCode']);
+  const organization = firstText(record, ['exit_org', 'asOrganization', 'asname', 'org', 'isp']);
 
   if (!ip && !asn && !country && !organization && family === 'unknown') return null;
   return {

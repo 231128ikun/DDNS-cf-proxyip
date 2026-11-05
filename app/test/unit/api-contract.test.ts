@@ -34,6 +34,7 @@ const CLIENT_OPERATIONS: readonly ClientOperation[] = [
     method: 'PUT',
     path: '/api/pools/ip_pool_001',
   },
+  { name: 'previewPool', invoke: (client) => client.previewPool('ip_pool_001', '203.0.113.10:443'), method: 'POST', path: '/api/pools/ip_pool_001/preview' },
   { name: 'createPool', invoke: (client) => client.createPool('测试池'), method: 'POST', path: '/api/pools' },
   {
     name: 'renamePool',
@@ -64,7 +65,7 @@ const CLIENT_OPERATIONS: readonly ClientOperation[] = [
   { name: 'config', invoke: (client) => client.config(), method: 'GET', path: '/api/config' },
   {
     name: 'saveConfig',
-    invoke: (client) => client.saveConfig({ checkApi: 'https://probe.example/?proxyip=' }),
+    invoke: (client) => client.saveConfig({ checkApiBackup: 'https://probe.example/?proxyip=' }),
     method: 'PUT',
     path: '/api/config',
   },

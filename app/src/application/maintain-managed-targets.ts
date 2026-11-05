@@ -97,7 +97,7 @@ function summarize(results: readonly TargetMaintenanceResult[]): MaintenanceRunS
     if (!result.report) continue;
 
     changed ||= result.report.dnsUpdated;
-    insufficient ||= result.report.plan.exhausted;
+    insufficient ||= (result.report.activeCount ?? result.report.plan.activeCount) < result.target.minActive;
     probeErrors += result.report.probeErrors;
     for (const error of result.report.errors) errors.push(`${domain}: ${error}`);
   }

@@ -32,15 +32,13 @@ describe('standalone application layout', () => {
     ]);
   });
 
-  it('runs detection and rechecks using the built-in endpoint without installer API values', async () => {
-    let attempts = 0;
-    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify({ success: ++attempts > 1 })));
+  it('uses the built-in backup when native sockets are unavailable', async () => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify({ success: true })));
     const adapter = createProbeAdapterFromConfig(toProbeConfig(loadEnvConfig({})), { fetchImpl: fetchImpl as typeof fetch });
     const target = parseProxyTarget('203.0.113.10:443');
     if (!target) throw new Error('invalid test target');
     expect(await adapter.probe(target)).toMatchObject({ status: 'alive', endpoint: 'backup' });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe(fetchImpl.mock.calls[1]?.[0]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`${createDefaultConfig().checkApiBackup}203.0.113.10%3A443`);
   });
 

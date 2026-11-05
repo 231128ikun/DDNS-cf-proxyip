@@ -32,7 +32,9 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, probeDelay: 0, probeDelays: {}, probeErrors: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
+    poolContents: {}, poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
+    cleanResponse: null, restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
+    probeDelay: 0, probeDelays: {}, probeErrors: {}, probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
 }
 
@@ -112,6 +114,10 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
     async list({ prefix = '' } = {}) {
       return { keys: fixture.pools.filter(item => item.key.startsWith(prefix)).map(item => ({ name: item.key })), list_complete: true };
     },
+    async delete(key) {
+      delete fixture.poolContents[key];
+      fixture.pools = fixture.pools.filter(item => item.key !== key);
+    },
   };
   const requests = [];
   const server = createServer(async (request, response) => {
@@ -130,6 +136,27 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       response.once('close', () => {
         if (!entry.completed) { entry.completed = true; entry.aborted = true; entry.completedAt = Date.now(); }
       });
+      if (url.pathname === '/api/remote-load') {
+        if (fixture.remoteFailures-- > 0) return json({ error: '模拟远程加载失败' }, 500);
+        return json({ ok: true, content: fixture.remoteContent, count: fixture.remoteContent.split('\n').length });
+      }
+      if (/^\/api\/pools\/(?:ip_pool_(?:default|trash|\d{3})|trash)(?:\/(?:preview|restore|clear|clean))?$/.test(url.pathname)) {
+        const preview = url.pathname.endsWith('/preview');
+        const read = request.method === 'GET';
+        if (url.pathname.endsWith('/clean')) {
+          if (!fixture.cleanResponse) return json({ error: '洗库夹具须显式配置，不允许外部探针请求' }, 501);
+          return json(fixture.cleanResponse);
+        }
+        if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
+        if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);
+        const result = await worker.fetch(new Request(url, { method: request.method,
+          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+        const data = await result.json();
+        const delay = read ? fixture.poolReadDelay : preview ? fixture.poolPreviewDelay : fixture.poolWriteDelay;
+        const output = read && fixture.poolReadOverride !== null ? { ...data, content: fixture.poolReadOverride } : data;
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        return json(output, result.status);
+      }
       if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) return json(fixture.maintenanceResponse);
       if (url.pathname === '/api/auth/status') {
         const key = String(fixture.config.authKey ?? '').trim();
@@ -172,7 +199,9 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         const data = await result.json();
         if (result.ok && url.pathname === '/api/domain-bindings' && request.method === 'GET') fixture.bindings = data;
         if (result.ok && url.pathname === '/api/pools' && request.method === 'GET') fixture.pools = data.pools;
-        return json(data, result.status);
+        const output = result.ok && url.pathname === '/api/pools' && request.method === 'GET'
+          ? { pools: data.pools.map(pool => ({ ...pool, count: fixture.poolListCounts[pool.key] ?? pool.count })) } : data;
+        return json(output, result.status);
       }
       const { config, pools, bindings } = fixture;
       if (url.pathname === '/api/health') return json({ ok: true, version: 'fixture', configSource: 'kv' });
@@ -266,7 +295,6 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         pools: pools.map((item) => item.key), poolNames: Object.fromEntries(pools.map((item) => [item.key, item.name])),
         mapping: Object.fromEntries(bindings.items.map((item) => [item.key, item.poolKey])), domainPoolOrder: bindings.items.map((item) => item.key),
         ips: ['203.0.113.10:443', '203.0.113.11:443'], count: 2 });
-      if (/^\/api\/pools\/[^/]+$/.test(url.pathname)) return json({ key: url.pathname.split('/').pop(), content: '203.0.113.10:443\n203.0.113.11:443', count: 2 });
       return json({ error: `Unmocked UI request: ${request.method} ${url.pathname}` }, 501);
     }
     if (referenceHtml && ['/reference', '/reference-login'].includes(url.pathname)) {

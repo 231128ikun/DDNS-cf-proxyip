@@ -1,6 +1,6 @@
 # DDNS Pro - Cloudflare Worker ProxyIP 管理面板
 
-DDNS Pro 部署于 Cloudflare Workers，通过外部检测接口验证 ProxyIP，并维护域名的 `A`、`AAAA` 或 `TXT` 记录，无需自建服务器。
+DDNS Pro 部署于 Cloudflare Workers，通过原生 TCP/TLS 检测验证 ProxyIP，外部 API 仅用于备用复检；维护域名的 `A`、`AAAA` 或 `TXT` 记录，无需自建服务器。
 
 ## ✨ 核心功能
 
@@ -11,7 +11,7 @@ DDNS Pro 部署于 Cloudflare Workers，通过外部检测接口验证 ProxyIP�
 
 ## 🚀 快速部署
 
-> 面板密码和检测接口均为可选配置。未设置密码时不启用鉴权，检测默认使用内置备用接口。
+> 面板密码和检测接口均为可选配置。未设置密码时不启用鉴权，默认启用原生检测，失败时使用备用接口复检。
 
 ### ① 一键部署
 
@@ -81,7 +81,7 @@ npm run deploy
 
 1. **维护域名配置**：托管域名、Zone ID 和 Cloudflare API Token。
 2. **管理域名**：子域名、记录类型、端口、最小活跃数与出口筛选。
-3. **可选设置**：面板密码、Telegram 通知、自建检测接口和自动维护开关。
+3. **可选设置**：面板密码、Telegram 通知、出口信息接口、备用检测 API 和自动维护开关。
 
 面板密码 `AUTH_KEY` 支持设置、修改和清空；为空时管理接口不启用鉴权。密码、Token 和实际资源 ID 不应提交到公共仓库。
 
@@ -96,11 +96,12 @@ npm run deploy
 | `CF_KEY` | Cloudflare DNS API Token | 空 |
 | `CF_ZONEID` | DNS 区域 ID | 空 |
 | `CF_BASE_DOMAIN` | 托管域名，如 `example.com` | 空 |
-| `CHECK_API` | 可选主检测接口 | 空 |
+| `PROBE_IPV4_URL` | IPv4 出口 JSON 接口 | `https://ipv4.090227.xyz/` |
+| `PROBE_IPV6_URL` | IPv6 出口 JSON 接口 | `https://ipv6.090227.xyz/` |
 | `CHECK_API_BACKUP` | 备用检测接口 | `https://checkapi.dvb.kdns.fr/?candidate=` |
 | `DOH_API` | DNS over HTTPS 查询接口 | `https://cloudflare-dns.com/dns-query` |
 | `CONCURRENT_CHECKS` | 检测并发，范围 1–128 | `32` |
-| `CHECK_TIMEOUT` | 单接口超时，500–30000 毫秒 | `15000` |
+| `CHECK_TIMEOUT` | 单次原生连接或备用请求超时，500–30000 毫秒 | `15000` |
 | `REMOTE_LOAD_TIMEOUT` | 远程文本加载超时，1000–60000 毫秒 | `8000` |
 | `DOH_TIMEOUT` | DNS 查询超时，1000–30000 毫秒 | `5000` |
 | `TG_TOKEN` | Telegram Bot Token | 空 |
@@ -108,7 +109,7 @@ npm run deploy
 | `TG_ENABLED` | Telegram 通知开关 | `true` |
 | `SCHEDULED_ENABLED` | 定时维护开关 | `true` |
 
-未设置检测接口时沿用默认值；显式清空并保存会禁用对应接口。其他运行参数通过配置中心管理。
+出口接口通过候选地址访问，需提供有效 HTTPS 证书并返回含 `ip` 或 `ipAddress` 的 JSON，可附带 `asn`、`country` 等信息。清空某个出口接口可关闭该分支。其他运行参数通过配置中心管理。
 
 `IP_DATA` 是 KV namespace 类型的资源绑定，不是普通文本变量。
 
@@ -133,7 +134,7 @@ https://probe.example.com/check?proxyip=
 https://probe.example.com/check?proxyip={proxyip}
 ```
 
-单接口复用自身复检；双接口依次使用主、备用接口。显式清空并保存接口会禁用该接口。公共备用服务不保证长期可用。
+原生检测未成功时调用备用 API 一次；备用 API 留空则原生复检一次。`TCP Loop`、运行异常和备用接口的网络/HTTP/JSON 异常不作为节点失效。公共出口与备用服务不保证长期可用。
 
 配置保存到 KV，优先于环境变量启动默认值。
 
@@ -141,9 +142,9 @@ https://probe.example.com/check?proxyip={proxyip}
 
 ## 🧭 面板使用
 
-1. **导入地址**：粘贴 IP 列表、Excel 的 IP/端口两列，或加载远程 TXT 链接。
-2. **检测并入库**：选择 IP 池，点击“检测”后“入库”。检测中断后可继续。
-3. **绑定并维护**：在“域名池绑定”中选择对应池，执行维护；后续可由定时任务运行。
+1. **导入与检测**：选择目标 IP 池，直接粘贴地址，或从当前库、URL、本地文件载入输入框；筛选不删除原始内容，清空筛选可继续编辑。普通检测只展示结果，不修改库存，检测中断后可继续。
+2. **入库与编辑**：点击“追加入库”合并去重，或“覆盖入库”查看差异后确认；检测后只提交当前筛选中的可用结果，也可不检测直接入库。“池操作 → 管理库存”可编辑、移除文本行并保存写回，返回输入区保留草稿与结果；“检测并清理”才会把确认失效的地址移入垃圾桶。
+3. **绑定并维护**：在配置中心的维护域名卡片中选择 IP 池，执行维护；后续可由定时任务运行。
 
 <details>
 <summary>地址格式与域名探测</summary>
@@ -164,14 +165,18 @@ IPv6 带端口必须加方括号。标准池格式为 `ip:port,asn,country,stack
 
 ### 操作提醒
 
-- **失败与未知**：节点检测超时按失效处理，洗库和维护时移入垃圾桶；普通检测和解析实况刷新不改库。网络、HTTP、TLS 错误和坏响应仍为未知，不据此删除 DNS 或入桶；出口筛选不匹配也不当作死节点。
-- “从库中移除”删除输入框列出的地址；加载全池后执行会清空该池。
+- **失败与未知**：候选连接、TLS、目标 HTTP、出口 JSON 失败或候选超时，复检仍失败时按失效处理，洗库和维护可移入垃圾桶；检测运行异常、备用 API 自身的网络、非 2xx、坏响应或显式异常仍为未知。普通检测和解析实况刷新不改库，出口筛选不匹配也不当作死节点。
+- IP 库直接以文本查看和编辑；添加只追加并去重，覆盖修改先展示差异，清空全部地址需要再次确认。人工删除不进入垃圾桶。
+- 库存内容在本次页面内复用，需要同步其他页面或定时维护的改动时，进入“管理库存”点击“读取 IP 库”。保存后使用回执更新页面，不自动反复读取；写入失败不会自动重试。KV 不提供多页面并发编辑的事务保障，覆盖前应先读取并核对。
 - 服务端“一键洗库”单次最多 200 个不同有效地址；更大的池可使用面板逐地址批量检测。
+- 原生检测显式发送 SNI 并校验证书链，使用 TLS 1.3；信任库来自 Mozilla CA 数据（curl.se），在当前运行实例内缓存一天，加载失败报告检测异常。默认出口探针无需配置，自定义覆盖收纳在高级设置中。
+- 鼠标悬停版本号、键盘聚焦或点击版本号可查看更新记录，记录来源为 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 参考与许可
 
 - [CF-Workers-CheckProxyIP](https://github.com/cmliu/CF-Workers-CheckProxyIP)
 - [CF-Workers-DD2D](https://github.com/cmliu/CF-Workers-DD2D)
 - [CF-Workers-检测后端](https://github.com/ToiCF/CF-Workers-CheckProxyIP)
+- [subtls](https://github.com/jawj/subtls)（MIT，显式 SNI 与 TLS 1.3 证书校验）
 
 [MIT License](./LICENSE)

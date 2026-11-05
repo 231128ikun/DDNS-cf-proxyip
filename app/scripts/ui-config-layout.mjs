@@ -28,7 +28,9 @@ try {
         await cdp.send('Network.setCookie', { name: 'ddns_auth', value: 'fixture-panel-key', url: server.base }, sessionId);
       }
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
+      const loaded = cdp.wait(sessionId, 'Page.loadEventFired');
       await cdp.send('Page.navigate', { url: server.base }, sessionId);
+      await loaded;
       await cdp.until(sessionId, 'Boolean(document.querySelector("#tab-config")?.offsetWidth)');
       await cdp.until(sessionId, 'Boolean(document.querySelector(".target-summary-domain")?.offsetWidth)');
       const prominentTarget = await read('document.querySelector(".target-summary").getBoundingClientRect().height <= 40 && parseFloat(getComputedStyle(document.querySelector(".target-summary-domain")).fontSize) >= 14');
@@ -63,7 +65,7 @@ try {
           const area = field.getBoundingClientRect();
           if (Math.abs(box.height - reference.height) > 1) issues.push(id + ': control height differs');
           if (!input.labels.length) issues.push(id + ': missing associated label');
-          if (innerWidth > 768 && id === 'cfg-auth-key' && Math.abs(box.top - reference.top) > 1) issues.push(id + ': paired inputs are not aligned');
+          if (innerWidth > 768 && id === 'cfg-auth-key' && Math.abs(box.top - document.getElementById("cfg-tg-token").getBoundingClientRect().top) > 1) issues.push(id + ': paired inputs are not aligned');
           if (box.width < 140 || box.left < area.left - 1 || box.right > area.right + 1) issues.push(id + ': input does not fit field');
         }
         if (document.documentElement.scrollWidth > innerWidth) issues.push('page overflows viewport');

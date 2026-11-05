@@ -41,6 +41,7 @@ export interface MaintenancePlanInput {
   readonly current: readonly CurrentMaintenanceItem[];
   readonly candidates: readonly CandidateMaintenanceItem[];
   readonly poolText: string;
+  readonly rotateCandidates?: readonly string[];
 }
 
 export interface MaintenancePlan {
@@ -87,6 +88,10 @@ export function decideCurrentResult(result: ProbeResult, target: ManagedTarget):
   return probeMatchesTarget(result, target) ? 'active' : 'remove-mismatch';
 }
 
+export function countActiveCurrent(current: readonly CurrentMaintenanceDecision[]): number {
+  return uniqueNonEmpty(current.filter(item => item.decision === 'active').map(item => item.item.value)).length;
+}
+
 export function buildMaintenancePlan(input: MaintenancePlanInput): MaintenancePlan {
   const originalPoolText = input.poolText;
   let poolLines = parsePoolText(originalPoolText);
@@ -97,7 +102,8 @@ export function buildMaintenancePlan(input: MaintenancePlanInput): MaintenancePl
   }));
   const retained = current.filter(({ decision }) => decision === 'active' || decision === 'keep-unknown');
   const additions: CandidateMaintenanceItem[] = [];
-  let activeCount = current.filter(({ decision }) => decision === 'active').length;
+  let activeCount = countActiveCurrent(current);
+  const coveredValues = new Set(retained.map(item => item.item.value));
 
   const updatePoolMetadata = (address: string, result: ProbeResult): void => {
     if (result.status !== 'alive') return;
@@ -132,10 +138,10 @@ export function buildMaintenancePlan(input: MaintenancePlanInput): MaintenancePl
   }
 
   for (const candidate of input.candidates) {
-    if (activeCount >= input.target.minActive) break;
-
     if (candidate.result.status === 'alive' && probeMatchesTarget(candidate.result, input.target)) {
+      if (activeCount >= input.target.minActive || coveredValues.has(candidate.value)) continue;
       additions.push(candidate);
+      coveredValues.add(candidate.value);
       activeCount += 1;
       updatePoolMetadata(candidate.address, candidate.result);
       continue;
@@ -153,6 +159,11 @@ export function buildMaintenancePlan(input: MaintenancePlanInput): MaintenancePl
 
   const retainedValues = uniqueNonEmpty(retained.map(({ item }) => item.value));
   const dnsValues = uniqueNonEmpty([...retainedValues, ...additions.map((candidate) => candidate.value)]);
+  if (activeCount < input.target.minActive && input.rotateCandidates?.length) {
+    const rotate = new Set(input.rotateCandidates.map(canonicalAddressKey));
+    const moved = poolLines.filter(line => line.entry && rotate.has(canonicalAddressKey(line.entry.address)));
+    poolLines = [...poolLines.filter(line => !line.entry || !rotate.has(canonicalAddressKey(line.entry.address))), ...moved];
+  }
   const nextPoolText = serializePoolText(poolLines);
 
   return {

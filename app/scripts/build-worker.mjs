@@ -13,6 +13,8 @@ const skipCustomBuild = 'DDNS_SKIP_CUSTOM_BUILD';
 
 export function fingerprintInputs(root = appRoot) {
   const paths = ['src', 'web'].flatMap(directory => filesIn(join(root, directory)));
+  const changelog = resolve(root, '../CHANGELOG.md');
+  if (existsSync(changelog)) paths.push(changelog);
   paths.push(...['package.json', 'package-lock.json', 'wrangler.toml', 'tsconfig.json', '.node-version',
     'scripts/build-worker.mjs', 'scripts/check-size.mjs', 'scripts/clean.mjs'].map(path => join(root, path)));
   return fingerprint(root, paths);

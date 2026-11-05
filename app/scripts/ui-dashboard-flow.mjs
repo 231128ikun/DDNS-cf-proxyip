@@ -16,42 +16,39 @@ export async function auditDashboardFlow(cdp, sessionId, surface, fixture) {
   const refreshButton = surface === 'baseline' ? '[onclick="refreshStatus()"]' : '.ddns-lookup-form button:last-of-type';
   const select = '.target-select-overlay';
   if (surface === 'current') {
-    fixture.maintenanceResponse = { ok: true, changed: true, insufficient: true, errors: ['模拟维护错误'], probeErrors: 2,
+    await click('[data-pool-mode=import]');
+    fixture.maintenanceResponse = { ok: true, changed: true, insufficient: true,
+      errors: ['edge.example.com: 模拟目标错误', 'proxy.example.com: 模拟维护错误'], probeErrors: 2,
+      notification: { sent: false, reason: 'failed', code: 'HTTP_503', delivered: 1, total: 2 },
+      notificationMessage: '通知发送失败 [HTTP_503]（已发送 1/2 条）',
       results: [{ domain: 'edge.example.com', mode: 'A', poolKey: 'ip_pool_default', poolName: '默认池',
-        dnsUpdated: true, added: 2, deleted: 1, probeErrors: 2, error: '模拟目标错误' }] };
+        dnsUpdated: true, added: 2, deleted: 1, probeErrors: 2, error: '模拟目标错误',
+        lines: ['edge.example.com (A/AAAA)', '活跃 2/3 · IP 池 默认池', '解析 203.0.113.10 · 可用', 'DNS 记录：新增 2，移除 1', '执行失败：模拟目标错误', '未达到最小活跃数'] },
+        { domain: 'proxy.example.com', mode: 'TXT', poolKey: 'ip_pool_001', poolName: '备用池', dnsUpdated: false,
+          added: 0, deleted: 0, probeErrors: 0, error: '模拟维护错误', lines: ['proxy.example.com (TXT)', '执行失败：模拟维护错误'] }] };
     try {
       await click('.dashboard-console-card > button');
-      await cdp.until(sessionId, 'document.querySelector("#log-window").textContent.includes("[维护] 完成")');
+      await cdp.until(sessionId, 'document.querySelector("#log-window").textContent.includes("[维护] 结束")');
       const log = await read('document.querySelector("#log-window").textContent');
-      for (const text of ['edge.example.com (A)', '+2 / -1', '模拟目标错误', '模拟维护错误', '可用 IP 不足']) {
+      for (const text of ['edge.example.com (A/AAAA)', '解析 203.0.113.10', 'DNS 记录：新增 2，移除 1', '模拟目标错误', '模拟维护错误', '未达到最小活跃数', '通知发送失败 [HTTP_503]']) {
         check(log.includes(text), '维护信息没有写入工作台日志：' + text);
       }
       check(await read('document.querySelector(".dashboard-console-card h2").textContent.trim().endsWith("工作台")'), '日志区域应明确命名为工作台');
       check(await read('!document.querySelector(".maintenance-summary, .maintenance-result")'), '工作台外仍保留另一套维护日志');
       check(await read('Math.abs(document.querySelector("#log-window").scrollHeight - document.querySelector("#log-window").clientHeight - document.querySelector("#log-window").scrollTop) < 2'), '工作台日志没有自动滚动到最新结果');
     } finally { fixture.maintenanceResponse = null; }
-    const remove = '#main-actions button:last-child';
-    const canRemove = await read(`!document.querySelector('${remove}').disabled`);
-    check(canRemove, '空输入应允许点击移除，并在本地提示');
-    if (canRemove) {
-      await click(remove);
-      await flush();
-      check(await read('document.querySelector("#log-window").textContent.includes("❌ 内容为空")'), '空输入没有给出原版提示');
-      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '空输入不应发起池写请求');
-      await setValue('#ip-input', '203.0.113.10:443');
-      await Promise.all([
-        (async () => {
-          await cdp.wait(sessionId, 'Page.javascriptDialogOpening');
-          await cdp.send('Page.handleJavaScriptDialog', { accept: false }, sessionId);
-        })(), click(remove),
-      ]);
-      check(await read('document.querySelector("#ip-input").value === "203.0.113.10:443"'), '取消移除不应改变输入');
-      check(await read('!performance.getEntriesByType("resource").some(entry => new URL(entry.name).pathname === "/api/pools/ip_pool_default")'), '取消移除不应发起池写请求');
-      await setValue('#ip-input', '');
-    }
+    check(await read('document.querySelector("[data-action=append-input]").disabled'), '空草稿不应发起直接追加');
+    check(await read('document.querySelector("[data-action=append-alive]").disabled'), '没有检测报告不应追加可用');
+    await setValue('#ip-input', '203.0.113.10:443');
+    check(await read('!document.querySelector("[data-action=append-input]").disabled'), '有效输入必须允许明确的直接追加预览');
+    await setValue('#ip-input', '');
     await click('.action-menu-trigger');
     check(await read('document.querySelector(".action-menu-item:last-child").disabled'), '默认池的删除菜单应禁用');
     await click('.action-menu-trigger');
+  }
+  if (surface === 'current') {
+    check(await read('document.querySelector("#log-window").textContent.includes("[解析] edge.example.com (A/AAAA)") && document.querySelector("#log-window").textContent.includes("AAAA 2001:db8::10")'), '正常解析地址也必须写入日志摘要');
+    check(await read('!document.querySelector("#log-window").textContent.includes("配置: 并发")'), '启动日志不应重复打印运行配置');
   }
   check(await read('document.querySelector("#status-table").textContent.includes("AS64500")'), '当前 DNS 地址没有显示探测出口信息');
   check(await read('document.querySelector("#status-table").textContent.includes("SJC")'), '可信探针返回的 Colo 没有显示');

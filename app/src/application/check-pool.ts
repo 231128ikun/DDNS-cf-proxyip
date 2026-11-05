@@ -1,5 +1,6 @@
+import { readPoolSnapshot } from '../domain/pool-snapshot';
 import { parseRuntimeSetting } from '../contracts/runtime-settings';
-import { parsePoolText, updatePoolEntryFromProbe, type PoolEntry } from '../domain/pool-entry';
+import { updatePoolEntryFromProbe, type PoolEntry } from '../domain/pool-entry';
 import { parseProxyTarget } from '../domain/proxy-target';
 import type { ProbeResult } from '../domain/probe-result';
 import type { ProbeContext } from '../ports/probe';
@@ -75,29 +76,9 @@ export class CheckPoolText {
 }
 
 function collectEntries(text: string): { entries: readonly PoolEntry[]; invalid: readonly string[] } {
-  const entries: PoolEntry[] = [];
-  const invalid: string[] = [];
-  const seen = new Set<string>();
-
-  for (const line of parsePoolText(text)) {
-    if (!line.raw.trim()) continue;
-    if (!line.entry) {
-      invalid.push(line.raw.trim());
-      continue;
-    }
-    const target = parseProxyTarget(line.entry.address, 443);
-    if (!target) {
-      invalid.push(line.entry.address);
-      continue;
-    }
-    if (seen.has(target.key)) continue;
-    // 收集完整输入后才启动检测，不能把部分结果当成整池结果写回。
-    if (entries.length >= MAX_BATCH_TARGETS) {
-      throw new PoolInputError(`单次批量检测最多支持 ${MAX_BATCH_TARGETS} 个不同有效地址，请拆分 IP 池或使用面板逐地址批量检测；原池未修改`);
-    }
-    seen.add(target.key);
-    entries.push(line.entry);
+  const snapshot = readPoolSnapshot(text);
+  if (snapshot.entries.size > MAX_BATCH_TARGETS) {
+    throw new PoolInputError('单次批量检测最多支持 ' + MAX_BATCH_TARGETS + ' 个不同有效地址，请拆分 IP 池或使用面板逐地址批量检测；原池未修改');
   }
-
-  return { entries, invalid };
+  return { entries: [...snapshot.entries.values()].map(item => item.entry), invalid: snapshot.invalid };
 }

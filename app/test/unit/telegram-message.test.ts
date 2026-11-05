@@ -19,6 +19,9 @@ describe('Telegram maintenance message', () => {
       now: new Date('2026-10-27T00:00:00.000Z'),
     });
 
+    expect(message).toContain('🔧 <b>DDNS 手动维护报告</b>');
+    expect(message).not.toMatch(/[━─—]{2}/u);
+    expect(message).toContain('⏰ ');
     expect(message).toContain('<a href="https://panel.example">打开管理面板</a>');
   });
 
@@ -29,6 +32,7 @@ describe('Telegram maintenance message', () => {
       now: new Date('2026-10-27T00:00:00.000Z'),
     });
 
+    expect(message).toContain('⚙️ <b>DDNS 自动维护报告</b>');
     expect(message).not.toContain('打开管理面板');
   });
 });

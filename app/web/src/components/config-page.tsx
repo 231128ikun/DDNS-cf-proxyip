@@ -3,6 +3,7 @@ import {
   MAX_TARGETS,
   MAX_ZONES,
   SETTINGS_LIMITS,
+  createDefaultConfig,
   parseAppConfig,
   type ConfigResponse,
   type ConfigUpdateRequest,
@@ -63,7 +64,8 @@ interface TargetDraft extends TargetConfig {
 interface ConfigForm {
   readonly zones: readonly ZoneDraft[];
   readonly targets: readonly TargetDraft[];
-  readonly checkApi: string;
+  readonly probeIpv4Url: string;
+  readonly probeIpv6Url: string;
   readonly checkApiBackup: string;
   readonly dohApi: string;
   readonly projectUrl: string;
@@ -82,7 +84,7 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
   ['CONCURRENT_CHECKS', '检测并发', '控制手动批量检测、域名探测、洗库与维护补货；1–128。解析实况全并发。', 'cfg-concurrent-checks'],
-  ['CHECK_TIMEOUT', '检测超时(ms)', '单接口请求超时；复检后仍超时按失效处理，洗库和维护时入桶。', 'cfg-check-timeout'],
+  ['CHECK_TIMEOUT', '检测超时(ms)', '原生候选连接超时；复检仍失败才清理。备用 API 请求超时不清理。', 'cfg-check-timeout'],
   ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
   ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
   ['DEFAULT_MIN_ACTIVE', '默认活跃数', '新增维护域名默认值。', 'cfg-default-min-active'],
@@ -314,13 +316,20 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
           </fieldset>
           {load.data.notice && <p class="text-warning small">{load.data.notice}</p>}
           <div class="config-grid config-group">
-            <TextField id="cfg-check-api" label="检测 API" help="留空使用备用接口；支持 {proxyip} 占位符。" value={form.checkApi} placeholder="CHECK_API" onValue={(value) => patch({ checkApi: value })} />
-            <TextField id="cfg-check-api-backup" label="备用检测 API" help="失败或异常时复检；单接口时复用原接口。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
+            <TextField id="cfg-check-api-backup" label="备用检测 API" help="原生失败时复检；留空则原生重试。支持 {proxyip} 占位符。" value={form.checkApiBackup} placeholder="CHECK_API_BACKUP" onValue={(value) => patch({ checkApiBackup: value })} />
             <TextField id="cfg-doh" label="DoH API" help="域名解析查询接口。" value={form.dohApi} placeholder="DOH_API" onValue={(value) => patch({ dohApi: value })} />
             <SecretField id="cfg-auth-key" label={SECRET_LABELS.authKey} help="用于访问面板的身份验证。" placeholder="AUTH_KEY" configured={secrets.authKey} value={drafts.authKey} onValue={(value) => setDrafts((current) => ({ ...current, authKey: value }))} />
             <SecretField id="cfg-tg-token" label={SECRET_LABELS.tgToken} help="开启 Telegram 通知时必填。" placeholder="TG_TOKEN" configured={secrets.tgToken} value={drafts.tgToken} onValue={(value) => setDrafts((current) => ({ ...current, tgToken: value }))} />
             <TextField id="cfg-tg-id" label="TG Chat ID" help="通知接收账号或群组 ID。" value={form.tgId} placeholder="TG_ID" onValue={(value) => patch({ tgId: value })} />
           </div>
+          <details class="config-group">
+            <summary>高级：覆盖内置出口探针</summary>
+            <p class="small text-secondary">默认使用内置探针，无需配置。仅在需要自定义时填写 HTTPS JSON 接口，留空恢复内置。</p>
+            <div class="config-grid">
+              <TextField id="cfg-probe-ipv4" label="IPv4 自定义探针" help="可选，返回包含 ip 的 JSON。" value={form.probeIpv4Url === createDefaultConfig().probeIpv4Url ? '' : form.probeIpv4Url} placeholder="留空使用内置 IPv4 探针" onValue={value => patch({ probeIpv4Url: value || createDefaultConfig().probeIpv4Url })} />
+              <TextField id="cfg-probe-ipv6" label="IPv6 自定义探针" help="可选，返回包含 ip 的 JSON。" value={form.probeIpv6Url === createDefaultConfig().probeIpv6Url ? '' : form.probeIpv6Url} placeholder="留空使用内置 IPv6 探针" onValue={value => patch({ probeIpv6Url: value || createDefaultConfig().probeIpv6Url })} />
+            </div>
+          </details>
           <section class="config-group" aria-labelledby="config-runtime-title">
             <h3 id="config-runtime-title">运行参数</h3>
             <div class="config-grid config-runtime-grid">
@@ -674,7 +683,8 @@ function formFromConfig(config: PublicAppConfig): ConfigForm {
   return {
     zones: config.zones.map((zone) => ({ ...zone, apiKey: '', hasApiKey: zone.hasApiKey })),
     targets: config.targets.map((target) => ({ ...target, sourceKey: bindingKey(target) })),
-    checkApi: config.checkApi,
+    probeIpv4Url: config.probeIpv4Url,
+    probeIpv6Url: config.probeIpv6Url,
     checkApiBackup: config.checkApiBackup,
     dohApi: config.dohApi,
     projectUrl: config.projectUrl,
@@ -707,7 +717,8 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateReques
     })),
     targets: form.targets.map(({ sourceKey: _sourceKey, ...target }) => normalizeTargetDraft(target, form.zones)),
     ...(authKey === undefined ? {} : { authKey }),
-    checkApi: form.checkApi.trim(),
+    probeIpv4Url: form.probeIpv4Url.trim(),
+    probeIpv6Url: form.probeIpv6Url.trim(),
     checkApiBackup: form.checkApiBackup.trim(),
     dohApi: form.dohApi.trim(),
     ...(tgToken === undefined ? {} : { tgToken }),
