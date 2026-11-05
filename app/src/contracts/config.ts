@@ -166,7 +166,7 @@ export function toProbeConfig(config: AppConfig): ProbeConfig {
   };
 }
 
-/** 读取 KV 或请求体时沿用“能修就修、不能修就忽略该条”的宽松规则。 */
+/** 旧 KV 允许忽略无法恢复的目标；写入另行拒绝无效条目。 */
 export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResult<AppConfig> {
   const record = asRecord(value);
   if (!record) return parseFail('配置必须是 JSON 对象');
@@ -210,6 +210,29 @@ export function parseAppConfig(value: unknown, previous?: AppConfig): ParseResul
     settings,
     projectUrl: text(record.projectUrl, base.projectUrl, MAX_ENDPOINT_URL_LENGTH),
   });
+}
+
+export function parseConfigUpdate(value: unknown, previous?: AppConfig): ParseResult<AppConfig> {
+  const parsed = parseAppConfig(value, previous);
+  if (!parsed.ok) return parsed;
+  const record = asRecord(value)!;
+  if (record.targets === undefined) return parsed;
+  if (!Array.isArray(record.targets) || record.targets.length > MAX_TARGETS) {
+    return parseFail(`管理域名必须为不超过 ${MAX_TARGETS} 项的列表`);
+  }
+  if (parsed.value.targets.length !== record.targets.length) return parseFail('管理域名包含无效条目，请检查后保存');
+  for (const [index, value] of record.targets.entries()) {
+    const target = asRecord(value)!;
+    for (const [field, limit, label] of [['domain', 253, '完整域名'], ['baseDomain', 253, '主域名'], ['prefix', 63, '域名前缀']] as const) {
+      if (target[field] !== undefined && (typeof target[field] !== 'string' || target[field].trim().length > limit)) {
+        return parseFail(`第 ${index + 1} 个管理域名的${label}格式或长度无效`);
+      }
+    }
+    if (parsed.value.targets[index]!.domain.length > 253) {
+      return parseFail(`第 ${index + 1} 个管理域名过长`);
+    }
+  }
+  return parsed;
 }
 
 function parseZones(values: readonly unknown[], previous: readonly ZoneConfig[]): ParseResult<readonly ZoneConfig[]> {
