@@ -67,13 +67,11 @@ export class MaintainManagedTargets {
   }
 }
 
-export function shouldNotifyMaintenance(run: MaintenanceRunReport, isManual: boolean): boolean {
-  return isManual
-    || run.changed
+export function shouldNotifyMaintenance(run: MaintenanceRunSummary): boolean {
+  return run.changed
     || run.insufficient
     || run.errors.length > 0
-    || run.probeErrors > 0
-    || run.poolStats.changed;
+    || run.probeErrors > 0;
 }
 
 /** 区域缺少的凭据字段分别回退到顶层配置。 */
