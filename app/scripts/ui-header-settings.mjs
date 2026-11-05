@@ -181,11 +181,10 @@ try {
     const pageColor = () => read('getComputedStyle(document.body).backgroundColor');
     const light = await pageColor();
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, sessionId);
+    assert.equal(await pageColor(), light, 'The default theme followed the system instead of staying light');
+    await click('#theme-toggle');
     const dark = await pageColor();
-    assert.notEqual(dark, light, 'System theme did not switch the panel palette');
-    await click('#theme-toggle');
-    assert.equal(await pageColor(), light, 'Explicit light theme did not override system theme');
-    await click('#theme-toggle');
+    assert.notEqual(dark, light, 'Clicking the theme button did not switch to dark');
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, sessionId);
     await cdp.send('Page.reload', {}, sessionId);
     await cdp.until(sessionId, 'document.querySelector("#theme-toggle use")?.getAttribute("href").endsWith("#moon") && document.querySelectorAll("#status-table .status-badge.ok").length === 2');
@@ -207,9 +206,17 @@ try {
     await key('Escape', 27);
     await cdp.until(sessionId, '!document.querySelector(".version-notes") && document.activeElement.id === "version-trigger"');
     await click('#theme-toggle');
+    assert(await read('document.querySelector("#theme-toggle use").getAttribute("href").endsWith("#monitor")'));
+    assert.equal(await pageColor(), light, 'System mode did not follow the light system preference');
+    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, sessionId);
+    assert.equal(await pageColor(), dark, 'System mode did not follow the dark system preference');
+    await cdp.send('Page.reload', {}, sessionId);
+    await cdp.until(sessionId, 'document.querySelector("#theme-toggle use")?.getAttribute("href").endsWith("#monitor")');
+    assert.equal(await pageColor(), dark, 'System mode was lost after reloading');
     await click('#theme-toggle');
-    assert(await read('document.querySelector("#theme-toggle use").getAttribute("href").endsWith("#monitor") && !document.documentElement.style.colorScheme'), 'Returning to system did not clear the override');
-    console.log(`${width}px: system and saved themes, click-only Markdown history and focus return PASS`);
+    assert.equal(await pageColor(), light, 'Returning to light did not override the dark system preference');
+    await read('localStorage.removeItem("ddns-theme")');
+    console.log(`${width}px: light default, saved themes, click-only Markdown history and focus return PASS`);
   }
 } finally {
   await browser?.close();

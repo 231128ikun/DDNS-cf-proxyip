@@ -126,9 +126,10 @@ try {
         && new Set(fields.map(field => getComputedStyle(field).color)).size === fields.length;
     })()`), '检测结果的地址、端口、栈与 ASN 未正确区分');
     await capture('results-' + width);
-    await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, sessionId);
+    await click('#theme-toggle');
     await capture('results-dark-' + width);
-    await cdp.send('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+    await click('#theme-toggle');
+    await click('#theme-toggle');
     await click('[data-action=retain-results]');
     await until('!document.querySelector(".pool-report")');
     assert.ok(await read('document.querySelector("#ip-input").value.includes("203.0.113.10") && document.querySelector("#ip-input").value.includes("203.0.113.30") && !document.querySelector("#ip-input").value.includes("203.0.113.20")'));

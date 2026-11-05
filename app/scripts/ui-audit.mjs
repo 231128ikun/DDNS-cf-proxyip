@@ -519,7 +519,8 @@ async function main() {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     await cdp.send("Page.enable", {}, sessionId);
     await cdp.send("Runtime.enable", {}, sessionId);
-    if (dark) await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] }, sessionId);
+    const setDark = session => cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: 'localStorage.setItem("ddns-theme", "dark")' }, session);
+    if (dark) await setDark(sessionId);
 
     const results = [];
     const referenceResults = [];
@@ -571,7 +572,7 @@ async function main() {
       const flowSession = await cdp.send("Target.attachToTarget", { targetId: flowTarget.targetId, flatten: true });
       await cdp.send("Page.enable", {}, flowSession.sessionId);
       await cdp.send("Runtime.enable", {}, flowSession.sessionId);
-      if (dark) await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] }, flowSession.sessionId);
+      if (dark) await setDark(flowSession.sessionId);
       const failures = await runBatchFlowCheck(cdp, flowSession.sessionId, viewport, Boolean(fixture));
       interactionFailures.push(...failures.map((failure) => `${viewport.name}: ${failure}`));
       const cardFailures = await runConfigCardCheck(cdp, flowSession.sessionId, viewport);
