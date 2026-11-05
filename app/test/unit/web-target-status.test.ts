@@ -10,7 +10,7 @@ import type { ProbeAdapter } from '../../src/ports/probe';
 import { createHttpApp } from '../../src/transport/http';
 import { ApiClient } from '../../web/src/api/client';
 import { probeStatusLabel } from '../../web/src/components/probe-status';
-import { loadTargetStatus, loadTargetStatuses } from '../../web/src/state/target-status';
+import { loadTargetStatus } from '../../web/src/state/target-status';
 
 function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string, probeAdapter?: ProbeAdapter) {
   const writes = vi.fn();
@@ -221,59 +221,79 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(loadTargetStatus(cancelled.client, 'edge.example.com|A', 2053, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
-    expect(cancelled.requests).toHaveLength(1);
+    expect(cancelled.requests).toHaveLength(0);
   });
 });
 
 
-describe('concurrent domain status loading', () => {
-  const targets = [
-    { domain: 'slow.example.com', mode: 'A' as const, port: 2053 },
-    { domain: 'fast.example.com', mode: 'TXT' as const, port: 'any' as const },
-  ];
-
-  it('starts all domains together and publishes fast results before a slow domain finishes', async () => {
-    const { client } = setup([]);
-    let finish!: () => void;
-    const slow = new Promise<void>(resolve => { finish = resolve; });
+describe('selected domain status loading', () => {
+  it('loads only the selected domain and refreshes only that domain', async () => {
+    const { client, writes, requests } = setup([]);
     const reads = vi.spyOn(client, 'currentStatus').mockImplementation(async key => {
-      if (key.startsWith('slow.')) await slow;
       const isTxt = key.endsWith('|TXT');
       return { ok: true, domain: key.split('|')[0]!, mode: isTxt ? 'TXT' : 'A', records: [
         { id: key, name: key.split('|')[0]!, type: isTxt ? 'TXT' : 'A',
           content: isTxt ? '"203.0.113.11:8443"' : '203.0.113.10' },
       ] };
     });
-    const progress = vi.fn();
-    const pending = loadTargetStatuses(client, targets, undefined, progress);
-    try {
-      expect(reads).toHaveBeenCalledTimes(2);
-      await vi.waitFor(() => expect(progress).toHaveBeenCalledWith(expect.objectContaining({ byKey: expect.objectContaining({
-        'fast.example.com|TXT': expect.objectContaining({ status: 'ready', data: expect.objectContaining({ probes: [
-          expect.objectContaining({ address: '203.0.113.11:8443', status: 'alive' }),
-        ] }) }),
-        'slow.example.com|A': { status: 'loading' },
-      }) })));
-    } finally { finish(); }
-    const completed = await pending;
-    expect(completed.byKey['slow.example.com|A']).toMatchObject({ status: 'ready', data: { probes: [
-      { address: '203.0.113.10:2053', status: 'alive' },
-    ] } });
+    const first = await loadTargetStatus(client, 'edge.example.com|A', 2053);
+    expect(reads.mock.calls.map(([key]) => key)).toEqual(['edge.example.com|A']);
+    expect(first.probes).toMatchObject([{ address: '203.0.113.10:2053', status: 'alive' }]);
+    const second = await loadTargetStatus(client, 'proxy.example.com|TXT', 'any');
+    expect(second.probes).toMatchObject([{ address: '203.0.113.11:8443', status: 'alive' }]);
+    await loadTargetStatus(client, 'proxy.example.com|TXT', 'any');
+    expect(reads.mock.calls.map(([key]) => key)).toEqual([
+      'edge.example.com|A', 'proxy.example.com|TXT', 'proxy.example.com|TXT',
+    ]);
+    expect(requests.map(request => request.address)).toEqual([
+      '203.0.113.10:2053', '203.0.113.11:8443', '203.0.113.11:8443',
+    ]);
+    expect(writes).not.toHaveBeenCalled();
   });
 
-  it('isolates a domain read failure without hiding another domain and ignores cancelled progress', async () => {
-    const { client } = setup([]);
+  it('does not publish or probe a late DNS response after switching away', async () => {
+    const { client, requests } = setup([]);
+    let release!: () => void;
+    const pendingDns = new Promise<void>(resolve => { release = resolve; });
     vi.spyOn(client, 'currentStatus').mockImplementation(async key => {
-      if (key.startsWith('slow.')) throw new Error('fixture DNS failure');
-      return { ok: true, domain: 'fast.example.com', mode: 'TXT', records: [] };
+      if (key === 'slow.example.com|A') await pendingDns;
+      return { ok: true, domain: key.split('|')[0]!, mode: 'A', records: [
+        { id: key, name: key.split('|')[0]!, type: 'A', content: '203.0.113.10' },
+      ] };
     });
-    const status = await loadTargetStatuses(client, targets);
-    expect(status.byKey['slow.example.com|A']).toMatchObject({ status: 'error', message: 'fixture DNS failure' });
-    expect(status.byKey['fast.example.com|TXT']).toMatchObject({ status: 'ready', data: { probes: [] } });
     const controller = new AbortController();
-    controller.abort();
     const progress = vi.fn();
-    await expect(loadTargetStatuses(client, targets, controller.signal, progress)).rejects.toMatchObject({ name: 'AbortError' });
+    const old = loadTargetStatus(client, 'slow.example.com|A', 2053, controller.signal, progress);
+    const rejected = expect(old).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    const current = await loadTargetStatus(client, 'current.example.com|A', 443);
+    release();
+    await rejected;
+    expect(current.domain).toBe('current.example.com');
     expect(progress).not.toHaveBeenCalled();
+    expect(requests.map(request => request.address)).toEqual(['203.0.113.10:443']);
+  });
+
+  it('rejects late probe results and ignores their progress after cancellation', async () => {
+    const records: DnsRecord[] = [{ id: 'a', type: 'A', name: 'edge.example.com', content: '203.0.113.10' }];
+    const { client } = setup(records);
+    let release!: () => void;
+    const pendingProbe = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(client, 'checkBatch').mockImplementation(async (_text, _signal, onProgress) => {
+      await pendingProbe;
+      onProgress?.({ type: 'progress', completed: 1, total: 1, sourceIndex: 0, sourceComplete: true,
+        item: { address: '203.0.113.10:2053', status: 'alive', exitFamily: 'ipv4', line: '203.0.113.10:2053' } });
+      return { total: 0, alive: 0, dead: 0, unknown: 0, invalid: [], items: [] };
+    });
+    const controller = new AbortController();
+    const progress = vi.fn();
+    const old = loadTargetStatus(client, 'edge.example.com|A', 2053, controller.signal, progress);
+    const rejected = expect(old).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(progress).toHaveBeenCalledTimes(1));
+    controller.abort();
+    release();
+    await rejected;
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ probes: [] }));
   });
 });
