@@ -26,6 +26,7 @@ import { useResource } from './state/use-resource';
 import { loadTargetStatuses, type TargetStatusesView, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
 import { formatProbeLog } from './components/probe-log';
+import { executionStatus } from './state/execution-status';
 
 type ConfigPageComponent = typeof import('./components/config-page').ConfigPage;
 type OrderDialogModule = typeof import('./components/order-dialog');
@@ -124,6 +125,11 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const targetStatus: RequestState<TargetStatusView> = targetStatuses.status === 'ready'
     ? targetStatuses.data.byKey[selectedTargetKey ?? ''] ?? { status: 'idle' }
     : targetStatuses;
+  const executionItems = probeContext === 'batch' ? batchState.batchReport?.items ?? []
+    : probeContext === 'lookup' ? check.status === 'ready' ? check.data.items.map(item => item.result) : []
+      : targetStatus.status === 'ready' ? targetStatus.data.probes : [];
+  const executionRequest = probeContext === 'batch' ? batch.status === 'loading' && !batchState.checkingBatch ? 'ready' : batch.status
+    : probeContext === 'lookup' ? check.status : targetStatus.status === 'ready' && targetStatus.refreshing ? 'loading' : targetStatus.status;
 
   // 当前池被删掉时回落到默认池，避免下拉框停在一个已经不存在的 key 上。
   useEffect(() => {
@@ -520,7 +526,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         <div hidden={page !== 'dashboard'}>
           <DashboardPage
             config={config} health={health}
-            executionColos={[...new Set((probeContext === 'batch' ? batchState.batchReport?.items ?? [] : probeContext === 'lookup' ? check.status === 'ready' ? check.data.items.map(item => item.result) : [] : targetStatus.status === 'ready' ? targetStatus.data.probes : []).map(item => item.executionColo).filter((value): value is string => Boolean(value)))]}
+            executionColos={[...new Set(executionItems.map(item => item.executionColo).filter((value): value is string => Boolean(value)))]}
+            executionState={executionStatus(executionRequest, executionItems, health.status)}
             poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
               containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()}
