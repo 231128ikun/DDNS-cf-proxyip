@@ -4,7 +4,7 @@ import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { errorMessage } from '../api/errors';
 
 export function invalidPoolLines(content: string): readonly string[] {
-  return readPoolSnapshot(content).invalid.filter(line => !line.startsWith('#'));
+  return readPoolSnapshot(content).invalid;
 }
 
 /** 写入后保留回执，不自动回读 KV。 */

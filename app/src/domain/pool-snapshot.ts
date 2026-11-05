@@ -18,7 +18,7 @@ export function readPoolSnapshot(text: string): PoolSnapshot {
   const lines = parsePoolText(text);
   const invalid: string[] = [];
   for (const line of lines) {
-    if (!line.entry || !parsePoolAddress(line.entry)) { invalid.push(line.raw); continue; }
+    if (!line.entry || !parsePoolAddress(line.entry)) { if (!line.raw.startsWith('#')) invalid.push(line.raw); continue; }
     const key = canonicalAddressKey(line.entry.address);
     if (!key) { invalid.push(line.raw); continue; }
     const previous = entries.get(key);

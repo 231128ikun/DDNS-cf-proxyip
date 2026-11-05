@@ -11,7 +11,7 @@ interface BatchSourceLine {
 export function describeBatch(text: string, groups: ReadonlyMap<number, readonly PoolCheckItemResponse[]>, completed: ReadonlySet<number>) {
   const source = readPoolSnapshot(text);
   return { source: text, items: [...groups.values()].flat(),
-    invalid: source.invalid.filter(line => !line.startsWith('#')),
+    invalid: source.invalid,
     incomplete: [...readPoolSnapshot(remainingBatchText(text, completed)).entries.values()].map(item => item.raw),
     text: mergeBatchProgress(text, groups) };
 }

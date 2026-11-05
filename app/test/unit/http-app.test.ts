@@ -18,6 +18,7 @@ import type { DnsLookup } from '../../src/ports/dns-lookup';
 import type { ProbeAdapter } from '../../src/ports/probe';
 import { createHttpApp, type ConfigGateway, type MaintenanceRunner } from '../../src/transport/http';
 import { MemoryPoolCatalog } from '../helpers/memory-pool-catalog';
+import { ApiClient } from '../../web/src/api/client';
 
 /** POST JSON 用例在所有路由测试里重复，抽成一处，避免每个用例再写一遍头部。 */
 function postJson(
@@ -658,10 +659,9 @@ describe('HTTP app target status route', () => {
 });
 
 describe('HTTP cleaning completeness', () => {
-  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('returns JSON 400 before probing or writing an oversized %s', async (poolKey) => {
-    const content = Array.from({ length: 201 }, (_, index) => `node-${index}.example:443 # 用户备注`).join('\n');
+  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('streams the complete 1205-address %s through the real client and route', async (poolKey) => {
+    const content = Array.from({ length: 1205 }, (_, index) => `node-${index}.example:443 # 用户备注 来自 ip_pool_001`).join('\n');
     const catalog = new MemoryPoolCatalog({ [poolKey]: content, ip_pool_001: 'existing.example:443' });
-    const initial = new Map(catalog.data);
     const pools = new PoolService(catalog);
     const probe = new FakeProbeAdapter();
     const run = vi.spyOn(probe, 'probe');
@@ -671,13 +671,14 @@ describe('HTTP cleaning completeness', () => {
     const cleanPool = new CleanPool({ catalog, pools, trash, checkPool });
     const app = createHttpApp({ checkTarget: createCheckTarget(probe), version: 'test', pools, cleanPool });
 
-    const response = await postJson(app, `/api/pools/${poolKey}/clean`, {});
-    expect(response.status).toBe(400);
-    expect(response.headers.get('content-type')).toContain('application/json');
-    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('200') });
-    expect(run).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
+    const client = new ApiClient({ fetchImpl: async (url, init) => app.request(String(url), init) });
+    const progress: number[] = [];
+    const result = await client.cleanPool(poolKey, undefined, event => { progress.push(event.completed); });
+    expect(result).toMatchObject({ checked: 1205, kept: 1205, skipped: false });
+    expect(progress).toEqual(Array.from({length:1205}, (_, i) => i + 1));
+    expect(run).toHaveBeenCalledTimes(1205);
+    expect(write).toHaveBeenCalledTimes(poolKey === TRASH_POOL_KEY ? 2 : 1);
     expect(trash.addToTrash).not.toHaveBeenCalled();
-    expect(catalog.data).toEqual(initial);
+    expect(catalog.data.get(poolKey === TRASH_POOL_KEY ? 'ip_pool_001' : poolKey)).toContain('node-1204.example:443');
   });
 });

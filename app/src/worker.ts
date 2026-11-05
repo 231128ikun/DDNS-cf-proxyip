@@ -30,19 +30,18 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.05-11.15';
+export const APP_VERSION = '2026.11.05-12.00';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
-export function createWorker(): ExportedHandler<RuntimeEnv> {
+export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter = createProbeAdapterFromConfig): ExportedHandler<RuntimeEnv> {
   const handler: ExportedHandler<RuntimeEnv> = {
     async fetch(request, env, executionContext): Promise<Response> {
       const url = new URL(request.url);
       const configService = createConfigService(env, url.origin);
       const resolved = await configService.resolve();
 
-      const createProbe = (config: ProbeConfig): ProbeAdapter => createProbeAdapterFromConfig(config);
       const checkProxy = new CheckProxy(createProbe(toProbeConfig(resolved.config)));
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv, resolved.config) : null;

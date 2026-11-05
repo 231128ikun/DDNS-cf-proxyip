@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { MAX_POOL_RESTORE_ITEMS, NUMBERED_POOL_KEY_RE, TRASH_POOL_KEY, type PoolsResponse } from '../../../src/contracts/pool';
+import { NUMBERED_POOL_KEY_RE, TRASH_POOL_KEY, type PoolsResponse } from '../../../src/contracts/pool';
 import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { matchesPoolFilter, parsePoolFilter } from '../../../src/domain/pool-filter';
 import type { ApiClient } from '../api/client';
@@ -13,6 +13,7 @@ import { Icon } from './icon';
 import type { ConsoleTone } from './dashboard-page';
 import { ResourceFeedback } from './resource-feedback';
 import { probeStatusLabel } from './probe-status';
+import { formatProbeLog } from './probe-log';
 
 interface PoolPanelProps {
   readonly client: ApiClient;
@@ -30,11 +31,12 @@ interface PoolPanelProps {
   readonly leaveGuard: { current: () => boolean };
   readonly containerChanged: { current: (key: string) => void };
   readonly log: (message: string, tone?: ConsoleTone) => void;
+  readonly onWriteBusy: (busy: boolean) => void;
 }
 
 /** 输入负责整理和出入库，结果只负责选择。 */
 export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools,
-  onPoolCount, batch, configReady, bindingsReady, probeConfigured, leaveGuard, containerChanged, log }: PoolPanelProps) {
+  onPoolCount, batch, configReady, bindingsReady, probeConfigured, leaveGuard, containerChanged, log, onWriteBusy }: PoolPanelProps) {
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
   const [view, setView] = useState<'input' | 'results'>('input');
@@ -45,6 +47,8 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const [urlOpen, setUrlOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sideBusy, setSideBusy] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const cleanController = useRef<AbortController | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const source = useRef<AbortController | null>(null);
   const sidePending = useRef(false);
@@ -75,7 +79,8 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   leaveGuard.current = () => !model.writing && !sidePending.current;
   containerChanged.current = key => model.forgetPool(key);
   useLayoutEffect(() => { model.select(poolKey); }, [poolKey, model]);
-  useEffect(() => () => { source.current?.abort(); model.dispose(); }, [model]);
+  useEffect(() => () => { source.current?.abort(); cleanController.current?.abort(); model.dispose(); }, [model]);
+  useEffect(() => { onWriteBusy(sideBusy || model.writing); }, [sideBusy, model.writing, onWriteBusy]);
   useEffect(() => { setSelected(new Set()); setCategory('all'); if (report) setView('results'); }, [report?.source]);
   useEffect(() => { if (!report) { setView('input'); setSelected(new Set()); } }, [report]);
   useEffect(() => { if (batch.checkingBatch) { setSelected(new Set()); setCategory('all'); setView('results'); } }, [batch.checkingBatch]);
@@ -122,7 +127,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const runTrash = async (clear = false): Promise<void> => {
     if (locked || sidePending.current) return;
     const addresses = [...readPoolSnapshot(inputText).entries.keys()];
-    if (!clear && (!addresses.length || addresses.length > MAX_POOL_RESTORE_ITEMS)) return;
+    if (!clear && !addresses.length) return;
     if (clear && !window.confirm('清空垃圾桶？此操作不可撤销。')) return;
     sidePending.current = true; setSideBusy(true);
     try {
@@ -135,18 +140,24 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const cleanPool = async (): Promise<void> => {
     if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常时不清理。`)) return;
     sidePending.current = true; setSideBusy(true);
+    const controller = cleanController.current = new AbortController();
+    setCleaning(true); model.message = '正在读取库存…';
     log(`[洗库] 开始 · ${name}`);
     try {
-      const result = await client.cleanPool(poolKey);
+      const result = await client.cleanPool(poolKey, controller.signal, event => {
+        model.message = `检测中 ${event.completed}/${event.total} · 全部确认后写入`;
+        render(value => value + 1);
+        log(`[洗库] ${event.completed}/${event.total} · ${event.address} · ${formatProbeLog(event.result)}`, event.result.status === 'alive' ? 'success' : event.result.status === 'dead' ? 'error' : 'warning');
+      });
       model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
         : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}`;
       if (!result.skipped) {
         const message = model.message; model.forgetPool(poolKey); model.message = message;
-        if (!inTrash) onPoolCount(poolKey, result.kept);
+        if (!inTrash || result.remaining !== undefined) onPoolCount(poolKey, result.remaining ?? result.kept);
       }
       log('[洗库] ' + model.message, result.skipped ? 'warning' : 'success');
-    } catch (error) { model.message = errorMessage(error); log('[洗库] ' + model.message, 'error'); }
-    finally { sidePending.current = false; setSideBusy(false); }
+    } catch (error) { model.message = controller.signal.aborted ? '洗库已停止，未取得完成确认，请核对库存' : errorMessage(error); log('[洗库] ' + model.message, controller.signal.aborted ? 'warning' : 'error'); }
+    finally { cleanController.current = null; sidePending.current = false; setCleaning(false); setSideBusy(false); }
   };
   const choose = (key: string, checked: boolean): void => setSelected(current => {
     const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next;
@@ -159,12 +170,12 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         <select id="pool-selector" class="form-select form-select-sm" aria-label="选择 IP 池" value={poolKey} disabled={locked}
           onChange={event => { if (leaveGuard.current()) onPoolChange(event.currentTarget.value); }}>{poolOptions(pools, poolKey).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}</select>
         <details class="pool-menu">
-          <summary id="pool-action-trigger" class="btn btn-sm btn-outline-secondary" aria-label="池操作">池操作 ▾</summary>
+          <summary id="pool-action-trigger" class="btn btn-sm btn-outline-secondary" aria-label="池操作">{cleaning ? '洗库中…' : '池操作 ▾'}</summary>
           <div class="action-menu-panel" role="group" aria-label="池操作">
             {([['新建池', actions.createPool, false], ['重命名', actions.renamePool, inTrash || !bindingsReady],
               ['一键洗库', () => void cleanPool(), !configReady || !probeConfigured],
               ['池排序', actions.openPoolOrder, false], ['删除池', actions.deletePool, !NUMBERED_POOL_KEY_RE.test(poolKey) || !bindingsReady],
-              ['刷新池列表', refreshPools, false]] as const).map(([label, action, disabled]) => <button key={label} type="button" class="action-menu-item" data-action={label === '一键洗库' ? 'clean-pool' : undefined} disabled={locked || disabled} onClick={event => { event.currentTarget.closest('details')!.open = false; action(); }}>{label}</button>)}
+              ['刷新池列表', refreshPools, false]] as const).map(([label, action, disabled]) => <button key={label} type="button" class="action-menu-item" title={label === '一键洗库' && !probeConfigured ? '请先配置检测出口' : undefined} data-action={label === '一键洗库' ? 'clean-pool' : undefined} disabled={locked || disabled} onClick={event => { event.currentTarget.closest('details')!.open = false; action(); }}>{label}</button>)}
             {inTrash && <button type="button" class="action-menu-item danger" disabled={locked} onClick={() => void runTrash(true)}>清空垃圾桶</button>}
           </div>
         </details>
@@ -213,10 +224,11 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     {invalid.length > 0 && view === 'input' && <details class="small text-danger"><summary>无效内容 {invalid.length} 行</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
     {model.message && <p class="pool-feedback small" role="status">{model.message}</p>}
     <footer class="pool-footer" id="main-actions">
+      {cleaning && <button type="button" class="btn btn-sm btn-danger" data-action="stop-clean" onClick={() => cleanController.current?.abort()}>停止洗库</button>}
       {view === 'input' ? <>
         <button type="button" class={batch.checkingBatch ? 'btn btn-sm btn-danger' : 'btn btn-sm btn-primary'} aria-label={batch.checkingBatch ? '停止批量检测' : '批量检测导入草稿'} disabled={!batch.checkingBatch && (!configReady || !probeConfigured || locked || badFilter || !inputCount)}
           onClick={() => { if (batch.checkingBatch) batch.handleStopBatch(); else { setView('results'); batch.handleCheckBatch(false, inputText); } }}><Icon name={batch.checkingBatch ? 'stop' : 'activity'} />{batch.checkingBatch ? '停止' : '检测'}</button>
-        {inTrash ? <button type="button" class="btn btn-sm btn-success" disabled={locked || badFilter || !inputCount || inputCount > MAX_POOL_RESTORE_ITEMS} data-action="restore-trash" onClick={() => void runTrash()}>恢复到来源池</button> : <>
+        {inTrash ? <button type="button" class="btn btn-sm btn-success" disabled={locked || badFilter || !inputCount} data-action="restore-trash" onClick={() => void runTrash()}>恢复到来源池</button> : <>
           <button type="button" class="btn btn-sm btn-success" data-action="append-pool" disabled={locked || badFilter || !inputCount || Boolean(invalid.length)} onClick={() => void write('append')}><Icon name="plus" />追加入库</button>
           <button type="button" class="btn btn-sm btn-outline-danger" data-action="remove-input" disabled={locked || badFilter || !inputCount || Boolean(invalid.length)} onClick={() => void write('remove')}>从库剔除</button>
         </>}

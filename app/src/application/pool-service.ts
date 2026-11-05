@@ -2,7 +2,6 @@ import type { PoolSaveMode, PoolSaveResponse, PoolSummary, RestoreTrashResponse 
 import {
   DEFAULT_POOL_KEY,
   MAX_POOL_DISPLAY_NAME_LENGTH,
-  MAX_POOL_RESTORE_ITEMS,
   NUMBERED_POOL_KEY_RE,
   TRASH_POOL_KEY,
   isPoolDataKey,
@@ -36,23 +35,25 @@ export class PoolService {
     return await this.catalog.read(requirePoolKey(poolKey));
   }
 
-  async save(poolKey: unknown, content: unknown, modeValue?: unknown, returnReceiptValue?: unknown): Promise<PoolSaveResponse> {
+  async save(poolKey: unknown, content: unknown, modeValue?: unknown, returnReceiptValue?: unknown, expectedContent?: string): Promise<PoolSaveResponse> {
     if (returnReceiptValue !== undefined && typeof returnReceiptValue !== 'boolean') throw new PoolInputError('returnReceipt 必须是布尔值');
-    const plan = await this.prepareSave(poolKey, content, modeValue);
+    const plan = await this.prepareSave(poolKey, content, modeValue, expectedContent);
     await executePoolWrites([plan.write], (key, text) => this.catalog.write(key, text));
     return { ok: true, ...plan.summary,
       ...(returnReceiptValue === true ? { receipt: { poolKey: plan.write.poolKey, content: plan.write.after, written: plan.changed } } : {}),
     };
   }
 
-  private async prepareSave(poolKey: unknown, content: unknown, modeValue?: unknown) {
+  private async prepareSave(poolKey: unknown, content: unknown, modeValue?: unknown, expectedContent?: string) {
     const key = requirePoolKey(poolKey);
     if (key === TRASH_POOL_KEY) throw new PoolInputError('垃圾桶只能由维护和洗库流程写入');
     const mode = parseSaveMode(modeValue);
     const incoming = readPoolSnapshot(normalizeContent(content));
-    if (incoming.invalid.some(line => !line.startsWith('#'))) throw new PoolInputError('包含无法识别的条目，原池未修改');
+    if (incoming.invalid.length) throw new PoolInputError('包含无法识别的条目，原池未修改');
     if (mode !== 'replace' && incoming.entries.size === 0) throw new PoolInputError('没有有效 IP');
-    return planPoolSave(key, readPoolSnapshot(await this.catalog.read(key)), incoming, mode);
+    const current = await this.catalog.read(key);
+    if (expectedContent !== undefined && current !== expectedContent) throw new PoolInputError('库存已变化，未替换原池，请重新洗库');
+    return planPoolSave(key, readPoolSnapshot(current), incoming, mode);
   }
 
   async create(displayNameValue: unknown): Promise<PoolSummary> {
@@ -102,7 +103,6 @@ export class PoolService {
       throw new PoolInputError('addresses 必须是数组');
     }
     if (addressesValue.length === 0) throw new PoolInputError('没有选择 IP');
-    if (addressesValue.length > MAX_POOL_RESTORE_ITEMS) throw new PoolInputError('一次恢复的 IP 数量过多');
 
     const requested = [...new Set(addressesValue.map((value) => canonicalAddressKey(value)).filter(Boolean))];
     if (requested.length === 0) throw new PoolInputError('没有有效 IP');
@@ -112,10 +112,11 @@ export class PoolService {
     const trash = readPoolSnapshot(await this.catalog.read(TRASH_POOL_KEY));
     const destinations = new Map<string, PoolSnapshot>();
     const assignments = new Map<string, string>();
+    const sourcePools = new Map<string, string>();
     for (const key of requested) {
       const item = trash.entries.get(key);
       if (!item) continue;
-      const poolKey = restoreToSource ? await this.resolveSourcePool(item.raw, fallbackPool) : fallbackPool;
+      const poolKey = restoreToSource ? await this.resolveSourcePool(item.raw, fallbackPool, sourcePools) : fallbackPool;
       assignments.set(key, poolKey);
       if (!destinations.has(poolKey)) destinations.set(poolKey, readPoolSnapshot(await this.catalog.read(poolKey)));
     }
@@ -124,10 +125,13 @@ export class PoolService {
     return { ok: true, ...plan.summary };
   }
 
-  private async resolveSourcePool(trashLine: string, fallbackPool: string): Promise<string> {
+  private async resolveSourcePool(trashLine: string, fallbackPool: string, resolved: Map<string, string>): Promise<string> {
     const candidate = sourcePoolFromTrash(trashLine);
     if (!candidate) return fallbackPool;
-    return candidate === DEFAULT_POOL_KEY || await this.catalog.exists(candidate) ? candidate : fallbackPool;
+    if (resolved.has(candidate)) return resolved.get(candidate)!;
+    const pool = candidate === DEFAULT_POOL_KEY || await this.catalog.exists(candidate) ? candidate : fallbackPool;
+    resolved.set(candidate, pool);
+    return pool;
   }
 }
 

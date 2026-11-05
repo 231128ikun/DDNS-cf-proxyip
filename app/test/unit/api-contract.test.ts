@@ -129,6 +129,7 @@ describe('web and Worker API contract', () => {
             skipped: [],
           });
         }
+        if (url.endsWith('/clean')) return new Response(JSON.stringify({ type: 'complete', result: { ok: true, poolKey: 'ip_pool_001', checked: 0, kept: 0, trashed: 0, unknown: 0, skipped: false } }) + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
         return Response.json({ ok: true });
       },
     });

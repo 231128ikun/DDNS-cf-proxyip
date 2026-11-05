@@ -3,7 +3,7 @@ import { planPoolCleaning } from '../domain/pool-mutation';
 import type { PoolCatalog } from '../ports/pool-catalog';
 import type { PoolRepository } from '../ports/pool-repository';
 import type { ProbeContext } from '../ports/probe';
-import type { CheckPoolText } from './check-pool';
+import type { CheckPoolText, PoolCheckProgressHandler } from './check-pool';
 import { PoolInputError, type PoolService } from './pool-service';
 
 
@@ -25,22 +25,25 @@ export class CleanPool {
     },
   ) {}
 
-  async execute(poolKey: string, context: ProbeContext = {}): Promise<CleanPoolResponse> {
-    const content = await this.dependencies.catalog.read(poolKey);
+  async execute(poolKey: string, context: ProbeContext = {}, onProgress?: PoolCheckProgressHandler): Promise<CleanPoolResponse> {
+    const content = await this.dependencies.pools.read(poolKey);
     if (!content.trim()) throw new PoolInputError('池为空，无需洗库');
 
-    const report = await this.dependencies.checkPool.execute(content, context);
-    const plan = planPoolCleaning(poolKey, report);
+    const report = await this.dependencies.checkPool.execute(content, context, onProgress);
+    context.signal?.throwIfAborted();
+    const plan = planPoolCleaning(poolKey, report, report.snapshot);
     if (plan.summary.skipped) return { ok: true, poolKey, ...plan.summary };
+    if (await this.dependencies.catalog.read(poolKey) !== content) throw new PoolInputError('检测期间库存已变化，未执行清理，请重新洗库');
+    context.signal?.throwIfAborted();
     if (poolKey === TRASH_POOL_KEY) {
       const restored = plan.restoreAddresses.length
         ? await this.dependencies.pools.restoreTrash(plan.restoreAddresses, true)
         : { restored: 0 };
-      return { ok: true, poolKey, ...plan.summary, kept: restored.restored };
+      return { ok: true, poolKey, ...plan.summary, kept: restored.restored, remaining: report.dead };
     }
     // 入桶成功后才能移除原池条目，写入失败宁可保留副本。
     if (plan.trash.length) await this.dependencies.trash.addToTrash(plan.trash);
-    await this.dependencies.pools.save(poolKey, plan.nextText, 'replace');
+    await this.dependencies.pools.save(poolKey, plan.nextText, 'replace', undefined, content);
     return { ok: true, poolKey, ...plan.summary };
   }
 }
