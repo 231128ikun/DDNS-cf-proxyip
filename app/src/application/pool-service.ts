@@ -98,6 +98,7 @@ export class PoolService {
     addressesValue: unknown,
     restoreToSourceValue?: unknown,
     targetPoolValue?: unknown,
+    expectedContent?: string,
   ): Promise<RestoreTrashResponse> {
     if (!Array.isArray(addressesValue) || addressesValue.some((value) => typeof value !== 'string')) {
       throw new PoolInputError('addresses 必须是数组');
@@ -109,7 +110,9 @@ export class PoolService {
 
     const restoreToSource = restoreToSourceValue === true;
     const fallbackPool = restoreToSource ? DEFAULT_POOL_KEY : requireUserPoolKey(targetPoolValue ?? DEFAULT_POOL_KEY);
-    const trash = readPoolSnapshot(await this.catalog.read(TRASH_POOL_KEY));
+    const content = await this.catalog.read(TRASH_POOL_KEY);
+    if (expectedContent !== undefined && content !== expectedContent) throw new PoolInputError('垃圾桶库存已变化，请重新洗库');
+    const trash = readPoolSnapshot(content);
     const destinations = new Map<string, PoolSnapshot>();
     const assignments = new Map<string, string>();
     const sourcePools = new Map<string, string>();

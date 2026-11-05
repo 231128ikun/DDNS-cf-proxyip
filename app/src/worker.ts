@@ -9,7 +9,6 @@ import { KvMaintenanceSource } from './adapters/storage/kv-maintenance-source';
 import { KvMaintenanceStatsRepository } from './adapters/storage/kv-maintenance-stats-repository';
 import { KvPoolCatalog } from './adapters/storage/kv-pool-catalog';
 import { KvPoolRepository } from './adapters/storage/kv-pool-repository';
-import { CheckPoolText } from './application/check-pool';
 import { CleanPool } from './application/clean-pool';
 import { CheckProxy } from './application/check-proxy';
 import { CheckTarget } from './application/check-target';
@@ -30,7 +29,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.05-12.00';
+export const APP_VERSION = '2026.11.05-14.34';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -49,7 +48,6 @@ export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter 
         ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
         : null;
 
-      const checkPool = new CheckPoolText(checkProxy, resolved.config.settings.CONCURRENT_CHECKS);
       const checkTarget = new CheckTarget({
         resolver: new ResolveTarget(new DohLookup({ endpoint: resolved.config.dohApi, timeoutMs: resolved.config.settings.DOH_TIMEOUT })),
         checkProxy,
@@ -67,7 +65,7 @@ export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter 
         remotePoolLoader: new RemotePoolLoader(new HttpRemotePoolSource({ timeoutMs: resolved.config.settings.REMOTE_LOAD_TIMEOUT })),
         ...(kv
           ? {
-              ...createPoolDependencies(kv, checkPool, resolved.config, maintenanceSource!, maintenance),
+              ...createPoolDependencies(kv, resolved.config, maintenanceSource!, maintenance),
               targetStatus: new TargetStatus({
                 source: maintenanceSource!,
                 dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
@@ -108,7 +106,6 @@ export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter 
 /** 洗库与维护共用垃圾桶仓库，统一去重、截断和注释格式。 */
 function createPoolDependencies(
   kv: KVNamespace,
-  checkPool: CheckPoolText,
   config: AppConfig,
   maintenanceSource: MaintenanceSource,
   maintenance: MaintenanceRunner | null,
@@ -119,9 +116,7 @@ function createPoolDependencies(
     pools,
     cleanPool: new CleanPool({
       pools,
-      catalog,
       trash: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
-      checkPool,
     }),
     domainBindings: new DomainBindings(maintenanceSource, new KvDomainBindingRepository(kv)),
     ...(maintenance ? { maintenance } : {}),

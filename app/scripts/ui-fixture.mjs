@@ -81,13 +81,23 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   let createWorker;
   try { ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts')); }
   finally { await harness.close(); }
-  // 洗库只替换外部探针，路由、规则和 KV 写入运行实际 Worker 源码；其余接口使用发布构建。
-  const cleanWorker = createWorker(() => ({ name: 'fixture', async probe(target, context = {}) {
-    const delay = fixture.probeDelays[target.authority] ?? fixture.probeDelay;
-    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-    context.signal?.throwIfAborted();
-    return { target, status: 'alive', exitFamily: 'ipv4', exits: probeExits, latencyMs: 12, colo: 'SJC', ...fixture.probeErrors[target.authority] };
-  } }));
+  // 普通批检与洗库走实际路由；替身限制每个请求最多探测一个目标。
+  const probeWorker = createWorker(() => {
+    let used = false;
+    return {name:'fixture', async probe(target, context = {}) {
+      if (used) throw new Error('模拟子请求预算耗尽');
+      used = true;
+      const metrics = fixture.probeMetrics;
+      metrics.peak = Math.max(metrics.peak, ++metrics.active);
+      try {
+        const delay = fixture.probeDelays[target.authority] ?? fixture.probeDelay;
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        const failure = context.signal?.aborted ? {code:'CANCELLED'} : fixture.probeErrors[target.authority];
+        return failure ? {target, status:failure.code === 'TIMEOUT' ? 'dead' : 'unknown', exitFamily:'unknown', exits:[], ...failure}
+          : {target, status:'alive', exitFamily:'ipv4', exits:probeExits, latencyMs:12, colo:'SJC'};
+      } finally { metrics.active--; }
+    }};
+  });
   const kv = {
     async get(key, options) {
       if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
@@ -156,19 +166,10 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       if (/^\/api\/pools\/(?:ip_pool_(?:default|trash|\d{3})|trash)(?:\/(?:preview|restore|clear|clean))?$/.test(url.pathname)) {
         const preview = url.pathname.endsWith('/preview');
         const read = request.method === 'GET';
-        if (url.pathname.endsWith('/clean')) {
-          const abort = new AbortController();
-          response.once('close', () => { if (!response.writableEnded) abort.abort(); });
-          const result = await cleanWorker.fetch(new Request(url, { method: 'POST', signal: abort.signal,
-            headers: request.headers.cookie ? { cookie: request.headers.cookie } : {} }), { IP_DATA: kv });
-          response.writeHead(result.status, Object.fromEntries(result.headers));
-          try { for await (const chunk of result.body) { if (response.destroyed) break; response.write(chunk); } }
-          finally { response.end(); }
-          return;
-        }
         if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
         if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);
-        const result = await worker.fetch(new Request(url, { method: request.method,
+        const handler = url.pathname.endsWith('/clean') ? probeWorker : worker;
+        const result = await handler.fetch(new Request(url, { method: request.method,
           headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }), { IP_DATA: kv });
         const data = await result.json();
         const delay = read ? fixture.poolReadDelay : preview ? fixture.poolPreviewDelay : fixture.poolWriteDelay;
@@ -257,22 +258,18 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
           mapping: Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
           domainPoolOrder: fixture.bindings.items.map(item => item.key) });
       }
-      if (['/api/check', '/api/check-ip'].includes(url.pathname)) {
-        const metrics = fixture.probeMetrics;
-        metrics.active++;
-        metrics.peak = Math.max(metrics.peak, metrics.active);
-        try {
-        const address = input.proxyip ?? url.searchParams.get('ip');
-        const delay = fixture.probeDelays[address] ?? fixture.probeDelay;
-        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-        const failure = fixture.probeErrors[address];
-        const result = failure ? { status: failure.code === 'TIMEOUT' ? 'dead' : 'unknown', exitFamily: 'unknown', exits: [], ...failure }
-          : { status: 'alive', exitFamily: 'ipv4', latencyMs: 12, colo: 'SJC', executionColo: fixture.executionColo, exits: probeExits };
-        return url.pathname === '/api/check'
-          ? json({ ok: true, input: address, source: { kind: 'direct' }, items: [{ address, result }], skipped: [] })
-          : json({ ...baselineProbe, responseTime: 12, asn: 'AS64500', country: 'US', stack: 'v4' });
-        } finally { metrics.active--; }
+      if (url.pathname === '/api/check') {
+        // 验收只使用直连目标，不发真实 DNS 请求。
+        if (typeof input.proxyip !== 'string' || !/^(?:[\w.-]+:\d+|\[[\da-f:]+\]:\d+|\d+(?:\.\d+){3})$/i.test(input.proxyip)) return json({error:'验收仅支持直连目标'}, 400);
+        const abort = new AbortController();
+        response.once('close', () => { if (!response.writableEnded) abort.abort(); });
+        const req = new Request(url, {method:'POST', signal:abort.signal, body,
+          headers:{'content-type':'application/json', ...(request.headers.cookie ? {cookie:request.headers.cookie} : {})}});
+        Object.defineProperty(req, 'cf', {value:{colo:fixture.executionColo}});
+        const result = await probeWorker.fetch(req, {IP_DATA:kv});
+        return json(await result.json(), result.status);
       }
+      if (url.pathname === '/api/check-ip') return json({...baselineProbe, responseTime:12, asn:'AS64500', country:'US', stack:'v4'});
       if (['/api/add-record', '/api/add-a-record'].includes(url.pathname)) {
         if (fixture.failRecordSave) { fixture.failRecordSave = false; return json({ success: false, error: '模拟 DNS 添加失败' }, url.pathname === '/api/add-a-record' ? 200 : 500); }
         const target = config.targets.find((target) => `${target.domain}|${target.mode}` === input.target)
