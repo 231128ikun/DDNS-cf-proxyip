@@ -6,7 +6,7 @@ import { KvPoolRepository } from '../../src/adapters/storage/kv-pool-repository'
 import { CheckPoolText } from '../../src/application/check-pool';
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CleanPool } from '../../src/application/clean-pool';
-import { PoolInputError, PoolService } from '../../src/application/pool-service';
+import { PoolService } from '../../src/application/pool-service';
 import { DEFAULT_POOL_KEY, TRASH_POOL_KEY } from '../../src/contracts/pool';
 import { alive, dead, unknown, type ProbeResult } from '../../src/domain/probe-result';
 import type { ProxyTarget } from '../../src/domain/proxy-target';
@@ -55,6 +55,14 @@ function createCleaner(catalog: MemoryPoolCatalog) {
 const poolOf = (...addresses: readonly string[]): string => addresses.join('\n');
 
 describe('一键洗库', () => {
+  it('独立注释不误判为异常，清理后保留标题和有效条目备注', async () => {
+    const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: '# 池标题\nalive.example:443 # 保留备注\ndead.example:443' });
+    const { cleanPool, trash } = createCleaner(catalog);
+    expect(await cleanPool.execute(DEFAULT_POOL_KEY)).toMatchObject({checked:2, kept:1, trashed:1, skipped:false});
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('# 池标题\nalive.example:443');
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('# 保留备注');
+    expect(trash.batches).toHaveLength(1);
+  });
   it('存在未确认项时不写回也不入桶', async () => {
     const catalog = new MemoryPoolCatalog({
       [DEFAULT_POOL_KEY]: poolOf('alive.example:443', 'dead.example:443', 'flaky.example:443'),
@@ -136,7 +144,7 @@ describe('一键洗库', () => {
     const write = vi.spyOn(catalog, 'write');
 
     await expect(cleanPool.execute(TRASH_POOL_KEY)).resolves.toEqual({
-      ok: true, poolKey: TRASH_POOL_KEY, checked: 1, kept: 0, trashed: 0, unknown: 0, skipped: false,
+      ok: true, poolKey: TRASH_POOL_KEY, checked: 1, kept: 0, trashed: 0, unknown: 0, skipped: false, remaining: 1,
     });
     expect(catalog.data.get(TRASH_POOL_KEY)).toBe(content);
     expect(write).not.toHaveBeenCalled();
@@ -166,18 +174,20 @@ describe('一键洗库', () => {
 describe('一键洗库完整性边界', () => {
   const entries = Array.from({ length: 200 }, (_, index) => `node-${index}.example:443,AS64500,JP,v4 # 用户备注${index}`);
 
-  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('201 个有效地址拒绝洗库且不修改 %s 或垃圾桶', async (poolKey) => {
-    const content = [...entries, 'extra.example:443 # 不得丢失'].join('\n');
+  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('超过 1000 个地址完整洗库或恢复 %s，不静默截断', async (poolKey) => {
+    const content = Array.from({ length: 1205 }, (_, index) => `node-${index}.example:443,AS64500,JP,v4 # 来自 ip_pool_001`).join('\n');
     const catalog = new MemoryPoolCatalog({ [poolKey]: content, ip_pool_001: 'existing.example:443 # 原池' });
-    const snapshot = new Map(catalog.data);
     const { cleanPool, trash, adapter } = createCleaner(catalog);
     const write = vi.spyOn(catalog, 'write');
     const probe = vi.spyOn(adapter, 'probe');
+    const exists = vi.spyOn(catalog, 'exists');
 
-    await expect(cleanPool.execute(poolKey)).rejects.toThrow(PoolInputError);
-    expect(probe).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
-    expect(catalog.data).toEqual(snapshot);
+    await expect(cleanPool.execute(poolKey)).resolves.toMatchObject({ checked: 1205, kept: 1205, skipped: false });
+    expect(probe).toHaveBeenCalledTimes(1205);
+    expect(write).toHaveBeenCalledTimes(poolKey === TRASH_POOL_KEY ? 2 : 0);
+    expect(catalog.data.get(poolKey === TRASH_POOL_KEY ? 'ip_pool_001' : poolKey)).toContain('node-1204.example:443');
+    if (poolKey === TRASH_POOL_KEY) expect(catalog.data.get(poolKey)).toBe('');
+    expect(exists).toHaveBeenCalledTimes(poolKey === TRASH_POOL_KEY ? 1 : 0);
     expect(trash.batches).toEqual([]);
   });
 

@@ -10,7 +10,6 @@ export const DOMAIN_POOL_ORDER_KEY = 'domain_pool_order';
 export const POOL_STATS_BASELINE_KEY = 'pool_stats_baseline';
 export const NUMBERED_POOL_KEY_RE = /^ip_pool_(\d{3})$/;
 export const MAX_POOL_DISPLAY_NAME_LENGTH = 40;
-export const MAX_POOL_RESTORE_ITEMS = 1_000;
 
 export type PoolSaveMode = 'append' | 'replace' | 'remove';
 
@@ -115,4 +114,12 @@ export interface CleanPoolResponse {
   /** 探针异常或无法识别的行数；大于 0 时整池不写回也不入桶。 */
   readonly unknown: number;
   readonly skipped: boolean;
+  readonly remaining?: number;
 }
+
+/** 同一次洗库请求的进度和最终回执，不写入 KV。 */
+export type CleanPoolEvent =
+  | { readonly type: 'start' }
+  | { readonly type: 'progress'; readonly completed: number; readonly total: number; readonly address: string; readonly result: import('./probe').ProbeResponse }
+  | { readonly type: 'complete'; readonly result: CleanPoolResponse }
+  | { readonly type: 'error'; readonly error: string };

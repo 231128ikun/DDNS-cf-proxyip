@@ -5,6 +5,7 @@ import { formatPoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProb
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
+import { isRecord } from '../../../src/contracts/parse';
 
 export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
   text: string,
@@ -104,10 +105,6 @@ async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
 
 function unknownCheckItem(address: string, code: string, message: string): CheckTargetResponse['items'][number] {
   return { address, result: { status: 'unknown', exitFamily: 'unknown', exits: [], code, message } };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
 }
 
 function isCheckTargetItemResponse(value: unknown): value is CheckTargetResponse['items'][number] {

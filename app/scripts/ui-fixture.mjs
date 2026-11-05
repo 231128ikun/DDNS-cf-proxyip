@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import { pathToFileURL } from 'node:url';
+import { createServer as createViteServer } from 'vite';
 
 // 固定提交提供无障碍回归基准；验收需要该提交的 Git 历史。
 export const UI_BASELINE_REF = '81a41bd014c9d7ee2ec0cd50e9d43fff58c2b8f5';
@@ -32,8 +33,8 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
-    cleanResponse: null, restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
+    poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
+    restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
 }
@@ -76,6 +77,17 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   const referenceHtml = reference ? renderReference(fixture.config, ref) : null;
   const referenceLoginHtml = reference ? renderReference(fixture.config, ref, true) : null;
   const { default: worker } = await import(pathToFileURL(join(appRoot, 'dist', 'release', 'worker.js')).href);
+  const harness = await createViteServer({ root: appRoot, configFile: false, server: { middlewareMode: true, ws: false, hmr: false }, appType: 'custom' });
+  let createWorker;
+  try { ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts')); }
+  finally { await harness.close(); }
+  // 洗库只替换外部探针，路由、规则和 KV 写入运行实际 Worker 源码；其余接口使用发布构建。
+  const cleanWorker = createWorker(() => ({ name: 'fixture', async probe(target, context = {}) {
+    const delay = fixture.probeDelays[target.authority] ?? fixture.probeDelay;
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    context.signal?.throwIfAborted();
+    return { target, status: 'alive', exitFamily: 'ipv4', exits: probeExits, latencyMs: 12, colo: 'SJC', ...fixture.probeErrors[target.authority] };
+  } }));
   const kv = {
     async get(key, options) {
       if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
@@ -95,6 +107,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       return options === 'json' || options?.type === 'json' ? JSON.parse(value) : value;
     },
     async put(key, value) {
+      fixture.kvWrites.push(key);
       if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
         fixture.poolContents[key] = value;
         if (!fixture.pools.some(item => item.key === key)) {
@@ -144,8 +157,14 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         const preview = url.pathname.endsWith('/preview');
         const read = request.method === 'GET';
         if (url.pathname.endsWith('/clean')) {
-          if (!fixture.cleanResponse) return json({ error: '洗库夹具须显式配置，不允许外部探针请求' }, 501);
-          return json(fixture.cleanResponse);
+          const abort = new AbortController();
+          response.once('close', () => { if (!response.writableEnded) abort.abort(); });
+          const result = await cleanWorker.fetch(new Request(url, { method: 'POST', signal: abort.signal,
+            headers: request.headers.cookie ? { cookie: request.headers.cookie } : {} }), { IP_DATA: kv });
+          response.writeHead(result.status, Object.fromEntries(result.headers));
+          try { for await (const chunk of result.body) { if (response.destroyed) break; response.write(chunk); } }
+          finally { response.end(); }
+          return;
         }
         if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
         if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);

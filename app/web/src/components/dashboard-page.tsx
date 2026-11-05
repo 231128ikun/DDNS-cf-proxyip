@@ -48,6 +48,7 @@ interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'tar
   readonly selectedTargetKey: string | null;
   readonly targetPort: number | 'any';
   readonly maintenanceBusy: boolean;
+  readonly maintenanceBlocked: boolean;
   readonly actions: DashboardActions;
   readonly onCopyToInput: (address: string) => void;
   readonly onCopyAddress: (address: string) => void;
@@ -73,6 +74,7 @@ export function DashboardPage({
   selectedTargetKey,
   targetPort,
   maintenanceBusy,
+  maintenanceBlocked,
   actions,
   onCopyToInput,
   onCopyAddress,
@@ -116,7 +118,7 @@ export function DashboardPage({
             <button
               class="btn btn-dark w-100"
               type="button"
-              disabled={maintenanceBusy}
+              disabled={maintenanceBusy || maintenanceBlocked}
               onClick={actions.runMaintenance}
             >
               <Icon name="wrench" /> {maintenanceBusy ? '维护中…' : '执行全部维护'}

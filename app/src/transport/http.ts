@@ -40,6 +40,7 @@ import { countPoolTextLines } from '../domain/pool-text';
 import type { ProbeResult } from '../domain/probe-result';
 import { addAuthCookie, checkRequestAuth, handleAuthRoute, unauthorizedResponse } from './auth';
 import { errorResponse, jsonResponse, readJsonBody, Router } from './router';
+import { cleanPoolStream } from './clean-pool-stream';
 
 export interface HttpAppDependencies {
   readonly checkTarget: CheckTarget;
@@ -175,10 +176,7 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const cleanPool = dependencies.cleanPool;
     if (!cleanPool) return errorResponse('pool storage unavailable', 503);
 
-    return await mapApplicationInputError(async () => {
-      const response = await cleanPool.execute(context.params.key!, { signal: context.request.signal });
-      return jsonResponse(response);
-    });
+    return cleanPoolStream(cleanPool, context.params.key!, context.request.signal);
   });
 
   router.get('/api/pools/:key', async (context) => {

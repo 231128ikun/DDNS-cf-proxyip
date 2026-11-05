@@ -4,6 +4,7 @@ import type {
 } from '../../../src/contracts/pool-check';
 import type {
   CleanPoolResponse,
+  CleanPoolEvent,
   CreatePoolResponse,
   PoolContentResponse,
   SavePoolRequest,
@@ -18,6 +19,7 @@ import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-setting
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
 import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
+import { readCleanPoolStream } from './clean-pool';
 
 export interface ApiClientOptions {
   readonly baseUrl?: string;
@@ -103,8 +105,10 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
-  async cleanPool(key: string, signal?: AbortSignal): Promise<CleanPoolResponse> {
-    return await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', undefined, signal);
+  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: Extract<CleanPoolEvent, { type: 'progress' }>) => void): Promise<CleanPoolResponse> {
+    const result = await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', undefined, signal, true, response => readCleanPoolStream(response, onProgress));
+    if (result.poolKey !== key) throw new ApiError('洗库回执的 IP 池不符', 0);
+    return result;
   }
   async savePoolOrder(order: readonly string[], signal?: AbortSignal): Promise<OkResponse> {
     return await this.request<OkResponse>('/api/pools/order', 'PUT', { order }, signal);
@@ -194,8 +198,8 @@ export class ApiClient {
     }, signal);
   }
 
-  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true): Promise<T> {
-    const headers = new Headers({ Accept: 'application/json' });
+  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true, readResponse?: (response: Response) => Promise<T>): Promise<T> {
+    const headers = new Headers({ Accept: readResponse ? 'application/x-ndjson' : 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };
@@ -222,6 +226,7 @@ export class ApiClient {
       page?.location?.assign?.('/');
     }
 
+    if (response.ok && readResponse) return await readResponse(response);
     let payload: unknown;
     try {
       payload = await response.json();

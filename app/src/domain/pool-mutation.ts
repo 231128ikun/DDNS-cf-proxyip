@@ -73,7 +73,7 @@ interface PoolInspection {
   readonly items: readonly { readonly address: string; readonly entry: PoolEntry; readonly result: ProbeResult }[];
 }
 
-export function planPoolCleaning(poolKey: string, report: PoolInspection) {
+export function planPoolCleaning(poolKey: string, report: PoolInspection, source?: PoolSnapshot) {
   const unknown = report.unknown + report.invalid.length;
   const skipped = unknown > 0;
   const alive = skipped ? [] : report.items.filter(item => item.result.status === 'alive');
@@ -83,7 +83,7 @@ export function planPoolCleaning(poolKey: string, report: PoolInspection) {
   return {
     summary: { checked: report.total, kept: inTrash ? 0 : alive.length, trashed: trash.length, unknown, skipped },
     restoreAddresses: inTrash ? alive.map(item => item.address) : [],
-    nextText: alive.map(item => formatPoolEntry(item.entry)).join('\n'),
+    nextText: serializePoolEntries(new Map(alive.map(item => [item.address, item.entry])), source),
     trash,
   };
 }

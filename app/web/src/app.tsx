@@ -45,6 +45,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const [probeContext, setProbeContext] = useState<'current' | 'lookup' | 'batch'>('current');
   const [check, setCheck] = useState<RequestState<CheckTargetResponse>>({ status: 'idle' });
   const [maintenanceBusy, setMaintenanceBusy] = useState(false);
+  const maintenancePending = useRef(false);
   const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(() => {
     const first = initialConfig?.config.targets[0];
     return first ? bindingKey(first) : null;
@@ -54,6 +55,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const poolContainerChanged = useRef<(key: string) => void>(() => {});
   const [poolKey, setPoolKey] = useState(DEFAULT_POOL_KEY);
   const [poolBusy, setPoolBusy] = useState<PoolActionKey | null>(null);
+  const poolWritePending = useRef(false);
+  const [poolWriteBusy, setPoolWriteBusy] = useState(false);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [configBusy, setConfigBusy] = useState(false);
   const configWritePending = useRef(false);
@@ -209,6 +212,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   }, [appendConsoleLog, config, health, pools, bindings, targetChoices]);
 
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
+    if (poolWritePending.current || maintenancePending.current || !poolLeaveGuard.current()) return;
+    poolWritePending.current = true;
     setPoolBusy(key);
     try {
       const message = await task();
@@ -216,6 +221,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     } catch (error) {
       notify(errorMessage(error), 'error');
     } finally {
+      poolWritePending.current = false;
       setPoolBusy((current) => (current === key ? null : current));
     }
   }, [notify]);
@@ -469,7 +475,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     void refreshBindings();
   };
   const handleRunMaintenance = (): void => {
-    if (maintenanceBusy) return;
+    if (maintenancePending.current || poolWritePending.current || !poolLeaveGuard.current()) return;
+    maintenancePending.current = true;
     setMaintenanceBusy(true);
     appendConsoleLog('[维护] 开始执行全部目标');
     client.runMaintenance()
@@ -489,7 +496,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         appendConsoleLog(`[维护] ${message}`, 'error');
         notify(message, 'error');
       })
-      .finally(() => setMaintenanceBusy(false));
+      .finally(() => { maintenancePending.current = false; setMaintenanceBusy(false); });
   };
 
   const actions: DashboardActions = {
@@ -530,10 +537,10 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             executionState={executionStatus(executionRequest, executionItems, health.status)}
             poolPanel={<PoolPanel client={client} pools={pools} poolKey={poolKey} onPoolChange={handleSelectPool}
               actions={{ createPool: handleCreatePool, renamePool: handleRenamePool, openPoolOrder: () => void openOrderDialog('pools'), deletePool: handleDeletePool }}
-              containerBusy={poolBusy !== null} refreshPools={() => void refreshPools()}
+                containerBusy={poolBusy !== null || maintenanceBusy} refreshPools={() => void refreshPools()}
               onPoolCount={(key, count) => patchPools(current => ({ pools: current.pools.map(pool => pool.key === key ? { ...pool, count } : pool) }))} batch={batchState}
               configReady={config.status === 'ready'} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
-              leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} />}
+                leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} onWriteBusy={setPoolWriteBusy} />}
             check={check}
             batch={batch}
             lookup={lookup}
@@ -546,6 +553,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
             selectedTargetKey={selectedTargetKey}
             targetPort={targetPort}
             maintenanceBusy={maintenanceBusy}
+              maintenanceBlocked={poolWriteBusy || poolBusy !== null}
             actions={actions}
             onCopyToInput={handleCopyToInput}
             onCopyAddress={handleCopyAddress}

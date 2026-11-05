@@ -1,4 +1,4 @@
-import { readPoolSnapshot } from '../domain/pool-snapshot';
+import { readPoolSnapshot, type PoolSnapshot } from '../domain/pool-snapshot';
 import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import { updatePoolEntryFromProbe, type PoolEntry } from '../domain/pool-entry';
 import { parseProxyTarget } from '../domain/proxy-target';
@@ -6,10 +6,6 @@ import type { ProbeResult } from '../domain/probe-result';
 import type { ProbeContext } from '../ports/probe';
 import { mapWithConcurrency } from '../util/concurrency';
 import type { CheckProxy } from './check-proxy';
-import { PoolInputError } from './pool-service';
-
-/** 单次批量检测的目标上限，用来兜住 Worker 子请求与 CPU 预算。 */
-export const MAX_BATCH_TARGETS = 200;
 
 export interface PoolCheckItem {
   /** 规范化后的地址（含端口）。 */
@@ -20,6 +16,7 @@ export interface PoolCheckItem {
 }
 
 export interface PoolCheckReport {
+  readonly snapshot: PoolSnapshot;
   readonly total: number;
   readonly alive: number;
   readonly dead: number;
@@ -52,9 +49,11 @@ export class CheckPoolText {
     context: ProbeContext = {},
     onProgress?: PoolCheckProgressHandler,
   ): Promise<PoolCheckReport> {
-    const { entries, invalid } = collectEntries(text);
+    const snapshot = readPoolSnapshot(text);
+    const entries = [...snapshot.entries.values()].map(item => item.entry);
     let completed = 0;
     const items = await mapWithConcurrency(entries, this.concurrency, async (entry): Promise<PoolCheckItem> => {
+      context.signal?.throwIfAborted();
       const target = parseProxyTarget(entry.address) ?? parseProxyTarget(entry.address, 443);
       const address = target?.authority ?? entry.address;
       const result = await this.checkProxy.execute(address, context);
@@ -65,20 +64,13 @@ export class CheckPoolText {
     });
 
     return {
+      snapshot,
       total: items.length,
       alive: items.filter((item) => item.result.status === 'alive').length,
       dead: items.filter((item) => item.result.status === 'dead').length,
       unknown: items.filter((item) => item.result.status === 'unknown').length,
-      invalid,
+      invalid: snapshot.invalid,
       items,
     };
   }
-}
-
-function collectEntries(text: string): { entries: readonly PoolEntry[]; invalid: readonly string[] } {
-  const snapshot = readPoolSnapshot(text);
-  if (snapshot.entries.size > MAX_BATCH_TARGETS) {
-    throw new PoolInputError('单次批量检测最多支持 ' + MAX_BATCH_TARGETS + ' 个不同有效地址，请拆分 IP 池或使用面板逐地址批量检测；原池未修改');
-  }
-  return { entries: [...snapshot.entries.values()].map(item => item.entry), invalid: snapshot.invalid };
 }

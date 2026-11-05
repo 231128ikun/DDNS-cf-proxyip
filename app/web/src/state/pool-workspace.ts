@@ -3,10 +3,6 @@ import { TRASH_POOL_KEY } from '../../../src/contracts/pool';
 import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { errorMessage } from '../api/errors';
 
-export function invalidPoolLines(content: string): readonly string[] {
-  return readPoolSnapshot(content).invalid.filter(line => !line.startsWith('#'));
-}
-
 /** 写入后保留回执，不自动回读 KV。 */
 export class PoolWorkspace {
   key = 'ip_pool_default';
@@ -50,7 +46,8 @@ export class PoolWorkspace {
   }
   async save(content: string, mode: 'append' | 'remove'): Promise<boolean> {
     if (this.writing) return false;
-    if (this.key === TRASH_POOL_KEY || invalidPoolLines(content).length || !readPoolSnapshot(content).entries.size) {
+    const incoming = readPoolSnapshot(content);
+    if (this.key === TRASH_POOL_KEY || incoming.invalid.length || !incoming.entries.size) {
       this.message = '请先整理有效地址'; this.changed(); return false;
     }
     const key = this.key;
