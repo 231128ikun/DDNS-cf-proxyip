@@ -160,7 +160,8 @@ export class MaintainManagedTarget {
           added++;
         } catch { errors.push('添加 DNS 记录失败: ' + candidate.value); }
       }
-      return { deleted, added, updated: deleted > 0 || added > 0, dns: state([...records.values()]) };
+      const dns = state([...records.values()]);
+      return { deleted, added, updated: dns.added.length > 0 || dns.removed.length > 0, dns };
     }
     const after = allowRemoval ? plan.dnsValues : uniqueValues([...before, ...plan.additions.map(item => item.value)]);
     if (sameValues(before, after)) return { deleted: 0, added: 0, updated: false, dns: state(before) };
