@@ -23,9 +23,7 @@ it('redacts quoted credentials and does not print embedded raw response bodies',
   expect(output).toContain('TLS failed');
 });
 
-it('omits ordinary successful batch progress but preserves diagnostics', async () => {
-  const { shouldLogProbe } = await import('../../web/src/components/probe-log');
-  expect(shouldLogProbe({ status: 'alive' })).toBe(false);
-  expect(shouldLogProbe({ status: 'unknown', code: 'HTTP_ERROR' })).toBe(true);
-  expect(shouldLogProbe({ status: 'alive', diagnostics: [{ endpoint: 'primary', status: 'unknown', code: 'HTTP_ERROR', message: 'HTTP 503' }] })).toBe(true);
+it('formats live successful checks and retains partial-exit warnings', () => {
+  expect(formatProbeLog({ status: 'alive', latencyMs: 12, colo: 'ICN', country: 'KR' })).toBe('可用 · 12ms · ICN · KR');
+  expect(formatProbeLog({ status: 'alive', code: 'PARTIAL_EXIT', message: 'IPv6 检测异常' })).toContain('IPv6 检测异常');
 });

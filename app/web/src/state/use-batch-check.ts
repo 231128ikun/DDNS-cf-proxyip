@@ -7,7 +7,7 @@ import { errorMessage, isAbort } from '../api/errors';
 import type { ConsoleTone, PoolCheckProgressState } from '../components/dashboard-page';
 import type { RequestState } from './request-state';
 import { describeBatch, remainingBatch } from './batch-resume';
-import { formatProbeLog, shouldLogProbe } from '../components/probe-log';
+import { formatProbeLog } from '../components/probe-log';
 
 /** 批量检测中断时的进度摘要。 */
 interface BatchInterrupt {
@@ -114,7 +114,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
       const statusLabel = formatProbeLog(event.item);
       const tone: ConsoleTone = event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning';
-      if (shouldLogProbe(event.item)) appendConsoleLog(`[批量] ${event.item.address} · ${statusLabel}`, tone);
+      appendConsoleLog(`[检测] ${event.item.address} · ${statusLabel}`, tone);
     }, webCheckConcurrency)
       .then((report) => {
         if (activeBatch.current !== controller) return;

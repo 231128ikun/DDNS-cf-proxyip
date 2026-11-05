@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
@@ -38,6 +38,7 @@ interface DashboardPageProps extends Pick<TargetSelectorProps, 'bindings' | 'tar
   readonly config: RequestState<ConfigResponse>;
   readonly health: RequestState<HealthResponse>;
   readonly executionColos: readonly string[];
+  readonly executionState: 'ready' | 'busy' | 'error';
   readonly check: RequestState<CheckTargetResponse>;
   readonly batch: RequestState<PoolCheckResponse>;
   readonly lookup: string;
@@ -59,6 +60,7 @@ export function DashboardPage({
   config,
   health,
   executionColos,
+  executionState,
   check,
   batch,
   lookup,
@@ -93,8 +95,11 @@ export function DashboardPage({
 
           <div class="card dashboard-card dashboard-console-card">
             <div class="dashboard-card-header">
-              <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 工作台</h2>
-              <span class="console-colo" title="当前检测请求执行的 Worker 机房">执行机房 {executionColos.join(' / ') || (health.status === 'ready' ? health.data.executionColo ?? '未知' : '读取中')}</span>
+              <h2 class="card-title m-0 fw-bold"><Icon name="dashboard" /> 控制台日志</h2>
+              <span class="console-colo d-flex align-items-center gap-2" role="status" title={executionState === 'ready' ? '检测接口可用；节点失效不代表接口异常' : executionState === 'error' ? '检测请求异常' : '检测中或正在连接'}>
+                <i class={`execution-dot ${executionState === 'ready' ? 'text-success' : executionState === 'error' ? 'text-danger' : 'text-secondary'}`} aria-hidden="true" />
+                {executionColos.join(' / ') || (health.status === 'ready' ? health.data.executionColo ?? '未知' : health.status === 'error' ? '未知' : '连接中')}
+              </span>
             </div>
             <Console logs={consoleLogs} config={config} />
               {batch.status !== 'idle' && <div
@@ -127,15 +132,17 @@ function Console({ logs, config }: {
   readonly config: RequestState<ConfigResponse>;
 }) {
   const consoleRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  const follow = useRef(true);
+  useLayoutEffect(() => {
     const element = consoleRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (element && follow.current) element.scrollTop = element.scrollHeight;
   }, [logs]);
 
   return (
-    <div id="log-window" class="console mb-3" role="log" aria-label="工作台日志" aria-live="polite" aria-relevant="additions text" ref={consoleRef}>
-      <details class="console-config" open>
-        <summary>配置详情</summary>
+    <div id="log-window" class="console mb-3" role="log" aria-label="控制台日志" aria-live="polite" aria-relevant="additions text" ref={consoleRef}
+      onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32; }}>
+      <div class="console-config" aria-label="配置详情">
+        <div class="mb-2"><strong>运行配置</strong></div>
         {config.status === 'ready' && <div class="console-settings">
           <span>检测：内置探针{config.data.config.checkApiBackup ? ' + 备用接口' : ''}</span>
           <span>并发：{config.data.config.settings.CONCURRENT_CHECKS} · 超时：{config.data.config.settings.CHECK_TIMEOUT / 1000}s</span>
@@ -143,14 +150,15 @@ function Console({ logs, config }: {
           <span>Telegram：{config.data.config.tgEnabled ? '开启' : '关闭'}</span>
           <span>维护目标：{config.data.config.targets.filter(target => target.enabled).length} 个</span>
         </div>}
-      </details>
+      </div>
       <div class="console-event-list">
         {logs.length === 0 && <div class="console-empty">正在连接系统…</div>}
-        {logs.map((entry) => (
-          <div key={entry.id} class={`console-event console-event-${entry.tone}`}>
-            [<time class="console-time">{entry.time}</time>{`] ${entry.message}`}
-          </div>
-        ))}
+        {logs.map(entry => {
+          const tag = /^\[([^\]]+)\]\s*/.exec(entry.message);
+          return <div key={entry.id} class={`console-event d-flex gap-2 console-event-${entry.tone}`}>
+            <time class="console-time">{entry.time}</time><span class="console-kind">{tag?.[1] ?? '系统'}</span><span class="console-message">{tag ? entry.message.slice(tag[0].length) : entry.message}</span>
+          </div>;
+        })}
       </div>
     </div>
   );

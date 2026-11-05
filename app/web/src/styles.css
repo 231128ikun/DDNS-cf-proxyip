@@ -119,7 +119,7 @@
   --order-list-max-height: min(55vh, 460px);
   --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.3);
   --pool-selector-width: 160px;
-  --pool-content-height: 200px;
+  --pool-content-height: 280px;
   --pool-help-width: 320px;
   --target-selector-min-width: 240px;
   --target-selector-width: 360px;
@@ -137,8 +137,8 @@
   --exit-detail-columns: 54px minmax(140px, 1fr) minmax(86px, 128px) minmax(110px, 180px);
   --exit-detail-columns-compact: 48px minmax(120px, 1fr) minmax(72px, 108px) minmax(110px, 150px);
   --layout-panel-header-height: 36px;
-  --layout-console-min-height: 200px;
-  --layout-console-mobile-height: 240px;
+  --layout-console-min-height: 300px;
+  --layout-console-mobile-height: 340px;
   --status-reason-width: 200px;
   --content-max: 1280px;
   --content-max-wide: 1280px;
@@ -1213,16 +1213,17 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .pool-feedback { margin: var(--space-2) 0 0; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .pool-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--pool-content-height); overflow-y: auto; }
 .pool-help, .pool-menu { position: relative; }
-.pool-help summary { display: grid; place-items: center; width: var(--control-height-compact); height: var(--control-height-compact); cursor: pointer; color: var(--color-text-muted); border-radius: var(--radius-md); }
-.pool-help summary:hover { background: var(--color-surface-hover); }
-.pool-help summary::marker, .pool-menu summary::marker { content: ''; }
+.pool-menu summary::marker { content: ''; }
 .pool-help-content { position: absolute; right: 0; top: 100%; z-index: 10; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-menu); padding: var(--space-5); }
 .pool-help-content { width: min(var(--pool-help-width), calc(100vw - var(--space-7) * 4)); font-size: var(--font-size-field); overflow-wrap: anywhere; }
 .pool-help-content p { margin: 0 0 var(--space-2); }
 .console-config { color: var(--color-console-info); margin-bottom: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-console-border); }
-.console-config summary { cursor: pointer; min-height: var(--control-height-compact); }
-.console-settings { display: grid; gap: var(--space-1); }
+.console-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-3); }
+.console-settings span:first-child { grid-column: 1 / -1; }
 .console-colo { margin-left: auto; font-size: var(--font-size-xs); color: var(--color-text-muted); }
+.execution-dot { width: var(--space-2); height: var(--space-2); border-radius: 50%; background: currentColor; }
+.text-success { color: var(--color-success); }
+.console-time, .console-kind { flex-shrink: 0; }
 @media (max-width: 480px) {
   .pool-header h2 { font-size: var(--font-size-md); }
   .pool-header .pool-tools { flex: 1; }

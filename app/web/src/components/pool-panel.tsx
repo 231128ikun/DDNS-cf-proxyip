@@ -132,13 +132,29 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     } catch (error) { model.message = errorMessage(error); log('[IP池] ' + model.message, 'error'); }
     finally { sidePending.current = false; setSideBusy(false); }
   };
+  const cleanPool = async (): Promise<void> => {
+    if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常时不清理。`)) return;
+    sidePending.current = true; setSideBusy(true);
+    log(`[洗库] 开始 · ${name}`);
+    try {
+      const result = await client.cleanPool(poolKey);
+      model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
+        : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}`;
+      if (!result.skipped) {
+        const message = model.message; model.forgetPool(poolKey); model.message = message;
+        if (!inTrash) onPoolCount(poolKey, result.kept);
+      }
+      log('[洗库] ' + model.message, result.skipped ? 'warning' : 'success');
+    } catch (error) { model.message = errorMessage(error); log('[洗库] ' + model.message, 'error'); }
+    finally { sidePending.current = false; setSideBusy(false); }
+  };
   const choose = (key: string, checked: boolean): void => setSelected(current => {
     const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next;
   });
 
   return <section class="card dashboard-card dashboard-pool-card pool-workspace" aria-label="IP 库管理">
     <header class="dashboard-card-header pool-header">
-      <h2 class="card-title m-0 fw-bold"><Icon name="database" />IP 池 <small id="pool-count">{count ?? '—'} 条</small></h2>
+      <h2 class="card-title m-0 fw-bold"><Icon name="database" />IP池管理 <small id="pool-count">{count ?? '—'} 条</small></h2>
       <div class="pool-tools">
         <select id="pool-selector" class="form-select form-select-sm" aria-label="选择 IP 池" value={poolKey} disabled={locked}
           onChange={event => { if (leaveGuard.current()) onPoolChange(event.currentTarget.value); }}>{poolOptions(pools, poolKey).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}</select>
@@ -146,8 +162,9 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
           <summary id="pool-action-trigger" class="btn btn-sm btn-outline-secondary" aria-label="池操作">池操作 ▾</summary>
           <div class="action-menu-panel" role="group" aria-label="池操作">
             {([['新建池', actions.createPool, false], ['重命名', actions.renamePool, inTrash || !bindingsReady],
+              ['一键洗库', () => void cleanPool(), !configReady || !probeConfigured],
               ['池排序', actions.openPoolOrder, false], ['删除池', actions.deletePool, !NUMBERED_POOL_KEY_RE.test(poolKey) || !bindingsReady],
-              ['刷新池列表', refreshPools, false]] as const).map(([label, action, disabled]) => <button type="button" class="action-menu-item" disabled={locked || disabled} onClick={event => { event.currentTarget.closest('details')!.open = false; action(); }}>{label}</button>)}
+              ['刷新池列表', refreshPools, false]] as const).map(([label, action, disabled]) => <button key={label} type="button" class="action-menu-item" data-action={label === '一键洗库' ? 'clean-pool' : undefined} disabled={locked || disabled} onClick={event => { event.currentTarget.closest('details')!.open = false; action(); }}>{label}</button>)}
             {inTrash && <button type="button" class="action-menu-item danger" disabled={locked} onClick={() => void runTrash(true)}>清空垃圾桶</button>}
           </div>
         </details>
@@ -164,7 +181,6 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         <button type="button" class="btn btn-sm btn-outline-secondary" aria-expanded={urlOpen} disabled={locked} onClick={() => setUrlOpen(value => !value)}>URL</button>
         <button type="button" class="btn btn-sm btn-outline-secondary" data-action="upload-file" disabled={locked} onClick={() => fileInput.current?.click()}>文件</button>
         <input id="pool-file" ref={fileInput} type="file" hidden accept=".txt,.csv,text/plain" aria-label="上传 IP 文本文件" onChange={event => { loadFile(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} />
-        <Help label="输入格式说明"><p>每行一个地址，端口默认 443：</p><code>203.0.113.10:443<br />[2001:db8::1]:8443<br />203.0.113.20:443,AS64500,JP,v4 # 备用</code><p>支持域名和备注；读库、导入、筛选和检测不写库存。</p></Help>
       </div>
     </div>
     {urlOpen && <form class="pool-remote" onSubmit={event => { event.preventDefault(); if (url.trim()) void load(async signal => (await client.remoteLoad(url.trim(), signal)).content); }}>
@@ -191,7 +207,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     </div>
     <div class="pool-filter-row">
       <input id="draft-filter" class="form-control form-control-sm" aria-label="筛选输入或结果" value={query} placeholder="筛选 IP、国家、ASN 或备注" disabled={locked} onInput={event => { setQuery(event.currentTarget.value); setSelected(new Set()); }} />
-      <Help label="筛选用法"><p><code>country:KR port:443</code>：韩国且端口 443</p><p><code>asn:AS4766</code>：指定 ASN</p><p><code>country:JP | country:US</code>：日本或美国</p><p>直接输入备注文字也可搜索；清空筛选恢复原文。</p></Help>
+      <Help label="筛选用法"><p><code>port:443</code> 端口，<code>port:443-2053</code> 端口范围；<code>country:KR</code> 国家，<code>asn:AS4766</code> ASN，<code>stack:v4</code> / <code>v6</code> / <code>dual</code> 出口栈。</p><p>不同字段用<strong>空格</strong>表示“且”；同一字段用<strong>逗号 ,</strong>表示“或”，如 <code>country:US,KR</code>。</p><p><strong>竖线 |</strong>连接的整组条件表示“或”，最后计算。例如 <code>country:KR asn:AS4766 | country:US</code>。</p><p>普通文字可匹配 IP 或备注；清空筛选恢复原文。</p></Help>
     </div>
     {badFilter && <p role="status" class="text-danger small">筛选条件无效</p>}
     {invalid.length > 0 && view === 'input' && <details class="small text-danger"><summary>无效内容 {invalid.length} 行</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
@@ -214,7 +230,11 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
 }
 
 function Help({ label, children }: { readonly label: string; readonly children: ComponentChildren }) {
-  return <details class="pool-help"><summary aria-label={label} title={label}><Icon name="help" /></summary><div class="pool-help-content">{children}</div></details>;
+  const [open, setOpen] = useState(false);
+  return <div class="pool-help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)} onFocus={() => setOpen(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setOpen(false); }}>
+    <button type="button" class="guide-toggle" aria-label={label} aria-expanded={open} aria-describedby={open ? 'pool-filter-help' : undefined} onClick={() => setOpen(true)}><Icon name="help" /></button>
+    <div id="pool-filter-help" class="pool-help-content" role="tooltip" hidden={!open}>{children}</div>
+  </div>;
 }
 
 export interface PoolContainerActions {
