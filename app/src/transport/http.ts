@@ -60,6 +60,7 @@ export interface HttpAppDependencies {
   readonly domainBindings?: DomainBindings;
   /** 手动维护入口；与 cron 共用同一 runner。 */
   readonly maintenance?: MaintenanceRunner;
+  readonly waitUntil?: (task: Promise<unknown>) => void;
   /** “解析实况”当前域名记录的只读来源；未绑定 KV 时为空。 */
   readonly targetStatus?: TargetStatus;
   /** 手动增删当前维护目标 DNS 记录的写入口；未绑定 KV 时为空。 */
@@ -68,7 +69,7 @@ export interface HttpAppDependencies {
 
 /** 维护 runner 的窄接口：HTTP 层只负责触发，不接触 KV / Cloudflare 凭据。 */
 export interface MaintenanceRunner {
-  run(isManual: boolean, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceJobResult>;
+  run(isManual: boolean, onProgress?: (line: MaintenanceLogLine) => void, signal?: AbortSignal): Promise<MaintenanceJobResult>;
 }
 
 export interface ConfigGateway {
@@ -270,8 +271,8 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const maintenance = dependencies.maintenance;
     if (!maintenance) return errorResponse('maintenance unavailable', 503);
 
-    if (request.headers.get('Accept') === MAINTENANCE_STREAM_TYPE) return streamMaintenance(maintenance);
-    const { run, notification } = await maintenance.run(true);
+    if (request.headers.get('Accept') === MAINTENANCE_STREAM_TYPE) return streamMaintenance(maintenance, request.signal, dependencies.waitUntil);
+    const { run, notification } = await maintenance.run(true, undefined, request.signal);
     return jsonResponse(toMaintenanceRunResponse(run, notification));
   });
 
@@ -391,21 +392,33 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 }
 
 /** 把用例层的输入错误映射成 400，其余异常继续向上抛给统一错误处理。 */
-function streamMaintenance(maintenance: MaintenanceRunner): Response {
+function streamMaintenance(maintenance: MaintenanceRunner, requestSignal: AbortSignal, waitUntil?: (task: Promise<unknown>) => void): Response {
   const encoder = new TextEncoder();
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  if (requestSignal.aborted) stop();
+  else requestSignal.addEventListener('abort', stop, { once: true });
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (event: MaintenanceStreamEvent) => {
-        if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+        if (cancelled) return;
+        try { controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); }
+        catch { cancelled = true; stop(); }
       };
-      void maintenance.run(true, line => send({ type: 'progress', line })).then(({ run, notification }) => {
-        send({ type: 'result', result: toMaintenanceRunResponse(run, notification) });
-      }).catch(() => {
-        send({ type: 'error', message: '维护执行中断，未取得完成回执，请核对解析与库存' });
-      }).finally(() => { if (!cancelled) controller.close(); });
+      const task = Promise.resolve().then(() => maintenance.run(true, line => send({ type: 'progress', line }), abort.signal))
+        .then(({ run, notification }) => {
+          send({ type: 'result', result: toMaintenanceRunResponse(run, notification) });
+        }).catch((error: unknown) => {
+          console.error('[maintenance]', abort.signal.aborted ? '维护已取消' : '维护任务中断', error instanceof Error ? error.name : 'UnknownError');
+          send({ type: 'error', message: '维护执行中断，已返回的目标结果保留，请核对解析与库存' });
+        }).finally(() => {
+          requestSignal.removeEventListener('abort', stop);
+          if (!cancelled) controller.close();
+        });
+      waitUntil?.(task);
     },
-    cancel() { cancelled = true; },
+    cancel() { cancelled = true; stop(); },
   });
   return new Response(body, { headers: { 'Content-Type': MAINTENANCE_STREAM_TYPE, 'Cache-Control': 'no-store, no-transform' } });
 }
