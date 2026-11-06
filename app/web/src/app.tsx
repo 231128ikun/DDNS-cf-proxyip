@@ -490,17 +490,17 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     maintenancePending.current = true;
     setMaintenanceBusy(true);
     appendConsoleLog('[维护] 开始执行全部目标');
-    client.runMaintenance()
-      .then(async (data) => {
+    client.runMaintenance(undefined, line => appendConsoleLog('[维护] ' + line.message, line.tone))
+      .then((data) => {
         for (const item of data.results) {
-          for (const line of item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')]) appendConsoleLog('[维护] ' + line, item.error ? 'error' : item.probeErrors ? 'warning' : 'success');
+          const lines = item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')];
+          lines.forEach((line, index) => appendConsoleLog('[维护] ' + line, item.lineTones?.[index] ?? (item.error ? 'error' : 'info')));
         }
         const notification = data.notificationMessage;
-        if (notification) appendConsoleLog('[通知] ' + notification, data.notification?.reason === 'failed' ? 'error' : 'info');
-        appendConsoleLog('[维护] 结束', data.insufficient || data.errors.length || data.probeErrors ? 'warning' : 'success');
-        await refreshBindings();
-        await refreshPools();
-        await refreshCurrentStatus();
+        if (notification) appendConsoleLog('[通知] ' + notification, data.notification?.sent ? 'success' : data.notification?.reason === 'failed' ? 'error' : 'info');
+        appendConsoleLog('[维护] 结束', data.errors.length ? 'error' : data.insufficient || data.probeErrors ? 'warning' : 'success');
+        void refreshPools();
+        void refreshCurrentStatus();
         notify(data.message ?? '维护结束', data.completed === false ? 'error' : 'success');
       })
       .catch((error: unknown) => {
