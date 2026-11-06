@@ -77,20 +77,42 @@ try {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
         clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } }, sessionId);
       writeFileSync(join(out, `${state}.png`), Buffer.from(shot.data, 'base64'));
-      if (configured && width === 1440) {
+      if (configured && [375, 1440].includes(width)) {
+        const draftStart = server.requests.length;
         await cdp.click(sessionId, '#maintained-domains .domain-binding-actions button:first-child');
         await cdp.until(sessionId, 'Boolean(document.querySelector("#target-edit-panel.active")?.offsetWidth)');
+        assert(await read('!document.querySelector("#target-edit-panel .domain-binding-select").disabled'), 'New target cannot preselect a pool');
+        await read('const select = document.querySelector("#target-edit-panel .domain-binding-select"); select.value = "ip_pool_002"; select.dispatchEvent(new Event("change", {bubbles:true})); select.scrollIntoView({block:"center",behavior:"instant"})');
+        const draftShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+        writeFileSync(join(out, `new-target-pool-${width}.png`), Buffer.from(draftShot.data, 'base64'));
         await cdp.click(sessionId, '#target-edit-panel .config-edit-actions button:last-child');
         await cdp.until(sessionId, 'document.querySelectorAll("#maintained-domains .config-mini-card").length === 3');
-        assert(await read('[...document.querySelectorAll("#maintained-domains .domain-binding-select")].at(-1).disabled'), 'Unsaved domain can write a pool binding');
-        assert.equal(server.fixture.config.targets.length, 2, 'Saving a card draft wrote configuration before Save');
-        await cdp.click(sessionId, '#btn-cancel-config');
-        await cdp.until(sessionId, 'document.querySelectorAll("#maintained-domains .config-mini-card").length === 2');
+        assert(await read('[...document.querySelectorAll("#maintained-domains .config-mini-card .domain-binding-select")].at(-1).value === "ip_pool_002"'), 'Pool selection did not survive target confirmation');
+        assert(!server.requests.slice(draftStart).some(request => request.method === 'PUT'), 'Selecting a draft pool wrote to storage');
+        assert.equal(server.fixture.config.targets.length, 2, 'Confirming a card wrote configuration before Save');
+        await cdp.click(sessionId, '#btn-save-config');
+        await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
+        assert.equal(server.fixture.config.targets.length, 3);
+        const created = server.fixture.config.targets[2];
+        assert.equal(server.fixture.bindingMapping[created.domain + '|' + created.mode], 'ip_pool_002');
+        await cdp.until(sessionId, '[...document.querySelectorAll("#maintained-domains .config-mini-card .domain-binding-select")].at(-1)?.value === "ip_pool_002"');
+        assert(!server.requests.slice(draftStart).some(request => request.method === 'GET' && request.path === '/api/domain-bindings'), 'Saving a target depends on rereading all bindings');
+        server.fixture.bindingListFailures = 1;
+        await cdp.click(sessionId, '[aria-label="刷新域名池绑定"]');
+        await cdp.until(sessionId, 'document.querySelector("#maintained-domains").textContent.includes("模拟读取失败")');
+        assert(await read('[...document.querySelectorAll("#maintained-domains .config-mini-card .domain-binding-select")].at(-1).value === "ip_pool_002"'), 'Failed reread lost the confirmed pool binding');
+        assert(await read('![...document.querySelectorAll("#maintained-domains .config-mini-card .domain-binding-select")].at(-1).disabled'), 'Failed reread disabled a confirmed binding');
+        await read('document.querySelector("#maintained-domains .config-mini-card:last-child").scrollIntoView({block:"center",behavior:"instant"})');
+        const savedShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+        writeFileSync(join(out, `saved-target-pool-${width}.png`), Buffer.from(savedShot.data, 'base64'));
+        await cdp.click(sessionId, '#maintained-domains .config-mini-card:last-child .actions button:last-child');
+        await cdp.click(sessionId, '#btn-save-config');
+        await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
         await cdp.click(sessionId, '#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
         await read('document.querySelector("#zone-domain-0").value = "example.net"; document.querySelector("#zone-domain-0").dispatchEvent(new Event("input", { bubbles: true }))');
         await cdp.click(sessionId, '#zone-edit-panel .config-edit-actions button:last-child');
         await read('new Promise(resolve => requestAnimationFrame(resolve))');
-        assert(await read('[...document.querySelectorAll("#maintained-domains .domain-binding-select")].every(select => select.disabled)'), 'Changing a permission base domain left old-key pool bindings enabled');
+        assert(await read('[...document.querySelectorAll("#maintained-domains .domain-binding-select")].every(select => !select.disabled)'), 'Renamed target cannot stage a pool binding');
         assert(await read('document.querySelector("#maintained-domains .domain-binding-name").textContent === "edge.example.net"'), 'Cards do not show the effective domain after a permission edit');
         await cdp.click(sessionId, '#btn-cancel-config');
         await cdp.until(sessionId, '!document.querySelector("#btn-cancel-config")?.offsetWidth');
