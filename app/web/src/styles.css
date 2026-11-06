@@ -346,36 +346,33 @@ body {
   margin-bottom: var(--space-7);
 }
         .console {
-            --color-syntax-address: #a7c2d6;
-            --color-syntax-number: #c9a88c;
-            --log-success: #a8c5a8;
-            --log-warning: #c9b185;
-            --log-error: #d6a09d;
+            --color-syntax-address: #78bdff;
+            --color-syntax-number: var(--color-syntax-address);
+            --log-error: #ff7777;
             background: var(--color-console-bg);
             color: var(--color-console-text);
             height: var(--layout-console-mobile-height);
-            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            overflow-wrap: anywhere;
             font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
             padding: var(--space-8);
             border-radius: var(--radius-xl);
             font-size: var(--font-size-console);
             line-height: 1.6;
         }
-        .console::-webkit-scrollbar {
-            width: var(--space-3);
-        }
-        .console::-webkit-scrollbar-thumb {
-            background: var(--color-console-border);
-            border-radius: 4px;
-        }
         .console-time, .console-kind, .console-empty {
-            color: var(--color-console-muted);
+            color: var(--log-meta, var(--color-console-muted));
         }
-        .console-time { font-variant-numeric: tabular-nums; }
-        .console-event-success .console-outcome { color: var(--log-success); }
-        .console-event-warning .console-outcome { color: var(--log-warning); }
-        .console-event-error .console-outcome { color: var(--log-error); }
-        .console-message { overflow-wrap: anywhere; }
+        .console-event-error { color: var(--log-error); --log-meta: currentColor; }
+        .console-ready { display: inline-block; color: var(--color-console-success); vertical-align: middle; }
+        .ready-pulse { animation: ready-pulse .6s ease-in-out 2; }
+        @keyframes ready-pulse { 50% { opacity: .25; } }
+        #log-window { overflow: auto; }
+        .console-event { padding-inline-start: var(--space-8); }
+        .console summary { cursor: pointer; min-height: var(--control-height-sm); padding-block: var(--space-1); }
+        .console-event summary { list-style-position: outside; }
+        .console-detail { color: var(--color-console-text); padding-inline-start: var(--space-5); }
         .console-progress { height: var(--space-5); background: var(--color-console-border); }
         .console-progress-bar { background: var(--color-console-success); }
         @media (max-width: 768px) {
@@ -1055,11 +1052,6 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
             gap: var(--space-3);
             margin-bottom: var(--space-7);
         }
-.dashboard-console-card .console {
-            height: var(--layout-console-mobile-height);
-            max-height: none;
-            overflow-wrap: anywhere;
-        }
         @media (min-width: 992px) {
             .config-runtime-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .dashboard-core-row {
@@ -1192,7 +1184,8 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .pool-help-content { position: absolute; right: 0; top: 100%; z-index: 10; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-menu); padding: var(--space-5); }
 .pool-help-content { width: min(var(--pool-help-width), calc(100vw - var(--space-7) * 4)); font-size: var(--font-size-field); overflow-wrap: anywhere; }
 .pool-help-content p { margin: 0 0 var(--space-2); }
-.console-config { margin-bottom: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-console-border); }
+.console-config,.console-run { padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-console-border); }
+.console-run { justify-content: space-between; }
 .console-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-3); }
 .console-settings span:first-child { grid-column: 1 / -1; }
 .console-colo { margin-left: auto; font-size: var(--font-size-xs); color: var(--color-text-muted); }
