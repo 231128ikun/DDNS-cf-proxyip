@@ -11,7 +11,7 @@ import {
   type ProbeConfig,
 } from '../contracts/config';
 import type { ProbeAdapter } from '../ports/probe';
-import { appFetch } from '../util/fetch';
+import { appFetch, FetchBudgetError } from '../util/fetch';
 import { readClampedInteger as parseInteger } from '../contracts/parse';
 
 export interface RuntimeEnv {
@@ -86,24 +86,20 @@ export interface ProbeAdapterDeps {
   readonly budget?: ReturnType<typeof createSubrequestBudget>;
 }
 
-/** 按一次调用累计，探测先停，给 DNS 和通知留出空间。 */
-export function createSubrequestBudget() {
+/** 只累计 HTTP 子请求；TCP socket 由探针限制同时连接数，不占用 HTTP 配额。 */
+export function createSubrequestBudget(fetchImpl: typeof fetch = appFetch) {
   let used = 0;
-  const take = (ceiling: number): boolean => {
-    if (used >= ceiling) return false;
-    used++;
-    return true;
-  };
   const boundedFetch = (ceiling: number): typeof fetch => async (input, init) => {
-    if (!take(ceiling)) throw new Error('本轮外部请求预算已用尽');
-    return appFetch(input, { ...init, redirect: 'manual' });
+    if (used >= ceiling) throw new FetchBudgetError();
+    used++;
+    return fetchImpl(input, { ...init, redirect: 'manual' });
   };
-  return { takeProbeAttempt: () => take(36), rootsFetch: boundedFetch(36), dnsFetch: boundedFetch(44), notifyFetch: boundedFetch(48) };
+  return { probeFetch: boundedFetch(36), dnsFetch: boundedFetch(44), notifyFetch: boundedFetch(48) };
 }
 
 /** 原生检测优先，失败时备用 API 复检；未配置备用时原生重试一次。 */
 export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAdapterDeps = {}): ProbeAdapter {
-  const budget = deps.budget ?? createSubrequestBudget();
+  const budget = deps.budget ?? createSubrequestBudget(deps.fetchImpl);
   let sockets: Promise<typeof import('cloudflare:sockets')> | undefined;
   const connect: ProbeConnect = deps.connect ?? (async (address, options) => {
     const api = await (sockets ??= import('cloudflare:sockets')).catch(() => { throw new TypeError('socket API unavailable'); });
@@ -113,13 +109,12 @@ export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAda
     endpoints: config.endpoints,
     timeoutMs: config.timeoutMs,
     fallbackToNext: false,
-    // 不自动跟随重定向，确保一次复检只用一个外部请求。
-    fetchImpl: deps.fetchImpl ?? ((input, init) => appFetch(input, { ...init, redirect: 'manual' })),
+    fetchImpl: budget.probeFetch,
     onDiagnostic: diagnostic => console.warn('[probe-anomaly]', diagnostic),
   }) : undefined;
   return new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
     connect,
-    takeAttempt: budget.takeProbeAttempt, rootsFetch: budget.rootsFetch,
+    rootsFetch: budget.probeFetch,
     ...(backup ? { backup } : {}),
   });
 }
