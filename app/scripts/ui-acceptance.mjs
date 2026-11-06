@@ -269,6 +269,9 @@ try {
     await until('document.querySelector("#log-window").textContent.includes("读取库存和 DNS")');
     assert.equal(await read('document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")'), false, '阶段进度应先于完成回执显示');
     await until('document.querySelector(".console-event-error .console-message") && document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")');
+    assert.equal(await read('document.querySelector(".dashboard-console-card > button").disabled'), true, '目标明细未在整轮结束前返回');
+    await until('!document.querySelector(".dashboard-console-card > button").disabled');
+    assert.equal(await read('[...document.querySelectorAll("#log-window .console-message")].filter(row => row.textContent.includes("执行失败：更新 TXT 记录失败")).length'), 1, '目标明细在完成回执中重复输出');
     for (const [tone, label, message] of [['info', '信息', 'proxy.example.com (TXT)'], ['success', '成功', '耗时 120ms'],
       ['warning', '告警', 'PROBE_BUDGET_EXHAUSTED'], ['error', '失败', '执行失败：更新 TXT 记录失败']]) {
       assert.equal(await read(`[...document.querySelectorAll(".console-event-${tone}")].some(row => {
@@ -282,6 +285,14 @@ try {
     assert.equal(server.requests.slice(maintenanceStart).filter(item => item.path === '/api/maintenance/run').length, 1, '维护被重复提交');
     await until('(() => {const log=document.querySelector("#log-window");return log.scrollHeight-log.scrollTop-log.clientHeight<32})()');
     await capture('console-' + width, '.dashboard-console-card');
+    const interruptedStart = server.requests.length;
+    server.fixture.maintenanceDisconnect = true;
+    await click('.dashboard-console-card > button');
+    await until('document.querySelector("#log-window").textContent.includes("维护响应提前结束") && !document.querySelector(".dashboard-console-card > button").disabled');
+    assert.equal(server.requests.slice(interruptedStart).filter(item => item.path === '/api/maintenance/run').length, 1, '断流后自动重放了维护请求');
+    assert.equal(await read('[...document.querySelectorAll("#log-window .console-message")].filter(row => row.textContent.includes("执行失败：更新 TXT 记录失败")).length'), 2, '断流丢弃已返回目标结果');
+    await capture('maintenance-interrupted-' + width, '.dashboard-console-card');
+    server.fixture.maintenanceDisconnect = false;
     await read('document.querySelector("#log-window").scrollTop=0; new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
