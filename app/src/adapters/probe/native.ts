@@ -3,6 +3,7 @@ import { alive, dead, unknown, type ProbeExit, type ProbeResult } from '../../do
 import { parseProxyTarget, type ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
+import { FetchBudgetError } from '../../util/fetch';
 import { readProbeExit, readText, uniqueExits } from './probe-payload';
 import { isSubrequestLimit, isTcpLoop } from './probe-errors';
 import { createProbeRedactor, probeErrorMessage } from './diagnostics';
@@ -16,7 +17,6 @@ interface NativeProbeOptions {
   readonly connect: ProbeConnect;
   readonly secure?: (socket: ProbeSocket, hostname: string) => Promise<ProbeSocket>;
   readonly backup?: ProbeAdapter;
-  readonly takeAttempt?: () => boolean;
   readonly rootsFetch?: typeof fetch;
 }
 const READ_LIMIT = 65_536;
@@ -46,7 +46,6 @@ export class NativeProbeAdapter implements ProbeAdapter {
 
   private async runAttempt(target: ProxyTarget, task: () => Promise<ProbeResult>): Promise<ProbeResult> {
     if (this.subrequestLimitReached) return unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽');
-    if (this.options.takeAttempt?.() === false) return unknown(target, 'PROBE_BUDGET_EXHAUSTED', '本轮检测预算已用尽，未完成检测');
     const result = await task();
     if (result.code === 'SUBREQUEST_LIMIT') this.subrequestLimitReached = true;
     return result;
@@ -137,6 +136,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       })()]);
     } catch (error) {
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', details());
+      if (error instanceof FetchBudgetError) return unknown(target, 'PROBE_BUDGET_EXHAUSTED', error.message, details());
       const message = typeof error === 'string' ? error : probeErrorMessage(error);
       if (isSubrequestLimit(message)) return unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽', details());
       if (isTcpLoop(message)) return unknown(target, 'PROBE_API_ERROR', 'TCP Loop detected：运行平台拒绝回环连接', details());
@@ -149,7 +149,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return dead(target, { ...details(), code: phase, message: stage + '：' + this.redact(message).slice(0, 180) });
     } finally {
       timeout.signal.removeEventListener('abort', abort); timeout.cleanup();
-      void socket?.close().catch(() => {});
+      await socket?.close().catch(() => {});
     }
   }
 }
