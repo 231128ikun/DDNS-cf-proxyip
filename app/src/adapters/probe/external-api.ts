@@ -13,7 +13,7 @@ import {
 import type { ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
-import { appFetch } from '../../util/fetch';
+import { appFetch, FetchBudgetError } from '../../util/fetch';
 import { createProbeRedactor, probeErrorMessage, probeResponseShape } from './diagnostics';
 import {
   firstText,
@@ -135,6 +135,7 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       if (context.signal?.aborted) return finish(unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs }));
+      if (error instanceof FetchBudgetError) return finish(unknown(target, 'PROBE_BUDGET_EXHAUSTED', error.message, { endpoint: endpoint.name, latencyMs }));
       const message = probeErrorMessage(error);
       if (isSubrequestLimit(message)) return finish(unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽', { endpoint: endpoint.name, latencyMs }));
       if (timeout.didTimeout() || isTimeoutError(error)) {
