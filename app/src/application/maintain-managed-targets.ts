@@ -1,4 +1,5 @@
 import { getPoolFixedName } from '../contracts/pool';
+import type { MaintenanceLogLine } from '../contracts/maintenance';
 import { resolvePoolKey } from '../domain/domain-binding';
 import type { ManagedTarget } from '../domain/managed-target';
 import type { DnsZone } from '../ports/dns-repository';
@@ -7,7 +8,7 @@ import type { MaintenancePoolStats } from '../ports/maintenance-stats';
 import type { MaintainManagedTargetCommand, MaintenanceReport } from './maintain-managed-target';
 
 export interface TargetMaintainer {
-  execute(command: MaintainManagedTargetCommand): Promise<MaintenanceReport>;
+  execute(command: MaintainManagedTargetCommand, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceReport>;
 }
 
 export interface MaintainManagedTargetsDependencies {
@@ -39,7 +40,7 @@ export type MaintenanceRunReport = MaintenanceRunSummary & {
 export class MaintainManagedTargets {
   constructor(private readonly dependencies: MaintainManagedTargetsDependencies) {}
 
-  async execute(data: MaintenanceSourceData, fallbackZone: DnsZone): Promise<MaintenanceRunSummary> {
+  async execute(data: MaintenanceSourceData, fallbackZone: DnsZone, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunSummary> {
     const results: TargetMaintenanceResult[] = [];
 
     for (const config of data.targets) {
@@ -49,7 +50,7 @@ export class MaintainManagedTargets {
       const poolName = data.poolNames[poolKey] || getPoolFixedName(poolKey);
 
       try {
-        const report = await this.dependencies.maintainer.execute({ target: config.target, zone, poolKey });
+        const report = await this.dependencies.maintainer.execute({ target: config.target, zone, poolKey }, onProgress);
         results.push({ target: config.target, zone, poolKey, poolName, report, error: null });
       } catch (error) {
         results.push({
