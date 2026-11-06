@@ -3,6 +3,8 @@ import type { ComponentChildren } from 'preact';
 import type { PoolCheckResponse } from '../../../src/contracts/pool-check';
 import type { CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse } from '../../../src/contracts/config';
+import type { MaintenanceLogLine } from '../../../src/contracts/maintenance';
+import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import type { RequestState } from '../state/request-state';
 import type { TargetStatusView } from '../state/target-status';
 import { Icon } from './icon';
@@ -11,7 +13,8 @@ import type { TargetSelectorProps } from './target-selector';
 
 /** 当前忙碌的池写操作。 */
 export type PoolActionKey = 'pool-edit';
-export type ConsoleTone = 'info' | 'success' | 'warning' | 'error';
+export type ConsoleTone = MaintenanceLogLine['tone'];
+const consoleLevels: Record<ConsoleTone, string> = { info: '信息', success: '成功', warning: '告警', error: '失败' };
 
 export interface ConsoleLogEntry {
   readonly id: number;
@@ -147,7 +150,7 @@ function Console({ logs, config }: {
         <div class="mb-2"><strong>运行配置</strong></div>
         {config.status === 'ready' && <div class="console-settings">
           <span>检测：内置探针{config.data.config.checkApiBackup ? ' + 备用接口' : ''}</span>
-          <span>并发：{config.data.config.settings.CONCURRENT_CHECKS} · 超时：{config.data.config.settings.CHECK_TIMEOUT / 1000}s</span>
+          <span>默认并发：{config.data.config.settings.CONCURRENT_CHECKS} · 单轮超时：{config.data.config.settings.CHECK_TIMEOUT / 1000}s</span>
           <span>定时维护：{config.data.config.scheduledEnabled ? '开启' : '关闭'}</span>
           <span>Telegram：{config.data.config.tgEnabled ? '开启' : '关闭'}</span>
           <span>维护目标：{config.data.config.targets.filter(target => target.enabled).length} 个</span>
@@ -157,13 +160,39 @@ function Console({ logs, config }: {
         {logs.length === 0 && <div class="console-empty">正在连接系统…</div>}
         {logs.map(entry => {
           const tag = /^\[([^\]]+)\]\s*/.exec(entry.message);
-          return <div key={entry.id} class={`console-event d-flex gap-2 console-event-${entry.tone}`}>
-            <time class="console-time">{entry.time}</time><span class="console-kind">{tag?.[1] ?? '系统'}</span><span class="console-message">{tag ? entry.message.slice(tag[0].length) : entry.message}</span>
+          return <div key={entry.id} class={`console-event console-event-${entry.tone}`}>
+            <time class="console-time">{entry.time}</time>{' '}
+            <span class="console-kind" title={consoleLevels[entry.tone]}>{tag?.[1] ?? '系统'}</span>{' '}
+            <span class="console-message">{highlightLog(tag ? entry.message.slice(tag[0].length) : entry.message)}</span>
           </div>;
         })}
       </div>
     </div>
   );
+}
+
+const logLexeme = /\[[\w:.]+\](?::\d+)?|[\w:][\w.:-]*/g;
+
+function highlightLog(message: string): ComponentChildren {
+  const parts: ComponentChildren[] = [];
+  let start = 0;
+  for (const match of message.matchAll(logLexeme)) {
+    const value = match[0].replace(/\.+$/, '');
+    const kind = /^\[[A-Z][A-Z\d_]*\]$/.test(value) ? 'code'
+      : /^\d+(?:\.\d+)?(?:ms|s)$/.test(value) ? 'duration'
+      : isLogAddress(value) ? 'address' : undefined;
+    if (!kind) continue;
+    parts.push(message.slice(start, match.index),
+      <span key={match.index} data-log-token={kind} style={{ color: kind === 'code' ? 'var(--log-code)' : 'var(--log-value)' }}>{value}</span>);
+    start = match.index + value.length;
+  }
+  return parts.length ? [...parts, message.slice(start)] : message;
+}
+
+function isLogAddress(value: string): boolean {
+  if (!/[.:]/.test(value)) return false;
+  const address = parseProxyTarget(value);
+  return Boolean(address && (address.family !== 'hostname' || /\.[a-z][a-z\d-]*$/i.test(address.host)));
 }
 
 function batchProgress(
