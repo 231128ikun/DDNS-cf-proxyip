@@ -13,7 +13,7 @@ import type { DnsRepository } from '../../src/ports/dns-repository';
 const addresses = Array.from({ length: 40 }, (_, index) => `203.0.113.${index + 1}`);
 
 describe.each(['pool', 'domain', 'maintenance'] as const)('shared check concurrency: %s', (kind) => {
-  it.each([[undefined, 32], [24, 24], [2, 2], [0, 1], [999, 40], [Number.NaN, 32]])(
+  it.each([[undefined, 8], [24, 24], [2, 2], [0, 1], [999, 40], [Number.NaN, 8]])(
     'uses %s without a separate backend cap (peak %s)', async (concurrency, expectedPeak) => {
       let active = 0;
       let peak = 0;
