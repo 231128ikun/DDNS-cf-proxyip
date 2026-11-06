@@ -271,7 +271,9 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const maintenance = dependencies.maintenance;
     if (!maintenance) return errorResponse('maintenance unavailable', 503);
 
-    if (request.headers.get('Accept') === MAINTENANCE_STREAM_TYPE) return streamMaintenance(maintenance, request.signal, dependencies.waitUntil);
+    if (request.headers.get('Accept') === MAINTENANCE_STREAM_TYPE) return streamMaintenanceTask(
+      async (progress, signal) => { const { run, notification } = await maintenance.run(true, progress, signal); return toMaintenanceRunResponse(run, notification); },
+      request.signal, dependencies.waitUntil);
     const { run, notification } = await maintenance.run(true, undefined, request.signal);
     return jsonResponse(toMaintenanceRunResponse(run, notification));
   });
@@ -392,7 +394,8 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 }
 
 /** 把用例层的输入错误映射成 400，其余异常继续向上抛给统一错误处理。 */
-function streamMaintenance(maintenance: MaintenanceRunner, requestSignal: AbortSignal, waitUntil?: (task: Promise<unknown>) => void): Response {
+export function streamMaintenanceTask<Result>(run: (progress: (line: MaintenanceLogLine) => void, signal: AbortSignal) => Promise<Result>,
+  requestSignal: AbortSignal, waitUntil?: (task: Promise<unknown>) => void): Response {
   const encoder = new TextEncoder();
   const abort = new AbortController();
   const stop = () => abort.abort();
@@ -401,14 +404,14 @@ function streamMaintenance(maintenance: MaintenanceRunner, requestSignal: AbortS
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      const send = (event: MaintenanceStreamEvent) => {
+      const send = (event: MaintenanceStreamEvent<Result>) => {
         if (cancelled) return;
         try { controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); }
         catch { cancelled = true; stop(); }
       };
-      const task = Promise.resolve().then(() => maintenance.run(true, line => send({ type: 'progress', line }), abort.signal))
-        .then(({ run, notification }) => {
-          send({ type: 'result', result: toMaintenanceRunResponse(run, notification) });
+      const task = Promise.resolve().then(() => run(line => send({ type: 'progress', line }), abort.signal))
+        .then(result => {
+          send({ type: 'result', result });
         }).catch((error: unknown) => {
           console.error('[maintenance]', abort.signal.aborted ? '维护已取消' : '维护任务中断', error instanceof Error ? error.name : 'UnknownError');
           send({ type: 'error', message: '维护执行中断，已返回的目标结果保留，请核对解析与库存' });

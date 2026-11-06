@@ -17,7 +17,8 @@ import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts
 import type { AuthStatusResponse } from '../../../src/contracts/auth';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-settings';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
-import { MAINTENANCE_STREAM_TYPE, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse, type MaintenanceStreamEvent } from '../../../src/contracts/maintenance';
+import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import { isRecord } from '../../../src/contracts/parse';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 
 export interface ApiClientOptions {
@@ -269,22 +270,14 @@ export class ApiClient {
 
 async function readMaintenanceStream(response: Response, onProgress: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunResponse> {
   const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let failure = '维护响应提前结束';
   try {
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let end: number;
-      while ((end = buffer.indexOf('\n')) !== -1) {
-        const event = JSON.parse(buffer.slice(0, end)) as MaintenanceStreamEvent;
-        buffer = buffer.slice(end + 1);
-        if (event.type === 'progress') onProgress(event.line);
-        else if (event.type === 'result' && event.result?.ok === true && Array.isArray(event.result.results)) return event.result;
-        else if (event.type === 'error') throw new ApiError(event.message, 0);
-      }
+    if (reader) {
+      const outcome = await readMaintenanceStreamResult<MaintenanceRunResponse>(reader.read.bind(reader), onProgress,
+        (value): value is MaintenanceRunResponse => isRecord(value) && value.ok === true && Array.isArray(value.results));
+      if ('result' in outcome) return outcome.result;
+      if (outcome.remote) throw new ApiError(outcome.message, 0);
+      failure = outcome.message;
     }
   } catch (error) {
     if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;

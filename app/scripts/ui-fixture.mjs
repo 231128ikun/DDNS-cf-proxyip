@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
-import { pathToFileURL } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 
 // 固定提交提供无障碍回归基准；验收需要该提交的 Git 历史。
@@ -76,11 +75,17 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
   const referenceHtml = reference ? renderReference(fixture.config, ref) : null;
   const referenceLoginHtml = reference ? renderReference(fixture.config, ref, true) : null;
-  const { default: worker } = await import(pathToFileURL(join(appRoot, 'dist', 'release', 'worker.js')).href);
   const harness = await createViteServer({ root: appRoot, configFile: false, server: { middlewareMode: true, ws: false, hmr: false }, appType: 'custom' });
-  let createWorker;
-  try { ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts')); }
+  let createWorker, localWorkerContext, parsePoolText, parseProxyTarget, needsDnsResolution;
+  try {
+    ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts'));
+    ({ localWorkerContext } = await harness.ssrLoadModule('/test/helpers/native-probe.ts'));
+    ({ parsePoolText } = await harness.ssrLoadModule('/src/domain/pool-entry.ts'));
+    ({ parseProxyTarget } = await harness.ssrLoadModule('/src/domain/proxy-target.ts'));
+    ({ needsDnsResolution } = await harness.ssrLoadModule('/src/application/check-target.ts'));
+  }
   finally { await harness.close(); }
+  const worker = createWorker();
   // 普通批检与洗库走实际路由；替身限制每个请求最多探测一个目标。
   const probeWorker = createWorker(() => {
     let used = false;
@@ -143,6 +148,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       fixture.pools = fixture.pools.filter(item => item.key !== key);
     },
   };
+  const runWorker = (handler, input) => handler.fetch(input, { IP_DATA: kv }, localWorkerContext(handler, { IP_DATA: kv }));
   const requests = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
@@ -170,8 +176,8 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
         if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);
         const handler = url.pathname.endsWith('/clean') ? probeWorker : worker;
-        const result = await handler.fetch(new Request(url, { method: request.method,
-          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+        const result = await runWorker(handler, new Request(url, { method: request.method,
+          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }));
         const data = await result.json();
         const delay = read ? fixture.poolReadDelay : preview ? fixture.poolPreviewDelay : fixture.poolWriteDelay;
         const output = read && fixture.poolReadOverride !== null ? { ...data, content: fixture.poolReadOverride } : data;
@@ -228,9 +234,9 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
             return json({ error: '模拟绑定保存失败' }, 500);
           }
         }
-        const result = await worker.fetch(new Request(url, { method: request.method,
+        const result = await runWorker(worker, new Request(url, { method: request.method,
           headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) },
-          ...(body ? { body } : {}) }), { IP_DATA: kv });
+          ...(body ? { body } : {}) }));
         const data = await result.json();
         if (result.ok && url.pathname === '/api/domain-bindings' && request.method === 'GET') fixture.bindings = data;
         if (result.ok && url.pathname === '/api/pools' && request.method === 'GET') fixture.pools = data.pools;
@@ -274,14 +280,16 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
           domainPoolOrder: fixture.bindings.items.map(item => item.key) });
       }
       if (url.pathname === '/api/check') {
-        // 验收只使用直连目标，不发真实 DNS 请求。
-        if (typeof input.proxyip !== 'string' || !/^(?:[\w.-]+:\d+|\[[\da-f:]+\]:\d+|\d+(?:\.\d+){3})$/i.test(input.proxyip)) return json({error:'验收仅支持直连目标'}, 400);
+        // 复用实际解析和目标分类，阻止验收发出真实 DNS 请求。
+        const lines = typeof input.proxyip === 'string' ? parsePoolText(input.proxyip).filter(line => !line.raw.startsWith('#')) : [];
+        const address = lines.length === 1 && lines[0].entry ? lines[0].entry.address : '';
+        if (!parseProxyTarget(address) || needsDnsResolution(address)) return json({error:'验收仅支持直连目标'}, 400);
         const abort = new AbortController();
         response.once('close', () => { if (!response.writableEnded) abort.abort(); });
         const req = new Request(url, {method:'POST', signal:abort.signal, body,
           headers:{'content-type':'application/json', ...(request.headers.cookie ? {cookie:request.headers.cookie} : {})}});
         Object.defineProperty(req, 'cf', {value:{colo:fixture.executionColo}});
-        const result = await probeWorker.fetch(req, {IP_DATA:kv});
+        const result = await runWorker(probeWorker, req);
         return json(await result.json(), result.status);
       }
       if (url.pathname === '/api/check-ip') return json({...baselineProbe, responseTime:12, asn:'AS64500', country:'US', stack:'v4'});

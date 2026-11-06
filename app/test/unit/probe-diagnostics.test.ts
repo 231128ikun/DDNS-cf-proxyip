@@ -3,6 +3,7 @@ import { ExternalApiProbeAdapter } from '../../src/adapters/probe/external-api';
 import { parseProxyTarget } from '../../src/domain/proxy-target';
 import { createWorker } from '../../src/worker';
 import { ApiClient } from '../../web/src/api/client';
+import { localWorkerContext } from '../helpers/native-probe';
 
 const target = parseProxyTarget('203.0.113.10:443')!;
 const endpoint = { name: 'primary', urlTemplate: 'https://probe.example/check?proxyip=' };
@@ -92,8 +93,9 @@ describe('probe availability and diagnostic regressions', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('bad response', { status: 502 })));
     try {
       const worker = createWorker();
+      const env = { CHECK_API_BACKUP: 'https://probe.example/check?key=fixture-token&proxyip=' };
       const client = new ApiClient({ fetchImpl: async (url, init) => worker.fetch!(new Request(new URL(String(url), 'https://worker.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0],
-        { CHECK_API_BACKUP: 'https://probe.example/check?key=fixture-token&proxyip=' }, {} as ExecutionContext) });
+        env, localWorkerContext(worker, env)) });
       const result = await client.checkTarget(target.authority);
       expect(result.items[0]!.result).toMatchObject({ status: 'unknown', code: 'HTTP_ERROR', diagnostics: [
         { endpoint: 'backup', code: 'HTTP_ERROR' },

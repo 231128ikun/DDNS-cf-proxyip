@@ -96,6 +96,18 @@ try {
     await until('!document.querySelector("#pool-filter-help").hidden');
     await read('document.querySelector("[aria-label=筛选用法]").dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
     await until('document.querySelector("#pool-filter-help").hidden');
+    const looseStart = server.requests.length;
+    await set('#ip-input', '203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段');
+    await click('[aria-label="批量检测导入草稿"]');
+    await until('!document.querySelector("[aria-label=停止批量检测]") && document.querySelector("[aria-label=检测结果分类]")?.textContent.includes("可用 4")');
+    assert.deepEqual(server.requests.slice(looseStart).filter(item => item.path === '/api/check').map(item => item.input.proxyip).sort(),
+      ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72：443', '203.0.113.73:443']);
+    assert.deepEqual(await read('[...document.querySelectorAll(".pool-result-list .syntax-address")].map(item => item.textContent).sort()'),
+      ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72:443', '203.0.113.73:443']);
+    assert.equal(server.requests.slice(looseStart).filter(item => item.method === 'PUT').length, 0, '宽容输入检测不应写库存');
+    await capture('loose-input-' + width);
+    await click('[data-action=view-draft]');
+    await set('#ip-input', '');
     const sourceStart = server.requests.length;
     await click('[data-action=load-pool]');
     await until('document.querySelector("#ip-input").value.includes("保留备注") && !document.querySelector("[data-action=load-pool]").disabled');

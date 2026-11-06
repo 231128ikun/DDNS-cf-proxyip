@@ -1,6 +1,7 @@
 import type { NotifyResult } from './notification';
 import type { ProbeStatus } from '../domain/probe-result';
 import type { TargetMode } from '../domain/managed-target';
+import { isRecord } from './parse';
 
 export interface DomainBindingItem {
   readonly key: string;
@@ -60,10 +61,39 @@ export interface MaintenanceLogLine {
 }
 
 export const MAINTENANCE_STREAM_TYPE = 'application/x-ndjson';
-export type MaintenanceStreamEvent =
+export type MaintenanceStreamEvent<Result = MaintenanceRunResponse> =
   | { readonly type: 'progress'; readonly line: MaintenanceLogLine }
-  | { readonly type: 'result'; readonly result: MaintenanceRunResponse }
+  | { readonly type: 'result'; readonly result: Result }
   | { readonly type: 'error'; readonly message: string };
+
+/** 浏览器和内部目标调用共用帧解析；读入来源和取消由调用方负责。 */
+export async function readMaintenanceStreamResult<Result>(
+  read: () => Promise<{ done: boolean; value?: Uint8Array | undefined }>,
+  onProgress: (line: MaintenanceLogLine) => void,
+  isResult: (value: unknown) => value is Result,
+): Promise<{ result: Result } | { message: string; remote: boolean }> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await read();
+    if (done) return { message: '维护响应提前结束', remote: false };
+    buffer += decoder.decode(value, { stream: true });
+    let end: number;
+    while ((end = buffer.indexOf('\n')) !== -1) {
+      const event: unknown = JSON.parse(buffer.slice(0, end));
+      buffer = buffer.slice(end + 1);
+      if (!isRecord(event)) continue;
+      if (event.type === 'progress') {
+        const line = event.line;
+        if (!isRecord(line) || typeof line.message !== 'string' || !['info', 'success', 'warning', 'error'].includes(String(line.tone))) {
+          throw new SyntaxError('维护进度格式无效');
+        }
+        onProgress(line as unknown as MaintenanceLogLine);
+      } else if (event.type === 'result' && isResult(event.result)) return { result: event.result };
+      else if (event.type === 'error' && typeof event.message === 'string') return { message: event.message, remote: true };
+    }
+  }
+}
 
 export interface MaintenanceRunResult {
   readonly domain: string;
