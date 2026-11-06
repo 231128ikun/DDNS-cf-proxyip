@@ -54,6 +54,25 @@ describe('explicit SNI over a real TCP/TLS connection', () => {
       expect(result, JSON.stringify(result))
         .toMatchObject({ status: 'alive', exitIp: '198.51.100.42', exitFamily: 'ipv4' });
       expect(names).toEqual(['probe.test']);
+      const repeated = await Promise.all(Array.from({ length: 18 }, () => probe.probe(parseProxyTarget('127.0.0.1:' + port)!)));
+      expect(repeated.every(item => item.status === 'alive')).toBe(true);
+      expect(names).toHaveLength(19);
+      const raw = open();
+      let releaseClose!: () => void;
+      const delayedClose = vi.fn(() => new Promise<void>(resolve => {
+        releaseClose = () => { void raw.close().then(resolve); };
+      }));
+      const secured = await secureProbeSocket({ ...raw, close: delayedClose }, 'probe.test', roots);
+      const firstClose = secured.close();
+      const secondClose = secured.close();
+      let finished = false;
+      void secondClose.then(() => { finished = true; });
+      try {
+        await Promise.resolve();
+        expect(secondClose).toBe(firstClose);
+        expect(finished).toBe(false);
+        expect(delayedClose).toHaveBeenCalledTimes(1);
+      } finally { releaseClose(); await Promise.all([firstClose, secondClose]); }
       const mismatch = new NativeProbeAdapter({ urls: ['https://wrong.test/'], timeoutMs: 3000,
         connect: open, secure: (socket, host) => secureProbeSocket(socket, host, roots) });
       expect(await mismatch.probe(parseProxyTarget('127.0.0.1:' + port)!))
