@@ -8,11 +8,11 @@ if (!target) throw new Error('test target is invalid');
 
 describe('runtime configuration', () => {
   it.each([
-    [{}, 32, 5_000],
+    [{}, 8, 5_000],
     [{ CONCURRENT_CHECKS: 7, DOH_TIMEOUT: 9_000 }, 7, 9_000],
     [{ CONCURRENT_CHECKS: 0, DOH_TIMEOUT: 10 }, 1, 1_000],
     [{ CONCURRENT_CHECKS: 999, DOH_TIMEOUT: 90_000 }, 128, 30_000],
-    [{ CONCURRENT_CHECKS: 'bad', DOH_TIMEOUT: null }, 32, 5_000],
+    [{ CONCURRENT_CHECKS: 'bad', DOH_TIMEOUT: null }, 8, 5_000],
   ])('retains and bounds the original browser and DNS settings: %j', (raw, concurrency, timeout) => {
     expect(parseRuntimeSettings(raw)).toMatchObject({ CONCURRENT_CHECKS: concurrency, DOH_TIMEOUT: timeout });
   });
