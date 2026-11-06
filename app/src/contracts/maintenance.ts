@@ -56,6 +56,7 @@ export interface MaintenanceAddressCheck {
 export interface MaintenanceLogLine {
   readonly tone: 'info' | 'success' | 'warning' | 'error';
   readonly message: string;
+  readonly targetKey?: string;
 }
 
 export const MAINTENANCE_STREAM_TYPE = 'application/x-ndjson';
