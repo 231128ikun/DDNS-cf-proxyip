@@ -346,8 +346,11 @@ body {
   margin-bottom: var(--space-7);
 }
         .console {
-            --log-value: #e3e7ef;
-            --log-code: #a7c2d6;
+            --color-syntax-address: #a7c2d6;
+            --color-syntax-number: #c9a88c;
+            --log-success: #a8c5a8;
+            --log-warning: #c9b185;
+            --log-error: #d6a09d;
             background: var(--color-console-bg);
             color: var(--color-console-text);
             height: var(--layout-console-mobile-height);
@@ -369,6 +372,9 @@ body {
             color: var(--color-console-muted);
         }
         .console-time { font-variant-numeric: tabular-nums; }
+        .console-event-success .console-outcome { color: var(--log-success); }
+        .console-event-warning .console-outcome { color: var(--log-warning); }
+        .console-event-error .console-outcome { color: var(--log-error); }
         .console-message { overflow-wrap: anywhere; }
         .console-progress { height: var(--space-5); background: var(--color-console-border); }
         .console-progress-bar { background: var(--color-console-success); }
@@ -785,7 +791,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
         }
         .exit-stack { color: var(--color-stack); background: var(--color-stack-bg); }
         code, .syntax-type { color: var(--color-stack); }
-        .syntax-address { color: var(--color-primary); }
+        .syntax-address { color: var(--color-syntax-address, var(--color-primary)); }
         .syntax-number { color: var(--color-syntax-number); }
         .syntax-meta { color: var(--color-syntax-meta); }
         .status-display {
