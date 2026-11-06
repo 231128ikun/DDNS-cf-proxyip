@@ -8,6 +8,7 @@ import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import type { RequestState } from '../state/request-state';
 import type { TargetStatusView } from '../state/target-status';
 import { Icon } from './icon';
+import { AddressText } from './address-text';
 import { StatusOverview } from './status-overview';
 import type { TargetSelectorProps } from './target-selector';
 
@@ -171,28 +172,29 @@ function Console({ logs, config }: {
   );
 }
 
-const logLexeme = /\[[\w:.]+\](?::\d+)?|[\w:][\w.:-]*/g;
+const logOutcome = /(?:^| · )(可用|失效(?:（超时）)?|未知(?:（HTTP 异常）)?|未判定|未确认|筛选不匹配|检测(?:超时|失效))(?= · | \[|$)|^(候选异常|(?:执行|维护|通知发送)失败|未达到最小活跃数)/;
+const logAddress = /\[[\da-f:.]+\](?::\d+)?|[\w:][\w.:-]*/gi;
 
 function highlightLog(message: string): ComponentChildren {
+  const match = logOutcome.exec(message);
+  if (!match) return highlightAddresses(message);
+  const outcome = (match[1] ?? match[2])!;
+  const end = match.index + match[0].length;
+  return <>{highlightAddresses(message.slice(0, end - outcome.length))}<span class="console-outcome">{outcome}</span>{message.slice(end)}</>;
+}
+
+function highlightAddresses(message: string): ComponentChildren {
   const parts: ComponentChildren[] = [];
   let start = 0;
-  for (const match of message.matchAll(logLexeme)) {
+  for (const match of message.matchAll(logAddress)) {
     const value = match[0].replace(/\.+$/, '');
-    const kind = /^\[[A-Z][A-Z\d_]*\]$/.test(value) ? 'code'
-      : /^\d+(?:\.\d+)?(?:ms|s)$/.test(value) ? 'duration'
-      : isLogAddress(value) ? 'address' : undefined;
-    if (!kind) continue;
-    parts.push(message.slice(start, match.index),
-      <span key={match.index} data-log-token={kind} style={{ color: kind === 'code' ? 'var(--log-code)' : 'var(--log-value)' }}>{value}</span>);
+    if (!/[.:]/.test(value)) continue;
+    const target = parseProxyTarget(value);
+    if (!target || (target.family === 'hostname' && !/\.[a-z][a-z\d-]*$/i.test(target.host))) continue;
+    parts.push(message.slice(start, match.index), <AddressText key={match.index} value={value} />);
     start = match.index + value.length;
   }
   return parts.length ? [...parts, message.slice(start)] : message;
-}
-
-function isLogAddress(value: string): boolean {
-  if (!/[.:]/.test(value)) return false;
-  const address = parseProxyTarget(value);
-  return Boolean(address && (address.family !== 'hostname' || /\.[a-z][a-z\d-]*$/i.test(address.host)));
 }
 
 function batchProgress(
