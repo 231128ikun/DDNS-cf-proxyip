@@ -246,6 +246,7 @@ try {
     server.fixture.probeErrors['203.0.113.77:443'] = { status:'dead', code:'TARGET_TLS_ERROR', message:'候选 TLS 失败' };
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-success") && document.querySelector("#log-window").textContent.includes("候选 TLS 失败")');
+    assert.ok(await read('[...document.querySelectorAll(".console-event-error")].some(row => row.textContent.includes("[TARGET_TLS_ERROR]") && row.querySelector(".console-outcome")?.textContent === "失效")'));
     server.fixture.probeErrors['203.0.113.77:443'] = { code:'PROBE_API_ERROR', message:'检测接口异常' };
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
@@ -265,12 +266,12 @@ try {
         return source.textContent === "维护" && source.title === ${JSON.stringify(label)} && row.textContent.includes(${JSON.stringify(message)});
       })`), true);
     }
-    const maintenanceTokens = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
-      row => [...row.querySelectorAll("[data-log-token]")].map(token => [token.dataset.logToken, token.textContent]))`);
-    assert.deepEqual(maintenanceTokens, [
-      ['address', 'proxy.example.com'], ['address', '203.0.113.10:443'], ['address', '[2001:db8::1]:8443'],
-      ['duration', '120ms'], ['code', '[PROBE_BUDGET_EXHAUSTED]'],
-    ]);
+    const outcomes = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
+      row => [...row.querySelectorAll(".console-outcome")].map(token => token.textContent))`);
+    assert.deepEqual(outcomes, ['可用', '候选异常', '执行失败']);
+    const logAddresses = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
+      row => [...row.querySelectorAll(".syntax-address")].map(address => [address.textContent, address.querySelector(".syntax-number")?.textContent ?? null]))`);
+    assert.deepEqual(logAddresses, [['proxy.example.com', null], ['203.0.113.10:443', ':443'], ['[2001:db8::1]:8443', ':8443']]);
     assert.equal(server.requests.slice(maintenanceStart).filter(item => item.path === '/api/maintenance/run').length, 1, '维护被重复提交');
     await until('(() => {const log=document.querySelector("#log-window");return log.scrollHeight-log.scrollTop-log.clientHeight<32})()');
     await capture('console-' + width, '.dashboard-console-card');
