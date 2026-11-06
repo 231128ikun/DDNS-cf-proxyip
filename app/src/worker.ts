@@ -56,6 +56,7 @@ export function createWorker(createProbe: typeof createProbeAdapterFromConfig = 
 
       const dependencies: HttpAppDependencies = {
         checkTarget,
+        waitUntil: task => executionContext.waitUntil(task),
         version: APP_VERSION,
         ...(typeof request.cf?.colo === 'string' && /^[A-Z]{3}$/.test(request.cf.colo) ? { executionColo: request.cf.colo } : {}),
         authKey: resolved.config.authKey,
@@ -149,10 +150,11 @@ function createMaintenanceRunner(
   const confirmed = new Map<string, ProbeResult>();
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
-      probe: { name: probe.name, async probe(target) {
+      probe: { name: probe.name, async probe(target, context) {
+        context?.signal?.throwIfAborted();
         const known = confirmed.get(target.key);
         if (known) return known;
-        const result = await probe.probe(target);
+        const result = await probe.probe(target, context);
         if (result.status !== 'unknown' && result.code !== 'PARTIAL_EXIT') confirmed.set(target.key, result);
         return result;
       } },
@@ -169,7 +171,7 @@ function createMaintenanceRunner(
   });
 
   return {
-    run: async (isManual, onProgress) => {
+    run: async (isManual, onProgress, signal) => {
       const result = await runMaintenanceJob({
       source: maintenanceSource,
       maintainer,
@@ -179,6 +181,7 @@ function createMaintenanceRunner(
       isManual,
       projectUrl: config.projectUrl,
       ...(onProgress ? { onProgress } : {}),
+      ...(signal ? { signal } : {}),
       });
       for (const target of result.run.results) console.info('[maintenance]', maintenanceDisplayLines(toMaintenanceTargetResult(target)).map(line => line.message).join('\n'));
       const notification = notificationDisplay(result.notification);
