@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createProbeAdapterFromConfig, type RuntimeEnv } from '../../src/config/runtime';
+import { createProbeAdapterFromConfig, createSubrequestBudget, type RuntimeEnv } from '../../src/config/runtime';
 import { APP_VERSION, createWorker } from '../../src/worker';
 import { ApiClient } from '../../web/src/api/client';
 
@@ -26,7 +26,7 @@ describe('发布 Worker 装配', () => {
     const inventory = Array.from({ length: 89 }, (_, index) => `203.0.113.${index + 1}:443,null,null,null # 备注 ${index + 1}`);
     const trash = '198.51.100.2:443,null,null,null # 原有备注';
     const store = new Map([
-      ['app_config', JSON.stringify({ tgEnabled: true, tgToken: 'test-notifier', tgId: 'test-chat', checkApiBackup: '',
+      ['app_config', JSON.stringify({ tgEnabled: true, tgToken: 'test-notifier', tgId: 'test-chat', checkApiBackup: limit === 'budget' ? 'https://probe.example/?candidate=' : '',
         zones: [{ baseDomain: 'example.com', zoneId: 'test-zone', apiKey: 'test-token' }],
         targets: [{ domain: 'one.example.com', mode: 'TXT', zoneIndex: 0, minActive: 1 },
           { domain: 'two.example.com', mode: 'A', zoneIndex: 0, minActive: 1 },
@@ -48,6 +48,7 @@ describe('发布 Worker 装配', () => {
         notify();
         return Response.json({ ok: true });
       }
+      if (url.hostname === 'budget.example') return Response.json({ ok: true });
       expect(url.hostname).toBe('api.cloudflare.com');
       if (init?.method === 'DELETE') {
         dnsWrites.push(url.pathname.split('/').at(-1)!);
@@ -62,7 +63,13 @@ describe('发布 Worker 装配', () => {
       return Response.json({ success: true, result });
     }));
     try {
-      const worker = createWorker((config, deps) => createProbeAdapterFromConfig(config, { ...deps, connect }));
+      const worker = createWorker((config, deps) => {
+        const budget = deps?.budget ?? createSubrequestBudget();
+        if (limit === 'budget' && deps?.budget) {
+          for (let index = 0; index < 35; index++) void budget.probeFetch('https://budget.example/');
+        }
+        return createProbeAdapterFromConfig(config, { budget, connect });
+      });
       const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { IP_DATA: kv }, worker) });
       const progress: string[] = [];
       const run = await client.runMaintenance(undefined, line => {
@@ -73,8 +80,8 @@ describe('发布 Worker 装配', () => {
           releaseRead();
         }
       });
-      expect(progress[0]).toBe('one.example.com · 读取库存和 DNS');
-      expect(progress).toContain('one.example.com · 当前解析已返回 1/1');
+      expect(progress[0]).toBe('one.example.com (TXT) · 读取库存和 DNS');
+      expect(progress).toContain('one.example.com (TXT) · 当前解析已返回 1/1');
       expect(progress.at(-1)).toBe('处理维护通知');
       expect(run.notification).toMatchObject({ sent: true });
       expect(notify).toHaveBeenCalledTimes(1);
@@ -82,20 +89,12 @@ describe('发布 Worker 装配', () => {
       const code = limit === 'platform' ? 'SUBREQUEST_LIMIT' : 'PROBE_BUDGET_EXHAUSTED';
       expect(run.results[0]!.candidateErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code })]));
       expect(run.results[0]!.candidates?.remaining).toBeGreaterThan(70);
-      if (limit === 'platform') {
-        expect(dnsWrites).toEqual([]);
-        expect(run.results[0]!.dns?.after).toEqual([current]);
-        expect(store.get('ip_pool_trash')).toBe(trash);
-        expect(store.get('ip_pool_default')).toBe(inventory.join('\n'));
-        expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
-      } else {
-        expect(connect).toHaveBeenCalledTimes(35); // TXT 读取也占用共享预算。
-        expect(dnsWrites).toEqual(['txt-current', 'a-shared']);
-        expect(run.results[2]!.dns?.after).toEqual([]); // 另一条记录沿用本轮已复检的结果。
-        expect(store.get('ip_pool_trash')).toContain(trash);
-        expect(store.get('ip_pool_trash')).toContain(current + ',null,null,null # 维护失效');
-        expect(store.get('ip_pool_default')).toContain(inventory.at(-1));
-      }
+      expect(dnsWrites).toEqual([]);
+      expect(run.results[0]!.dns?.after).toEqual([current]);
+      expect(store.get('ip_pool_trash')).toBe(trash);
+      expect(store.get('ip_pool_default')).toBe(inventory.join('\n'));
+      if (limit === 'platform') expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
+      else expect(connect.mock.calls.length).toBeGreaterThan(2);
     } finally { vi.unstubAllGlobals(); }
   });
 
