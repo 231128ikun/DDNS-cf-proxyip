@@ -1,4 +1,6 @@
 import { shouldNotifyMaintenance, type MaintenanceRunReport } from '../application/maintain-managed-targets';
+import { hasMaintenanceWarnings } from '../domain/maintenance-display';
+import { isProbeErrorResult } from '../domain/probe-result';
 import { toMaintenanceTargetResult } from '../application/maintenance-summary';
 import type { MaintenanceAddressCheck, MaintenanceRunResult } from '../contracts/maintenance';
 import { getPoolFixedName, TRASH_POOL_KEY } from '../contracts/pool';
@@ -69,7 +71,7 @@ function formatTarget(result: MaintenanceRunResult): string[] {
   if (!existing.length && !result.dns.added.length) lines.push('无解析地址');
   for (const value of existing) {
     const check = checks.get(value);
-    const icon = check?.status === 'alive' && check.matchesTarget ? '✅' : check?.status === 'dead' ? '❌' : '⚠️';
+    const icon = check?.status === 'alive' && check.matchesTarget && !isProbeErrorResult(check) ? '✅' : check?.status === 'dead' ? '❌' : '⚠️';
     lines.push(icon + ' <code>' + escapeHtml(result.mode === 'A' ? check?.address ?? value : value) + '</code>');
     lines.push('   ' + escapeHtml(check?.status === 'dead' && result.dns.removed.includes(value) ? checkMetadata(check) : checkDetails(check)));
   }
@@ -105,8 +107,7 @@ function formatTarget(result: MaintenanceRunResult): string[] {
     const check = checks.get(value);
     return check?.status === 'alive' && check.matchesTarget;
   });
-  const hasDiagnostics = result.probeErrors > 0 || (result.candidateErrors?.length ?? 0) > 0
-    || Boolean(result.error) || Boolean(result.errors?.length) || Boolean(candidates?.unknown);
+  const hasDiagnostics = hasMaintenanceWarnings(result);
   if (active >= minimum && currentIsHealthy && !hasDiagnostics && !result.dns.added.length && !result.dns.removed.length && !(result.archived ?? 0)) {
     lines.push('✨ 所有 IP 正常，无变化');
   }
@@ -118,7 +119,7 @@ function checkDetails(check: MaintenanceAddressCheck | undefined): string {
   if (!check) return '未确认';
   const status = check.status === 'alive' ? check.matchesTarget ? '' : '筛选不匹配'
     : check.status === 'dead' ? '失效' : '未确认';
-  const diagnostic = check.status !== 'alive' && check.message ? (check.code ? '[' + check.code + '] ' : '') + check.message : '';
+  const diagnostic = (check.status !== 'alive' || isProbeErrorResult(check)) && check.message ? (check.code ? '[' + check.code + '] ' : '') + check.message : '';
   return [checkMetadata(check), status, diagnostic].filter(Boolean).join(' · ');
 }
 
