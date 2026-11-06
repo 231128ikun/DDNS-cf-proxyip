@@ -1,5 +1,6 @@
 import type { MaintenanceAddressCheck, MaintenanceLogLine, MaintenanceRunResult } from '../contracts/maintenance';
 import type { NotifyResult } from '../contracts/notification';
+import { isProbeErrorResult } from './probe-result';
 
 /** 公共维护文本只描述确认值、实际变化与异常；日志和通知共用。 */
 export function maintenanceDisplayLines(result: MaintenanceRunResult): MaintenanceLogLine[] {
@@ -23,7 +24,7 @@ export function maintenanceDisplayLines(result: MaintenanceRunResult): Maintenan
   for (const value of result.dns.after) {
     const check = checks.get(value);
     add('解析 ' + value + (result.dns.added.includes(value) ? ' [新增]' : '') + ' · ' + checkText(check),
-      check?.status === 'dead' ? 'error' : check?.status === 'alive' && check.matchesTarget && check.code !== 'PARTIAL_EXIT' ? 'success' : 'warning');
+      check?.status === 'dead' ? 'error' : check?.status === 'alive' && check.matchesTarget && !isProbeErrorResult(check) ? 'success' : 'warning');
   }
   for (const value of result.dns.removed) {
     const check = checks.get(value);
@@ -46,14 +47,23 @@ export function maintenanceDisplayLines(result: MaintenanceRunResult): Maintenan
   if (active < minimum && candidates?.total === 0 && candidates.sourceCount) add('来源池 ' + candidates.sourceCount + ' 个地址，无符合端口、出口条件且未在当前 DNS 中的候选');
   if (active < minimum) add(candidates?.remaining ? '未达到最小活跃数；后续候选尚未检测' : '未达到最小活跃数', 'warning');
   for (const error of result.errors ?? (result.error ? [result.error] : [])) add('执行失败：' + error, 'error');
+  const warning = hasMaintenanceWarnings(result);
+  add((active < minimum ? '未完成' : warning ? '存在异常' : '完成') + '：已确认可用 ' + active + '/' + minimum
+    + (result.dnsUpdated ? ' · DNS 已变更' : ' · DNS 无变化'), active < minimum || warning ? 'warning' : 'success');
   return lines;
+}
+
+export function hasMaintenanceWarnings(result: MaintenanceRunResult): boolean {
+  return result.probeErrors > 0 || Boolean(result.error) || Boolean(result.errors?.length)
+    || Boolean(result.candidateErrors?.length) || Boolean(result.candidates?.unknown)
+    || Boolean(result.checks?.some(isProbeErrorResult));
 }
 
 function checkText(check: MaintenanceAddressCheck | undefined): string {
   if (!check) return '未确认';
   const status = check.status === 'alive' ? check.matchesTarget ? '可用' : '筛选不匹配' : check.status === 'dead' ? '失效' : '未判定';
   return status + (check.details ? ' · ' + check.details : '')
-    + ((check.status !== 'alive' || check.code === 'PARTIAL_EXIT') && check.message ? ' · ' + (check.code ? '[' + check.code + '] ' : '') + check.message : '');
+    + ((check.status !== 'alive' || isProbeErrorResult(check)) && check.message ? ' · ' + (check.code ? '[' + check.code + '] ' : '') + check.message : '');
 }
 
 function removalReason(check: MaintenanceAddressCheck | undefined): string {
