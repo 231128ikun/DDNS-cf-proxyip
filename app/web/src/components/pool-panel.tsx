@@ -11,10 +11,10 @@ import { PoolWorkspace } from '../state/pool-workspace';
 import { poolOptions } from '../state/pool-options';
 import { Icon } from './icon';
 import { AddressText } from './address-text';
-import type { ConsoleTone } from './dashboard-page';
+import type { WashProgress } from './dashboard-page';
 import { ResourceFeedback } from './resource-feedback';
 import { probeStatusLabel } from './probe-status';
-import { formatProbeLog } from './probe-log';
+import { logProbe, type ConsoleLog } from './probe-log';
 
 interface PoolPanelProps {
   readonly client: ApiClient;
@@ -32,13 +32,14 @@ interface PoolPanelProps {
   readonly probeConfigured: boolean;
   readonly leaveGuard: { current: () => boolean };
   readonly containerChanged: { current: (key: string) => void };
-  readonly log: (message: string, tone?: ConsoleTone) => void;
+  readonly log: ConsoleLog;
+  readonly onWashProgress: (progress: WashProgress | null) => void;
   readonly onWriteBusy: (busy: boolean) => void;
 }
 
 /** 输入负责整理和出入库，结果只负责选择。 */
 export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, containerBusy, refreshPools,
-  onPoolCount, batch, configReady, checkConcurrency, bindingsReady, probeConfigured, leaveGuard, containerChanged, log, onWriteBusy }: PoolPanelProps) {
+  onPoolCount, batch, configReady, checkConcurrency, bindingsReady, probeConfigured, leaveGuard, containerChanged, log, onWashProgress, onWriteBusy }: PoolPanelProps) {
   const [, render] = useState(0);
   const model = useMemo(() => new PoolWorkspace(client, () => render(value => value + 1)), [client]);
   const [view, setView] = useState<'input' | 'results'>('input');
@@ -165,14 +166,18 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     sidePending.current = true; setSideBusy(true);
     const controller = cleanController.current = new AbortController();
     setCleaning(true); model.message = '正在读取库存…';
+    const progress = (status: string) => onWashProgress({ pool: name, status });
+    progress('读取库存…');
     log(`[洗库] 读取库存 · ${name}`);
     try {
       const result = await client.cleanPool(poolKey, controller.signal, event => {
         model.message = `检测中 ${event.completed}/${event.total} · 全部确认后写入`;
         render(value => value + 1);
-        log(`[洗库] ${event.completed}/${event.total} · ${event.item.address} · ${formatProbeLog(event.item)}`, event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning');
+        progress(event.completed + ' / ' + event.total);
+        logProbe(log, '洗库', event.item.address, event.item);
       }, checkConcurrency, () => {
         model.message = '正在核对库存并提交清理…';
+        progress('核对库存…');
         render(value => value + 1);
         log('[洗库] 检测完成，正在核对库存并提交清理');
       });
@@ -184,7 +189,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
       }
       log('[洗库] ' + model.message, result.skipped ? 'warning' : 'success');
     } catch (error) { model.message = controller.signal.aborted ? '洗库已停止，未取得完成确认，请核对库存' : errorMessage(error); log('[洗库] ' + model.message, controller.signal.aborted ? 'warning' : 'error'); }
-    finally { cleanController.current = null; sidePending.current = false; setCleaning(false); setSideBusy(false); }
+    finally { onWashProgress(null); cleanController.current = null; sidePending.current = false; setCleaning(false); setSideBusy(false); }
   };
   const choose = (key: string, checked: boolean): void => setSelected(current => {
     const next = new Set(current); if (checked) next.add(key); else next.delete(key); return next;
