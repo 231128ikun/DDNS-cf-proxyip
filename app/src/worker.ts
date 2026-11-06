@@ -29,7 +29,7 @@ import { runMaintenanceJob } from './jobs/maintenance-job';
 import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.06-12.54';
+export const APP_VERSION = '2026.11.06-17.25';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
