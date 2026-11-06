@@ -17,6 +17,7 @@ export interface MaintainManagedTargetCommand {
   readonly target: ManagedTarget;
   readonly zone: DnsZone;
   readonly poolKey: string;
+  readonly signal?: AbortSignal;
 }
 
 const CANDIDATE_EXPLORE_FACTOR = 2;
@@ -55,19 +56,23 @@ export class MaintainManagedTarget {
   }
 
   async execute(command: MaintainManagedTargetCommand, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceReport> {
-    const progress = onProgress && ((message: string) => onProgress({ message: command.target.domain + ' · ' + message, tone: 'info' }));
+    const progress = onProgress && ((message: string) => onProgress({ message: command.target.domain + ' ('
+      + (command.target.mode === 'A' ? 'A/AAAA' : 'TXT') + ') · ' + message, tone: 'info' }));
     progress?.('读取库存和 DNS');
     const [poolText, currentItems] = await Promise.all([
       this.dependencies.pools.load(command.poolKey),
       this.loadCurrentRecords(command),
     ]);
-    const current = await this.probeCurrentRecords(currentItems, command.target, progress);
+    command.signal?.throwIfAborted();
+    const current = await this.probeCurrentRecords(currentItems, command.target, progress, command.signal);
+    command.signal?.throwIfAborted();
     const currentDecisions = current.map(item => ({ item, decision: decideCurrentResult(item.result, command.target) }));
     // 探针自身已经复检；同一轮补货不再重复探测当前 DNS 地址。
     const excluded = new Set(current.map(item => canonicalAddressKey(item.address)));
     const entries = parsePoolEntries(poolText);
     const candidates = selectCandidateEntries(entries, command.target, excluded);
-    const inspected = await this.probeCandidates(command.target, candidates, countActiveCurrent(currentDecisions), progress);
+    const inspected = await this.probeCandidates(command.target, candidates, countActiveCurrent(currentDecisions), progress, command.signal);
+    command.signal?.throwIfAborted();
     const plan = buildMaintenancePlan({ target: command.target, current, candidates: inspected.items, poolText,
       ...(inspected.stats.remaining > 0 && (inspected.stats.checked >= MAX_CANDIDATE_PROBES || inspected.items.some(incompleteProbe))
         ? { rotateCandidates: inspected.items.filter(item => item.result.status === 'unknown' && !incompleteProbe(item)).map(item => item.entry.address) } : {}),
@@ -81,6 +86,7 @@ export class MaintainManagedTarget {
       progress?.('核对并应用维护结果');
     }
     if (plan.trash.length) {
+      command.signal?.throwIfAborted();
       try {
         await this.dependencies.pools.addToTrash(plan.trash.map(item => ({ ...item, poolKey: command.poolKey })));
         trashSaved = true;
@@ -89,6 +95,7 @@ export class MaintainManagedTarget {
     // 归档失败禁止移除来源，但仍可安全补充新的可用地址。
     const dnsResult = await this.applyDnsChanges(command, plan, errors, trashSaved);
     if (plan.poolChanged && trashSaved) {
+      command.signal?.throwIfAborted();
       try { await this.dependencies.pools.save(command.poolKey, plan.nextPoolText); }
       catch { errors.push('保存 IP 池失败'); }
     }
@@ -110,13 +117,13 @@ export class MaintainManagedTarget {
     return record ? parseTxtAddresses(record.content).map(address => currentItemFromTxtAddress(record, address, command.target)).filter(isPresent) : [];
   }
 
-  private async probeCurrentRecords(items: readonly CurrentMaintenanceItem[], target: ManagedTarget, progress?: (message: string) => void): Promise<CurrentMaintenanceItem[]> {
+  private async probeCurrentRecords(items: readonly CurrentMaintenanceItem[], target: ManagedTarget, progress?: (message: string) => void, signal?: AbortSignal): Promise<CurrentMaintenanceItem[]> {
     const unique = new Map<string, CurrentMaintenanceItem>();
     for (const item of items) if (item.result.code !== 'INVALID_DNS_VALUE') unique.set(canonicalAddressKey(item.address), item);
     if (unique.size) progress?.('开始检测当前解析 · ' + unique.size + ' 个地址');
     let settled = 0;
     const checked = await mapWithConcurrency([...unique], this.concurrency, async ([key, item]) => {
-      const result = await probeSafely(this.dependencies.probe, item, target);
+      const result = await probeSafely(this.dependencies.probe, item, target, signal);
       settled++;
       if (settled === 1 || settled % 4 === 0 || settled === unique.size) progress?.('当前解析已返回 ' + settled + '/' + unique.size);
       return [key, result] as const;
@@ -126,7 +133,7 @@ export class MaintainManagedTarget {
   }
 
   /** 缺额未满足时继续后续窗口；异常候选不使补货提前退出。 */
-  private async probeCandidates(target: ManagedTarget, candidates: readonly PoolEntry[], active: number, progress?: (message: string) => void): Promise<{
+  private async probeCandidates(target: ManagedTarget, candidates: readonly PoolEntry[], active: number, progress?: (message: string) => void, signal?: AbortSignal): Promise<{
     items: readonly CandidateMaintenanceItem[]; stats: MaintenanceCandidateStats;
   }> {
     const needed = Math.max(0, target.minActive - active);
@@ -136,13 +143,14 @@ export class MaintainManagedTarget {
     const limit = Math.min(candidates.length, MAX_CANDIDATE_PROBES);
     if (needed && limit) progress?.('开始检测补货候选 · 本目标最多 ' + limit + ' 个');
     while (needed > matched.size && checked < limit) {
+      signal?.throwIfAborted();
       const missing = needed - matched.size;
       const size = Math.min(limit - checked, missing * CANDIDATE_EXPLORE_FACTOR + CANDIDATE_EXPLORE_EXTRA);
       const batch = await mapWithConcurrency(candidates.slice(checked, checked + size), this.concurrency, async entry => {
         const parsed = parseProxyTarget(entry.address, target.port ?? 443)!;
         const address = target.mode === 'A' && target.port ? formatProxyAuthority(parsed.host, target.port) : parsed.authority;
         const item = { entry, address, value: activeValueForEntry(entry, target) };
-        const inspected = { ...item, result: await probeSafely(this.dependencies.probe, item, target) };
+        const inspected = { ...item, result: await probeSafely(this.dependencies.probe, item, target, signal) };
         if (!incompleteProbe(inspected)) {
           checked++;
           progress?.('候选已检测 ' + checked + ' 个');
@@ -160,6 +168,7 @@ export class MaintainManagedTarget {
   private async applyDnsChanges(command: MaintainManagedTargetCommand, plan: MaintenancePlan, errors: string[], allowRemoval: boolean): Promise<{
     deleted: number; added: number; updated: boolean; dns: MaintenanceDnsState;
   }> {
+    command.signal?.throwIfAborted();
     const before = uniqueValues(plan.current.map(item => item.item.value));
     const state = (after: readonly string[]): MaintenanceDnsState => ({ before, after: uniqueValues(after),
       added: uniqueValues(after).filter(value => !before.includes(value)), removed: before.filter(value => !after.includes(value)) });
@@ -169,11 +178,13 @@ export class MaintainManagedTarget {
       let added = 0;
       if (allowRemoval) for (const { item, decision } of plan.current) {
         if ((decision !== 'remove-dead' && decision !== 'remove-mismatch') || !item.recordId) continue;
+        command.signal?.throwIfAborted();
         try { await this.dependencies.dns.deleteRecord(command.zone, item.recordId); records.delete(item.recordId); deleted++; }
         catch { errors.push('删除 DNS 记录失败: ' + item.value); }
       }
       for (const candidate of plan.additions) {
         if ([...records.values()].includes(candidate.value)) continue;
+        command.signal?.throwIfAborted();
         try {
           const record = await this.dependencies.dns.addAddressRecord(command.zone, command.target.domain, candidate.value, dnsRecordTypeForHost(candidate.value));
           records.set(record.id, candidate.value);
@@ -218,11 +229,15 @@ function invalidDnsItem(record: DnsRecord, value: string): CurrentMaintenanceIte
   return { recordId: record.id, address: value, value, result: unknown(null, 'INVALID_DNS_VALUE', 'DNS 记录内容无法解析') };
 }
 
-async function probeSafely(probe: ProbeAdapter, item: Pick<CurrentMaintenanceItem, 'address'>, target: ManagedTarget): Promise<ProbeResult> {
+async function probeSafely(probe: ProbeAdapter, item: Pick<CurrentMaintenanceItem, 'address'>, target: ManagedTarget, signal?: AbortSignal): Promise<ProbeResult> {
+  signal?.throwIfAborted();
   const parsed = parseProxyTarget(item.address, target.port ?? 443);
   if (!parsed) return unknown(null, 'INVALID_DNS_VALUE', 'DNS 记录内容无法解析');
-  try { return await probe.probe(parsed); }
-  catch { return unknown(parsed, 'PROBE_ERROR', '检测执行异常'); }
+  try { return await probe.probe(parsed, signal ? { signal } : {}); }
+  catch {
+    signal?.throwIfAborted();
+    return unknown(parsed, 'PROBE_ERROR', '检测执行异常');
+  }
 }
 
 function parsePoolEntries(text: string) { return [...readPoolSnapshot(text).entries.values()].map(item => item.entry); }
