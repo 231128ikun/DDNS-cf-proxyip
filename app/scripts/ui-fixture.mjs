@@ -36,7 +36,7 @@ export function createUiFixture() {
     poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
-    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
+    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, bindingMapping: null };
 }
 
 /** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
@@ -107,7 +107,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       const values = {
         app_config: fixture.config,
-        domain_pool_mapping: Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
+        domain_pool_mapping: fixture.bindingMapping ?? Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
         domain_pool_order: fixture.bindings.items.map(item => item.key),
         ip_pool_names: Object.fromEntries(fixture.pools.map(item => [item.key, item.name])),
         ip_pool_order: fixture.pools.map(item => item.key),
@@ -127,9 +127,10 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       const data = JSON.parse(value);
       if (key === 'app_config') fixture.config = data;
-      else if (key === 'domain_pool_mapping') fixture.bindings.items = fixture.bindings.items.map(item => ({
-        ...item, poolKey: data[item.key] ?? item.poolKey,
-      }));
+      else if (key === 'domain_pool_mapping') {
+        fixture.bindingMapping = data;
+        fixture.bindings.items = fixture.bindings.items.map(item => ({ ...item, poolKey: data[item.key] ?? item.poolKey }));
+      }
       else if (key === 'ip_pool_names') fixture.pools = fixture.pools.map(item => ({ ...item, name: data[item.key] ?? item.name }));
       else if (key === 'ip_pool_order') fixture.pools = data.map(key => fixture.pools.find(item => item.key === key)).filter(Boolean);
       else throw new Error(`Unexpected UI fixture KV write: ${key}`);
@@ -182,7 +183,14 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         response.writeHead(200, { 'content-type': 'application/x-ndjson' });
         response.write(JSON.stringify({ type: 'progress', line: { tone: 'info', message: 'proxy.example.com · 读取库存和 DNS' } }) + '\n');
         await new Promise(resolve => setTimeout(resolve, 450));
-        response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
+        for (const item of fixture.maintenanceResponse.results) {
+          for (const [index, message] of (item.lines ?? []).entries()) {
+            response.write(JSON.stringify({ type: 'progress', line: { message, tone: item.lineTones?.[index] ?? 'info', targetKey: item.domain + '|' + item.mode } }) + '\n');
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 450));
+        if (fixture.maintenanceDisconnect) response.end();
+        else response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
         return;
       }
       if (url.pathname === '/api/auth/status') {
