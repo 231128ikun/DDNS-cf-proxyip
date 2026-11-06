@@ -535,6 +535,22 @@ describe('web API client config and remote load endpoints', () => {
 });
 
 describe('web API client domain binding and maintenance endpoints', () => {
+  it('rejects a truncated maintenance stream without replaying the write request', async () => {
+    const line = { message: '读取库存和 DNS', tone: 'info' };
+    const bytes = new TextEncoder().encode(JSON.stringify({ type: 'progress', line }) + '\n{"type":"result"');
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 2) controller.enqueue(bytes.subarray(i, i + 2));
+        controller.close();
+      },
+    }), { headers: { 'Content-Type': 'application/x-ndjson' } }));
+    const client = new ApiClient({ fetchImpl });
+    const progress = vi.fn();
+    await expect(client.runMaintenance(undefined, progress)).rejects.toThrow('未取得维护完成回执');
+    expect(progress).toHaveBeenCalledExactlyOnceWith(line);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the binding and manual maintenance contracts', async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
