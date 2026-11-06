@@ -132,7 +132,9 @@ describe('complete and concise maintenance output', () => {
     const client = new ApiClient({ fetchImpl: async (url, init) => app.request(String(url), init) });
     const response = await client.runMaintenance();
     expect(response.results[0]!.dns?.after).toEqual(['203.0.113.10', '203.0.113.11', '203.0.113.12']);
-    expect(response.results[0]!.lines?.join('\n')).toContain('活跃 3/3');
+    const output = response.results[0]!;
+    expect(output.lines?.join('\n')).toContain('活跃 3/3');
+    expect(output.lineTones?.[output.lines!.findIndex(line => line.startsWith('活跃 '))]).toBe('success');
     expect(response.notificationMessage).toContain('通知发送失败');
     expect(response.notificationMessage).toContain('1/2');
     expect(response.completed).toBe(false);
