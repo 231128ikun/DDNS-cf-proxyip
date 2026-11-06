@@ -172,6 +172,29 @@ describe('native candidate probe', () => {
     expect(connect).toHaveBeenCalledTimes(4); expect(backup.probe).not.toHaveBeenCalled();
   });
 
+  it('waits for socket closure before handing its slot to another address', async () => {
+    let open = 0;
+    let peak = 0;
+    const base = connector();
+    const connect = (...args: Parameters<ProbeConnect>) => {
+      const socket = base.connect(...args);
+      open++;
+      peak = Math.max(peak, open);
+      return { ...socket, async close() {
+        await new Promise(resolve => setTimeout(resolve, 2));
+        open--;
+        await socket.close();
+      } };
+    };
+    const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect,
+      secure: async socket => ({ ...socket.startTls(), close: socket.close }) });
+    const results = await Promise.all(Array.from({ length: 12 }, () => probe.probe(target)));
+    expect(results.every(result => result.status === 'alive')).toBe(true);
+    expect(peak).toBe(4);
+    expect(open).toBe(0);
+    expect(base.connect).toHaveBeenCalledTimes(24);
+  });
+
   it('does not connect when URLs are missing or invalid', async () => {
     const io = connector();
     for (const values of [[], ['http://plain.example/'], ['https://name:password@example/']]) {
