@@ -572,7 +572,7 @@ describe('HTTP app domain binding and maintenance routes', () => {
 
     const response = await app.request('/api/maintenance/run', { method: 'POST' });
     expect(response.status).toBe(200);
-    expect(run).toHaveBeenCalledWith(true);
+    expect(run).toHaveBeenCalledWith(true, undefined, expect.any(AbortSignal));
     const raw = await response.text();
     expect(raw).not.toContain('secret-zone');
     expect(raw).not.toContain('secret-token');
