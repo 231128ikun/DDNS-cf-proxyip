@@ -6,6 +6,7 @@ import {
 } from '../application/maintain-managed-targets';
 import { buildTelegramMaintenanceMessage } from './maintenance-message';
 import type { PoolSummary } from '../contracts/pool';
+import type { MaintenanceLogLine } from '../contracts/maintenance';
 import type { DnsZone } from '../ports/dns-repository';
 import type { MaintenanceSource } from '../ports/maintenance-source';
 import type { MaintenanceStatsRepository } from '../ports/maintenance-stats';
@@ -20,6 +21,7 @@ export interface MaintenanceJobOptions {
   readonly isManual: boolean;
   readonly projectUrl?: string;
   readonly now?: () => Date;
+  readonly onProgress?: (line: MaintenanceLogLine) => void;
 }
 
 export interface MaintenanceJobResult {
@@ -40,7 +42,8 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
   ]);
   const beforeCounts = baseline ?? poolCounts(currentPools);
 
-  const summary = await options.maintainer.execute(data, options.fallbackZone);
+  const summary = await options.maintainer.execute(data, options.fallbackZone, options.onProgress);
+  options.onProgress?.({ message: '汇总维护结果', tone: 'info' });
   const afterPools = await options.stats.current();
   const afterCounts = poolCounts(afterPools);
   const run: MaintenanceRunReport = {
@@ -55,6 +58,7 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
 
   if (!shouldNotifyMaintenance(run)) return { run, notification: null };
 
+  options.onProgress?.({ message: '处理维护通知', tone: 'info' });
   const notification = await options.notifier.send(buildTelegramMaintenanceMessage(run, {
     isManual: options.isManual,
     ...(options.projectUrl ? { projectUrl: options.projectUrl } : {}),

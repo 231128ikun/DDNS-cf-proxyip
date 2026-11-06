@@ -53,6 +53,17 @@ export interface MaintenanceAddressCheck {
   readonly message?: string;
 }
 
+export interface MaintenanceLogLine {
+  readonly tone: 'info' | 'success' | 'warning' | 'error';
+  readonly message: string;
+}
+
+export const MAINTENANCE_STREAM_TYPE = 'application/x-ndjson';
+export type MaintenanceStreamEvent =
+  | { readonly type: 'progress'; readonly line: MaintenanceLogLine }
+  | { readonly type: 'result'; readonly result: MaintenanceRunResponse }
+  | { readonly type: 'error'; readonly message: string };
+
 export interface MaintenanceRunResult {
   readonly domain: string;
   readonly mode: TargetMode;
@@ -74,6 +85,7 @@ export interface MaintenanceRunResult {
   readonly archived?: number;
   readonly archivedAddresses?: readonly string[];
   readonly lines?: readonly string[];
+  readonly lineTones?: readonly MaintenanceLogLine['tone'][];
 }
 
 export interface MaintenanceRunResponse {

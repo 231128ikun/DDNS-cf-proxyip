@@ -501,6 +501,7 @@ describe('external probe safety regressions', () => {
   it.each([
     { probe_results: { ipv4: { ok: false, error: 'TCP Loop detected, contact us if this doesn\'t seem right.' } } },
     { probeResults: [{ ok: false, error: { cause: { message: 'TCP Loop detected' } } }] },
+    { probe_results: [{ ok: false, error: 'Too many subrequests by single Worker invocation.' }] },
     { probes: { ipv4: { ok: false, apiError: true, error: 'candidate timeout' } } },
   ])('does not turn a nested detector failure into a dead candidate: %j', async evidence => {
     expect(await adapterFor({ success: false, message: 'probe failed', ...evidence }).probe(target))

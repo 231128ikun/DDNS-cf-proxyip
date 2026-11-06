@@ -177,7 +177,14 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         if (delay) await new Promise(resolve => setTimeout(resolve, delay));
         return json(output, result.status);
       }
-      if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) return json(fixture.maintenanceResponse);
+      if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) {
+        if (request.headers.accept !== 'application/x-ndjson') return json(fixture.maintenanceResponse);
+        response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        response.write(JSON.stringify({ type: 'progress', line: { tone: 'info', message: 'proxy.example.com · 读取库存和 DNS' } }) + '\n');
+        await new Promise(resolve => setTimeout(resolve, 450));
+        response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
+        return;
+      }
       if (url.pathname === '/api/auth/status') {
         const key = String(fixture.config.authKey ?? '').trim();
         const cookie = (request.headers.cookie ?? '').split(';').map(part => part.trim())

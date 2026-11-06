@@ -206,6 +206,7 @@ try {
     delete server.fixture.probeErrors['203.0.113.10:8443'];
     const cleanSuccess = server.requests.length;
     await openClean();
+    await until('document.querySelector("#log-window").textContent.includes("检测完成，正在核对库存并提交清理")');
     await until('document.querySelector(".pool-feedback")?.textContent.includes("保留 2") && !document.querySelector("[data-action=load-pool]").disabled');
     assert.equal(server.requests.slice(cleanSuccess).filter(item => item.path.endsWith('/clean')).length, 1);
     assert.deepEqual(server.requests.slice(cleanSuccess).filter(item => item.method === 'GET' && item.path.startsWith('/api/pools')).map(item => item.path), ['/api/pools/ip_pool_default'], '洗库必须只读取一次库存');
@@ -248,10 +249,28 @@ try {
     server.fixture.probeErrors['203.0.113.77:443'] = { code:'PROBE_API_ERROR', message:'检测接口异常' };
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
-    server.fixture.maintenanceResponse = { ok:true, changed:false, insufficient:false, errors:[],probeErrors:0,results:[{domain:'edge.example.com',mode:'A',poolKey:'ip_pool_default',poolName:'默认池',dnsUpdated:false,added:0,deleted:0,probeErrors:0,error:null,lines:['edge.example.com · 已确认解析无变化']}],completed:true,message:'维护完成' };
+    server.fixture.maintenanceResponse = { ok:true, changed:false, insufficient:true, errors:['更新 TXT 记录失败'],probeErrors:1,results:[{domain:'proxy.example.com',mode:'TXT',poolKey:'ip_pool_default',poolName:'默认池',dnsUpdated:false,added:0,deleted:0,probeErrors:1,error:'更新 TXT 记录失败',lines:[
+      'proxy.example.com (TXT)', '解析 203.0.113.10:443 · [2001:db8::1]:8443 · 可用 · 耗时 120ms',
+      '候选异常 2 次 [PROBE_BUDGET_EXHAUSTED] 本轮检测预算已用尽，未完成检测', '执行失败：更新 TXT 记录失败',
+    ],lineTones:['info','success','warning','error']}],completed:false,message:'维护结束：活跃数量未达标' };
     const maintenanceStart = server.requests.length;
     await read('document.querySelector(".dashboard-console-card > button").click(); document.querySelector(".dashboard-console-card > button").click()');
-    await until('document.querySelector("#log-window").textContent.includes("已确认解析无变化")');
+    await until('document.querySelector("#log-window").textContent.includes("读取库存和 DNS")');
+    assert.equal(await read('document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")'), false, '阶段进度应先于完成回执显示');
+    await until('document.querySelector(".console-event-error .console-message") && document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")');
+    for (const [tone, label, message] of [['info', '信息', 'proxy.example.com (TXT)'], ['success', '成功', '耗时 120ms'],
+      ['warning', '告警', 'PROBE_BUDGET_EXHAUSTED'], ['error', '失败', '执行失败：更新 TXT 记录失败']]) {
+      assert.equal(await read(`[...document.querySelectorAll(".console-event-${tone}")].some(row => {
+        const source = row.querySelector(".console-kind");
+        return source.textContent === "维护" && source.title === ${JSON.stringify(label)} && row.textContent.includes(${JSON.stringify(message)});
+      })`), true);
+    }
+    const maintenanceTokens = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
+      row => [...row.querySelectorAll("[data-log-token]")].map(token => [token.dataset.logToken, token.textContent]))`);
+    assert.deepEqual(maintenanceTokens, [
+      ['address', 'proxy.example.com'], ['address', '203.0.113.10:443'], ['address', '[2001:db8::1]:8443'],
+      ['duration', '120ms'], ['code', '[PROBE_BUDGET_EXHAUSTED]'],
+    ]);
     assert.equal(server.requests.slice(maintenanceStart).filter(item => item.path === '/api/maintenance/run').length, 1, '维护被重复提交');
     await until('(() => {const log=document.querySelector("#log-window");return log.scrollHeight-log.scrollTop-log.clientHeight<32})()');
     await capture('console-' + width, '.dashboard-console-card');

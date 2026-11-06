@@ -65,7 +65,8 @@ export function toMaintenanceRunResponse(run: MaintenanceRunSummary, notificatio
     results: run.results.map(result => {
       const summary = toMaintenanceTargetResult(result);
       const { checks: _checks, ...fields } = summary;
-      return { ...fields, lines: maintenanceDisplayLines(summary) };
+      const lines = maintenanceDisplayLines(summary);
+      return { ...fields, lines: lines.map(line => line.message), lineTones: lines.map(line => line.tone) };
     }), ...(notification === undefined ? {} : { notification, notificationMessage: notificationDisplay(notification) }),
   };
 }

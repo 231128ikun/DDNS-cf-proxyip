@@ -17,7 +17,7 @@ import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts
 import type { AuthStatusResponse } from '../../../src/contracts/auth';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-settings';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
-import type { DomainBindingsResponse, MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import { MAINTENANCE_STREAM_TYPE, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse, type MaintenanceStreamEvent } from '../../../src/contracts/maintenance';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 
 export interface ApiClientOptions {
@@ -112,7 +112,7 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
-  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<CleanPoolResponse> {
+  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS, onApply?: () => void): Promise<CleanPoolResponse> {
     const source = await this.readPool(key, signal);
     if (source.key !== key) throw new ApiError('返回的 IP 池不符', 0);
     const {readPoolSnapshot, serializePoolEntries, snapshotEntries} = await import('../../../src/domain/pool-snapshot');
@@ -123,6 +123,7 @@ export class ApiClient {
     const unknown = report.unknown + snapshot.invalid.length + report.invalid.length;
     if (unknown) return {ok:true, poolKey:key, checked:report.total, kept:0, trashed:0, unknown, skipped:true};
     const input: CleanPoolRequest = {content:source.content, report};
+    onApply?.();
     const result = await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', input, signal);
     if (result?.ok !== true || result.poolKey !== key || result.checked !== report.total || typeof result.skipped !== 'boolean'
       || ![result.kept, result.trashed, result.unknown, result.remaining ?? 0].every(count => Number.isSafeInteger(count) && count >= 0)) {
@@ -185,8 +186,8 @@ export class ApiClient {
     return await this.request<OkResponse>('/api/domain-bindings/order', 'PUT', { order }, signal);
   }
 
-  async runMaintenance(signal?: AbortSignal): Promise<MaintenanceRunResponse> {
-    return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal);
+  async runMaintenance(signal?: AbortSignal, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunResponse> {
+    return await this.request<MaintenanceRunResponse>('/api/maintenance/run', 'POST', undefined, signal, true, onProgress);
   }
 
   /** “解析实况”只读查询：按域名池绑定 key 读取目标当前 DNS 记录。 */
@@ -218,8 +219,9 @@ export class ApiClient {
     }, signal);
   }
 
-  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true): Promise<T> {
-    const headers = new Headers({ Accept: 'application/json' });
+  private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true,
+    onProgress?: (line: MaintenanceLogLine) => void): Promise<T> {
+    const headers = new Headers({ Accept: onProgress ? MAINTENANCE_STREAM_TYPE : 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };
@@ -246,6 +248,9 @@ export class ApiClient {
       page?.location?.assign?.('/');
     }
 
+    if (onProgress && response.ok && response.headers.get('Content-Type')?.startsWith(MAINTENANCE_STREAM_TYPE)) {
+      return await readMaintenanceStream(response, onProgress) as T;
+    }
     let payload: unknown;
     try {
       payload = await response.json();
@@ -260,6 +265,30 @@ export class ApiClient {
     }
     return payload as T;
   }
+}
+
+async function readMaintenanceStream(response: Response, onProgress: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunResponse> {
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let end: number;
+      while ((end = buffer.indexOf('\n')) !== -1) {
+        const event = JSON.parse(buffer.slice(0, end)) as MaintenanceStreamEvent;
+        buffer = buffer.slice(end + 1);
+        if (event.type === 'progress') onProgress(event.line);
+        else if (event.type === 'result' && event.result?.ok === true && Array.isArray(event.result.results)) return event.result;
+        else if (event.type === 'error') throw new ApiError(event.message, 0);
+      }
+    }
+  } catch (error) {
+    if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+  } finally { await reader?.cancel().catch(() => {}); }
+  throw new ApiError('未取得维护完成回执，请核对解析与库存', 0);
 }
 
 /** 池 key 由服务端白名单校验，这里只做 URL 编码，避免出现第二套规则。 */

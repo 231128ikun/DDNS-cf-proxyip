@@ -2,3 +2,7 @@
 export function isTcpLoop(message: string): boolean {
   return /\btcp loop detected\b/i.test(message);
 }
+
+export function isSubrequestLimit(message: string): boolean {
+  return /\btoo many subrequests by single worker invocation\b/i.test(message);
+}

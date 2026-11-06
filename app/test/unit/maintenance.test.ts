@@ -87,4 +87,15 @@ describe('maintenance planning', () => {
     expect(plan.poolChanged).toBe(false);
     expect(plan.exhausted).toBe(true);
   });
+
+  it('keeps current DNS when the known exit does not match and another exit could not be checked', () => {
+    const address = '203.0.113.10:443';
+    const result = alive(proxyTarget(address), { exitFamily: 'ipv6', exits: [{ family: 'ipv6', ip: '2001:db8::1' }],
+      code: 'PARTIAL_EXIT', message: '本轮检测预算已用尽，未完成检测' });
+    const plan = buildMaintenancePlan({ target, current: [currentItem('a1', address, result)], candidates: [], poolText: address });
+    expect(plan.current[0]?.decision).toBe('keep-unknown');
+    expect(plan.dnsValues).toEqual(['203.0.113.10']);
+    expect(plan.trash).toEqual([]);
+    expect(plan.activeCount).toBe(0);
+  });
 });

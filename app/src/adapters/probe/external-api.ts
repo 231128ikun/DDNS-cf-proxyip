@@ -1,5 +1,5 @@
 import { asRecord } from '../../contracts/parse';
-import { isTcpLoop } from './probe-errors';
+import { isSubrequestLimit, isTcpLoop } from './probe-errors';
 import {
   alive,
   dead,
@@ -135,10 +135,12 @@ export class ExternalApiProbeAdapter implements ProbeAdapter {
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       if (context.signal?.aborted) return finish(unknown(target, 'CANCELLED', '检测已取消', { endpoint: endpoint.name, latencyMs }));
+      const message = probeErrorMessage(error);
+      if (isSubrequestLimit(message)) return finish(unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽', { endpoint: endpoint.name, latencyMs }));
       if (timeout.didTimeout() || isTimeoutError(error)) {
         return finish(unknown(target, 'API_TIMEOUT', `检测接口请求超时 (${endpoint.timeoutMs ?? this.timeoutMs}ms)`, { endpoint: endpoint.name, latencyMs }));
       }
-      return finish(unknown(target, 'NETWORK_ERROR', '检测接口网络异常：' + probeErrorMessage(error), { endpoint: endpoint.name, latencyMs }));
+      return finish(unknown(target, 'NETWORK_ERROR', '检测接口网络异常：' + message, { endpoint: endpoint.name, latencyMs }));
     } finally { timeout.cleanup(); }
   }
 }
@@ -170,7 +172,7 @@ function parseProbePayload(payload: unknown, target: ProxyTarget, endpoint: stri
   const exitFamily = pickExitFamily(record, exitIp, exits);
   const colo = pickColo(record);
   const details = { endpoint, latencyMs, ...(colo ? { colo } : {}) };
-  const candidateFailure = readCandidateFailure(record, decision === false ? message : hasHealthyBranch ? readLoopError(record) : undefined);
+  const candidateFailure = readCandidateFailure(record, decision === false ? message : hasHealthyBranch ? readPlatformError(record) : undefined);
 
   const probeRecords = readPayloadProbeRecords(record);
   if (decision === true && probeRecords.length && !exits.length) {
@@ -295,11 +297,11 @@ function readCandidateFailure(record: JsonRecord, fallback: string | undefined):
 
 function readDetectorFailure(record: JsonRecord, includeBranches: boolean): string | null {
   if (!includeBranches) return null;
-  const global = readLoopError(record);
+  const global = readPlatformError(record);
   if (global) return trimMessage(global) ?? null;
   for (const { record: probe } of readPayloadProbeRecords(record)) {
     if (probe.apiError === true) return readMessage(probe) ?? '检测接口报告异常';
-    const message = readLoopError(probe);
+    const message = readPlatformError(probe);
     if (message) return trimMessage(message) ?? null;
   }
   return null;
@@ -311,7 +313,7 @@ function isFailedProbe(probe: JsonRecord): boolean {
 }
 
 function readProbeError(probe: JsonRecord): string | undefined {
-  return firstText(probe, ['error', 'message', 'detail', 'reason', 'errorMessage']) ?? readLoopError(probe);
+  return firstText(probe, ['error', 'message', 'detail', 'reason', 'errorMessage']) ?? readPlatformError(probe);
 }
 
 function pickExitIp(record: JsonRecord, exits: readonly ProbeExit[]): string | undefined {
@@ -404,12 +406,12 @@ function pickColo(record: JsonRecord): string | undefined {
   return undefined;
 }
 
-function readLoopError(record: JsonRecord): string | undefined {
+function readPlatformError(record: JsonRecord): string | undefined {
   const keys = ['message', 'errorMessage', 'detail', 'reason', 'error'];
   const pending: unknown[] = keys.map(key => record[key]);
   while (pending.length) {
     const value = pending.pop();
-    if (typeof value === 'string' && isTcpLoop(value)) return value;
+    if (typeof value === 'string' && (isTcpLoop(value) || isSubrequestLimit(value))) return value;
     if (value && typeof value === 'object') pending.push(...Object.values(value));
   }
   return undefined;

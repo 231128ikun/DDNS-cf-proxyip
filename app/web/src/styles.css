@@ -45,10 +45,7 @@
   --color-console-border: #2c2c2e;
   --color-console-text: #d3d8e2;
   --color-console-muted: #8e8e93;
-  --color-console-info: #64d2ff;
   --color-console-success: #32d74b;
-  --color-console-warning: #ffd60a;
-  --color-console-error: #ff453a;
 
   --space-05: 2px;
   --space-1: 4px;
@@ -349,6 +346,8 @@ body {
   margin-bottom: var(--space-7);
 }
         .console {
+            --log-value: #e3e7ef;
+            --log-code: #a7c2d6;
             background: var(--color-console-bg);
             color: var(--color-console-text);
             height: var(--layout-console-mobile-height);
@@ -366,14 +365,11 @@ body {
             background: var(--color-console-border);
             border-radius: 4px;
         }
-        .console-time {
+        .console-time, .console-kind, .console-empty {
             color: var(--color-console-muted);
         }
-        .console-event-info .console-kind { color: var(--color-console-info); }
-        .console-event-success .console-kind { color: var(--color-console-success); }
-        .console-event-warning { color: var(--color-console-warning); }
-        .console-event-error { color: var(--color-console-error); }
-        .console-empty { color: var(--color-console-muted); }
+        .console-time { font-variant-numeric: tabular-nums; }
+        .console-message { overflow-wrap: anywhere; }
         .console-progress { height: var(--space-5); background: var(--color-console-border); }
         .console-progress-bar { background: var(--color-console-success); }
         @media (max-width: 768px) {
@@ -1190,13 +1186,12 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
 .pool-help-content { position: absolute; right: 0; top: 100%; z-index: 10; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-menu); padding: var(--space-5); }
 .pool-help-content { width: min(var(--pool-help-width), calc(100vw - var(--space-7) * 4)); font-size: var(--font-size-field); overflow-wrap: anywhere; }
 .pool-help-content p { margin: 0 0 var(--space-2); }
-.console-config { color: var(--color-console-info); margin-bottom: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-console-border); }
+.console-config { margin-bottom: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-console-border); }
 .console-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-3); }
 .console-settings span:first-child { grid-column: 1 / -1; }
 .console-colo { margin-left: auto; font-size: var(--font-size-xs); color: var(--color-text-muted); }
 .execution-dot { width: var(--space-2); height: var(--space-2); border-radius: 50%; background: currentColor; }
 .text-success { color: var(--color-success); }
-.console-time, .console-kind { flex-shrink: 0; }
 @media (max-width: 480px) {
   .pool-header h2 { font-size: var(--font-size-md); }
   .pool-footer-secondary, .pool-source-actions { width: 100%; }

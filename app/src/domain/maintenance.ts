@@ -85,7 +85,8 @@ export function orderCandidatesForAddition(
 export function decideCurrentResult(result: ProbeResult, target: ManagedTarget): MaintenanceDecision {
   if (result.status === 'unknown') return 'keep-unknown';
   if (result.status === 'dead') return 'remove-dead';
-  return probeMatchesTarget(result, target) ? 'active' : 'remove-mismatch';
+  if (probeMatchesTarget(result, target)) return 'active';
+  return result.code === 'PARTIAL_EXIT' ? 'keep-unknown' : 'remove-mismatch';
 }
 
 export function countActiveCurrent(current: readonly CurrentMaintenanceDecision[]): number {

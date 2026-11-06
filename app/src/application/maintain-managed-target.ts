@@ -1,6 +1,6 @@
 import { readPoolSnapshot } from '../domain/pool-snapshot';
 import { parseRuntimeSetting } from '../contracts/runtime-settings';
-import type { MaintenanceCandidateStats, MaintenanceDnsState } from '../contracts/maintenance';
+import type { MaintenanceCandidateStats, MaintenanceDnsState, MaintenanceLogLine } from '../contracts/maintenance';
 import { dnsRecordTypeForHost, formatProxyAuthority, parseProxyTarget } from '../domain/proxy-target';
 import { parseTxtAddresses } from '../domain/txt-record';
 import { activeValueForEntry, probeMatchesTarget, selectCandidateEntries, type ManagedTarget } from '../domain/managed-target';
@@ -54,23 +54,32 @@ export class MaintainManagedTarget {
     this.concurrency = parseRuntimeSetting('CONCURRENT_CHECKS', dependencies.concurrency);
   }
 
-  async execute(command: MaintainManagedTargetCommand): Promise<MaintenanceReport> {
-    const poolText = await this.dependencies.pools.load(command.poolKey);
-    const current = await this.probeCurrentRecords(command);
+  async execute(command: MaintainManagedTargetCommand, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceReport> {
+    const progress = onProgress && ((message: string) => onProgress({ message: command.target.domain + ' · ' + message, tone: 'info' }));
+    progress?.('读取库存和 DNS');
+    const [poolText, currentItems] = await Promise.all([
+      this.dependencies.pools.load(command.poolKey),
+      this.loadCurrentRecords(command),
+    ]);
+    const current = await this.probeCurrentRecords(currentItems, command.target, progress);
     const currentDecisions = current.map(item => ({ item, decision: decideCurrentResult(item.result, command.target) }));
     // 探针自身已经复检；同一轮补货不再重复探测当前 DNS 地址。
     const excluded = new Set(current.map(item => canonicalAddressKey(item.address)));
     const entries = parsePoolEntries(poolText);
     const candidates = selectCandidateEntries(entries, command.target, excluded);
-    const inspected = await this.probeCandidates(command.target, candidates, countActiveCurrent(currentDecisions));
+    const inspected = await this.probeCandidates(command.target, candidates, countActiveCurrent(currentDecisions), progress);
     const plan = buildMaintenancePlan({ target: command.target, current, candidates: inspected.items, poolText,
-      ...(inspected.stats.remaining > 0 && inspected.stats.checked >= MAX_CANDIDATE_PROBES
-        ? { rotateCandidates: inspected.items.filter(item => item.result.status === 'unknown').map(item => item.entry.address) } : {}),
+      ...(inspected.stats.remaining > 0 && (inspected.stats.checked >= MAX_CANDIDATE_PROBES || inspected.items.some(incompleteProbe))
+        ? { rotateCandidates: inspected.items.filter(item => item.result.status === 'unknown' && !incompleteProbe(item)).map(item => item.entry.address) } : {}),
     });
     const probeErrors = new Set(current.filter(item => isProbeErrorResult(item.result)).map(item => canonicalAddressKey(item.address))).size
       + inspected.items.filter(item => isProbeErrorResult(item.result)).length;
     const errors: string[] = [];
     let trashSaved = plan.trash.length === 0;
+    if (!trashSaved || plan.poolChanged || plan.additions.length
+      || plan.current.some(item => item.decision === 'remove-dead' || item.decision === 'remove-mismatch')) {
+      progress?.('核对并应用维护结果');
+    }
     if (plan.trash.length) {
       try {
         await this.dependencies.pools.addToTrash(plan.trash.map(item => ({ ...item, poolKey: command.poolKey })));
@@ -92,27 +101,32 @@ export class MaintainManagedTarget {
     };
   }
 
-  private async probeCurrentRecords(command: MaintainManagedTargetCommand): Promise<CurrentMaintenanceItem[]> {
-    let items: CurrentMaintenanceItem[];
+  private async loadCurrentRecords(command: MaintainManagedTargetCommand): Promise<CurrentMaintenanceItem[]> {
     if (command.target.mode === 'A') {
       const records = await this.dependencies.dns.listAddressRecords(command.zone, command.target.domain);
-      items = records.map(record => currentItemFromAddressRecord(record, command.target)).filter(isPresent);
-    } else {
-      const records = await this.dependencies.dns.listTxtRecords(command.zone, command.target.domain);
-      const record = records[0];
-      if (!record) return [];
-      items = parseTxtAddresses(record.content).map(address => currentItemFromTxtAddress(record, address, command.target)).filter(isPresent);
+      return records.map(record => currentItemFromAddressRecord(record, command.target)).filter(isPresent);
     }
+    const [record] = await this.dependencies.dns.listTxtRecords(command.zone, command.target.domain);
+    return record ? parseTxtAddresses(record.content).map(address => currentItemFromTxtAddress(record, address, command.target)).filter(isPresent) : [];
+  }
+
+  private async probeCurrentRecords(items: readonly CurrentMaintenanceItem[], target: ManagedTarget, progress?: (message: string) => void): Promise<CurrentMaintenanceItem[]> {
     const unique = new Map<string, CurrentMaintenanceItem>();
     for (const item of items) if (item.result.code !== 'INVALID_DNS_VALUE') unique.set(canonicalAddressKey(item.address), item);
-    const checked = await mapWithConcurrency([...unique], this.concurrency, async ([key, item]) =>
-      [key, await probeSafely(this.dependencies.probe, item, command.target)] as const);
+    if (unique.size) progress?.('开始检测当前解析 · ' + unique.size + ' 个地址');
+    let settled = 0;
+    const checked = await mapWithConcurrency([...unique], this.concurrency, async ([key, item]) => {
+      const result = await probeSafely(this.dependencies.probe, item, target);
+      settled++;
+      if (settled === 1 || settled % 4 === 0 || settled === unique.size) progress?.('当前解析已返回 ' + settled + '/' + unique.size);
+      return [key, result] as const;
+    });
     const results = new Map(checked);
     return items.map(item => item.result.code === 'INVALID_DNS_VALUE' ? item : ({ ...item, result: results.get(canonicalAddressKey(item.address))! }));
   }
 
   /** 缺额未满足时继续后续窗口；异常候选不使补货提前退出。 */
-  private async probeCandidates(target: ManagedTarget, candidates: readonly PoolEntry[], active: number): Promise<{
+  private async probeCandidates(target: ManagedTarget, candidates: readonly PoolEntry[], active: number, progress?: (message: string) => void): Promise<{
     items: readonly CandidateMaintenanceItem[]; stats: MaintenanceCandidateStats;
   }> {
     const needed = Math.max(0, target.minActive - active);
@@ -120,6 +134,7 @@ export class MaintainManagedTarget {
     const matched = new Set<string>();
     let checked = 0;
     const limit = Math.min(candidates.length, MAX_CANDIDATE_PROBES);
+    if (needed && limit) progress?.('开始检测补货候选 · 本目标最多 ' + limit + ' 个');
     while (needed > matched.size && checked < limit) {
       const missing = needed - matched.size;
       const size = Math.min(limit - checked, missing * CANDIDATE_EXPLORE_FACTOR + CANDIDATE_EXPLORE_EXTRA);
@@ -127,14 +142,19 @@ export class MaintainManagedTarget {
         const parsed = parseProxyTarget(entry.address, target.port ?? 443)!;
         const address = target.mode === 'A' && target.port ? formatProxyAuthority(parsed.host, target.port) : parsed.authority;
         const item = { entry, address, value: activeValueForEntry(entry, target) };
-        return { ...item, result: await probeSafely(this.dependencies.probe, item, target) };
+        const inspected = { ...item, result: await probeSafely(this.dependencies.probe, item, target) };
+        if (!incompleteProbe(inspected)) {
+          checked++;
+          progress?.('候选已检测 ' + checked + ' 个');
+        }
+        return inspected;
       });
-      checked += size;
       items.push(...batch);
       for (const item of batch) if (probeMatchesTarget(item.result, target)) matched.add(item.value);
+      if (batch.some(incompleteProbe)) break;
     }
     return { items: orderCandidatesForAddition(items, target), stats: { total: candidates.length, checked,
-      unknown: items.filter(item => item.result.status === 'unknown').length, remaining: candidates.length - checked } };
+      unknown: items.filter(item => item.result.status === 'unknown' && !incompleteProbe(item)).length, remaining: candidates.length - checked } };
   }
 
   private async applyDnsChanges(command: MaintainManagedTargetCommand, plan: MaintenancePlan, errors: string[], allowRemoval: boolean): Promise<{
@@ -206,6 +226,9 @@ async function probeSafely(probe: ProbeAdapter, item: Pick<CurrentMaintenanceIte
 }
 
 function parsePoolEntries(text: string) { return [...readPoolSnapshot(text).entries.values()].map(item => item.entry); }
+function incompleteProbe({ result }: Pick<CandidateMaintenanceItem, 'result'>): boolean {
+  return result.code === 'PROBE_BUDGET_EXHAUSTED' || result.code === 'SUBREQUEST_LIMIT';
+}
 function sameValues(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   const values = new Set(right);

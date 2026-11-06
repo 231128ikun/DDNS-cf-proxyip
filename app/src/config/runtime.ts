@@ -83,19 +83,43 @@ export function loadEnvConfig(env: RuntimeEnv): AppConfig {
 export interface ProbeAdapterDeps {
   readonly fetchImpl?: typeof fetch;
   readonly connect?: ProbeConnect;
+  readonly budget?: ReturnType<typeof createSubrequestBudget>;
+}
+
+/** 按一次调用累计，探测先停，给 DNS 和通知留出空间。 */
+export function createSubrequestBudget() {
+  let used = 0;
+  const take = (ceiling: number): boolean => {
+    if (used >= ceiling) return false;
+    used++;
+    return true;
+  };
+  const boundedFetch = (ceiling: number): typeof fetch => async (input, init) => {
+    if (!take(ceiling)) throw new Error('本轮外部请求预算已用尽');
+    return appFetch(input, { ...init, redirect: 'manual' });
+  };
+  return { takeProbeAttempt: () => take(36), rootsFetch: boundedFetch(36), dnsFetch: boundedFetch(44), notifyFetch: boundedFetch(48) };
 }
 
 /** 原生检测优先，失败时备用 API 复检；未配置备用时原生重试一次。 */
 export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAdapterDeps = {}): ProbeAdapter {
+  const budget = deps.budget ?? createSubrequestBudget();
+  let sockets: Promise<typeof import('cloudflare:sockets')> | undefined;
+  const connect: ProbeConnect = deps.connect ?? (async (address, options) => {
+    const api = await (sockets ??= import('cloudflare:sockets')).catch(() => { throw new TypeError('socket API unavailable'); });
+    return api.connect(address, options);
+  });
   const backup = config.endpoints.length ? new ExternalApiProbeAdapter({
     endpoints: config.endpoints,
     timeoutMs: config.timeoutMs,
     fallbackToNext: false,
-    fetchImpl: deps.fetchImpl ?? appFetch,
+    // 不自动跟随重定向，确保一次复检只用一个外部请求。
+    fetchImpl: deps.fetchImpl ?? ((input, init) => appFetch(input, { ...init, redirect: 'manual' })),
     onDiagnostic: diagnostic => console.warn('[probe-anomaly]', diagnostic),
   }) : undefined;
   return new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
-    connect: deps.connect ?? (async (address, options) => (await import('cloudflare:sockets')).connect(address, options)),
+    connect,
+    takeAttempt: budget.takeProbeAttempt, rootsFetch: budget.rootsFetch,
     ...(backup ? { backup } : {}),
   });
 }

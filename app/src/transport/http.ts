@@ -1,4 +1,5 @@
 import { toMaintenanceRunResponse } from '../application/maintenance-summary';
+import { MAINTENANCE_STREAM_TYPE, type MaintenanceLogLine, type MaintenanceStreamEvent } from '../contracts/maintenance';
 import type { CheckTarget, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
@@ -67,7 +68,7 @@ export interface HttpAppDependencies {
 
 /** 维护 runner 的窄接口：HTTP 层只负责触发，不接触 KV / Cloudflare 凭据。 */
 export interface MaintenanceRunner {
-  run(isManual: boolean): Promise<MaintenanceJobResult>;
+  run(isManual: boolean, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceJobResult>;
 }
 
 export interface ConfigGateway {
@@ -265,10 +266,11 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     });
   });
 
-  router.post('/api/maintenance/run', async () => {
+  router.post('/api/maintenance/run', async ({ request }) => {
     const maintenance = dependencies.maintenance;
     if (!maintenance) return errorResponse('maintenance unavailable', 503);
 
+    if (request.headers.get('Accept') === MAINTENANCE_STREAM_TYPE) return streamMaintenance(maintenance);
     const { run, notification } = await maintenance.run(true);
     return jsonResponse(toMaintenanceRunResponse(run, notification));
   });
@@ -389,6 +391,25 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
 }
 
 /** 把用例层的输入错误映射成 400，其余异常继续向上抛给统一错误处理。 */
+function streamMaintenance(maintenance: MaintenanceRunner): Response {
+  const encoder = new TextEncoder();
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: MaintenanceStreamEvent) => {
+        if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+      };
+      void maintenance.run(true, line => send({ type: 'progress', line })).then(({ run, notification }) => {
+        send({ type: 'result', result: toMaintenanceRunResponse(run, notification) });
+      }).catch(() => {
+        send({ type: 'error', message: '维护执行中断，未取得完成回执，请核对解析与库存' });
+      }).finally(() => { if (!cancelled) controller.close(); });
+    },
+    cancel() { cancelled = true; },
+  });
+  return new Response(body, { headers: { 'Content-Type': MAINTENANCE_STREAM_TYPE, 'Cache-Control': 'no-store, no-transform' } });
+}
+
 async function mapApplicationInputError(run: () => Promise<Response>): Promise<Response> {
   try {
     return await run();

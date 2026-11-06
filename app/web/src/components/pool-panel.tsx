@@ -165,13 +165,17 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     sidePending.current = true; setSideBusy(true);
     const controller = cleanController.current = new AbortController();
     setCleaning(true); model.message = '正在读取库存…';
-    log(`[洗库] 开始 · ${name}`);
+    log(`[洗库] 读取库存 · ${name}`);
     try {
       const result = await client.cleanPool(poolKey, controller.signal, event => {
         model.message = `检测中 ${event.completed}/${event.total} · 全部确认后写入`;
         render(value => value + 1);
         log(`[洗库] ${event.completed}/${event.total} · ${event.item.address} · ${formatProbeLog(event.item)}`, event.item.status === 'alive' ? 'success' : event.item.status === 'dead' ? 'error' : 'warning');
-      }, checkConcurrency);
+      }, checkConcurrency, () => {
+        model.message = '正在核对库存并提交清理…';
+        render(value => value + 1);
+        log('[洗库] 检测完成，正在核对库存并提交清理');
+      });
       model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
         : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}`;
       if (!result.skipped) {

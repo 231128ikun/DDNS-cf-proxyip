@@ -22,19 +22,19 @@ import { HttpRemotePoolSource } from './adapters/http/remote-pool-source';
 import { ResolveTarget } from './application/resolve-target';
 import { TargetStatus } from './application/target-status';
 import { TargetRecords } from './application/target-records';
-import { createProbeAdapterFromConfig, loadEnvConfig, type RuntimeEnv } from './config/runtime';
-import { toProbeConfig, type AppConfig, type ProbeConfig } from './contracts/config';
+import { createProbeAdapterFromConfig, createSubrequestBudget, loadEnvConfig, type RuntimeEnv } from './config/runtime';
+import { toProbeConfig, type AppConfig } from './contracts/config';
+import type { ProbeResult } from './domain/probe-result';
 import { runMaintenanceJob } from './jobs/maintenance-job';
 import type { MaintenanceSource } from './ports/maintenance-source';
-import type { ProbeAdapter } from './ports/probe';
 import { createHttpApp, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 
-export const APP_VERSION = '2026.11.05-20.47';
+export const APP_VERSION = '2026.11.06-11.21';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
 
-export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter = createProbeAdapterFromConfig): ExportedHandler<RuntimeEnv> {
+export function createWorker(createProbe: typeof createProbeAdapterFromConfig = createProbeAdapterFromConfig): ExportedHandler<RuntimeEnv> {
   const handler: ExportedHandler<RuntimeEnv> = {
     async fetch(request, env, executionContext): Promise<Response> {
       const url = new URL(request.url);
@@ -45,7 +45,7 @@ export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter 
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv, resolved.config) : null;
       const maintenance = kv && maintenanceSource
-        ? createMaintenanceRunner(kv, resolved.config, maintenanceSource)
+        ? createMaintenanceRunner(kv, resolved.config, maintenanceSource, createProbe)
         : null;
 
       const checkTarget = new CheckTarget({
@@ -96,7 +96,7 @@ export function createWorker(createProbe: (config: ProbeConfig) => ProbeAdapter 
       }
 
       const source = new KvMaintenanceSource(env.IP_DATA, resolved.config);
-      executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, source).run(false));
+      executionContext.waitUntil(createMaintenanceRunner(env.IP_DATA, resolved.config, source, createProbe).run(false));
     },
   };
 
@@ -136,18 +136,28 @@ export function createConfigService(env: RuntimeEnv, projectUrl?: string): Confi
 }
 
 /** 手动维护与 cron 共用的依赖装配，业务编排仍留在 `jobs/maintenance-job.ts`。 */
-export function createMaintenanceRunner(
+function createMaintenanceRunner(
   kv: KVNamespace,
   config: AppConfig,
   source?: MaintenanceSource,
+  createProbe = createProbeAdapterFromConfig,
 ): MaintenanceRunner {
   const maintenanceSource = source ?? new KvMaintenanceSource(kv, config);
   const stats = new KvMaintenanceStatsRepository(kv, new KvPoolCatalog(kv));
+  const budget = createSubrequestBudget();
+  const probe = createProbe(toProbeConfig(config), { budget });
+  const confirmed = new Map<string, ProbeResult>();
   const maintainer = new MaintainManagedTargets({
     maintainer: new MaintainManagedTarget({
-      probe: createProbeAdapterFromConfig(toProbeConfig(config)),
+      probe: { name: probe.name, async probe(target) {
+        const known = confirmed.get(target.key);
+        if (known) return known;
+        const result = await probe.probe(target);
+        if (result.status !== 'unknown' && result.code !== 'PARTIAL_EXIT') confirmed.set(target.key, result);
+        return result;
+      } },
       pools: new KvPoolRepository(kv, { maxTrashSize: config.settings.MAX_TRASH_SIZE }),
-      dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS }),
+      dns: new CloudflareDnsRepository({ timeoutMs: DNS_TIMEOUT_MS, fetchImpl: budget.dnsFetch }),
       concurrency: config.settings.CONCURRENT_CHECKS,
     }),
   });
@@ -155,10 +165,11 @@ export function createMaintenanceRunner(
     enabled: config.tgEnabled,
     token: config.tgToken,
     chatId: config.tgId,
+    fetchImpl: budget.notifyFetch,
   });
 
   return {
-    run: async (isManual) => {
+    run: async (isManual, onProgress) => {
       const result = await runMaintenanceJob({
       source: maintenanceSource,
       maintainer,
@@ -167,8 +178,9 @@ export function createMaintenanceRunner(
       fallbackZone: { zoneId: config.zoneId, apiToken: config.apiKey },
       isManual,
       projectUrl: config.projectUrl,
+      ...(onProgress ? { onProgress } : {}),
       });
-      for (const target of result.run.results) console.info('[maintenance]', maintenanceDisplayLines(toMaintenanceTargetResult(target)).join('\n'));
+      for (const target of result.run.results) console.info('[maintenance]', maintenanceDisplayLines(toMaintenanceTargetResult(target)).map(line => line.message).join('\n'));
       const notification = notificationDisplay(result.notification);
       if (notification) console.info('[notification]', notification);
       return result;

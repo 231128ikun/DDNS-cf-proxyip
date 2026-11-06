@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { RuntimeEnv } from '../../src/config/runtime';
+import { createProbeAdapterFromConfig, type RuntimeEnv } from '../../src/config/runtime';
 import { APP_VERSION, createWorker } from '../../src/worker';
 import { ApiClient } from '../../web/src/api/client';
 
@@ -14,12 +14,91 @@ const context = {
   passThroughOnException: () => undefined,
 } as unknown as ExecutionContext;
 
-async function request(path: string, init?: RequestInit, runtimeEnv: RuntimeEnv = env): Promise<Response> {
+async function request(path: string, init?: RequestInit, runtimeEnv: RuntimeEnv = env, worker = createWorker()): Promise<Response> {
   const input = new Request(`https://panel.example${path}`, init) as Parameters<NonNullable<ExportedHandler<RuntimeEnv>['fetch']>>[0];
-  return await createWorker().fetch!(input, runtimeEnv, context);
+  return await worker.fetch!(input, runtimeEnv, context);
 }
 
 describe('发布 Worker 装配', () => {
+  it.each(['platform', 'budget'] as const)('safely maintains an 89-address pool when probes reach the %s limit', async limit => {
+    const current = '203.0.113.1:443';
+    const second = '203.0.113.100:443';
+    const inventory = Array.from({ length: 89 }, (_, index) => `203.0.113.${index + 1}:443,null,null,null # 备注 ${index + 1}`);
+    const trash = '198.51.100.2:443,null,null,null # 原有备注';
+    const store = new Map([
+      ['app_config', JSON.stringify({ tgEnabled: true, tgToken: 'test-notifier', tgId: 'test-chat', checkApiBackup: '',
+        zones: [{ baseDomain: 'example.com', zoneId: 'test-zone', apiKey: 'test-token' }],
+        targets: [{ domain: 'one.example.com', mode: 'TXT', zoneIndex: 0, minActive: 1 },
+          { domain: 'two.example.com', mode: 'A', zoneIndex: 0, minActive: 1 },
+          { domain: 'three.example.com', mode: 'A', zoneIndex: 0, minActive: 0 }] })],
+      ['ip_pool_default', inventory.join('\n')], ['ip_pool_trash', trash],
+    ]);
+    const kv = { get: async (key: string) => store.get(key) ?? null,
+      list: async () => ({ keys: [], list_complete: true }),
+      put: async (key: string, value: string) => { store.set(key, value); } } as unknown as KVNamespace;
+    const connect = vi.fn(() => { throw new Error(limit === 'platform'
+      ? 'Too many subrequests by single Worker invocation.' : 'connection refused'); });
+    const dnsWrites: string[] = [];
+    const notify = vi.fn();
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.telegram.org') {
+        notify();
+        return Response.json({ ok: true });
+      }
+      expect(url.hostname).toBe('api.cloudflare.com');
+      if (init?.method === 'DELETE') {
+        dnsWrites.push(url.pathname.split('/').at(-1)!);
+        return Response.json({ success: true, result: {} });
+      }
+      const type = url.searchParams.get('type');
+      if (type === 'TXT') await readGate;
+      const name = url.searchParams.get('name');
+      const shared = name === 'three.example.com';
+      const result = type === 'AAAA' ? [] : [{ id: type === 'TXT' ? 'txt-current' : shared ? 'a-shared' : 'a-current', type, name,
+        content: type === 'TXT' ? `"${current}"` : shared ? '203.0.113.1' : '203.0.113.100' }];
+      return Response.json({ success: true, result });
+    }));
+    try {
+      const worker = createWorker((config, deps) => createProbeAdapterFromConfig(config, { ...deps, connect }));
+      const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { IP_DATA: kv }, worker) });
+      const progress: string[] = [];
+      const run = await client.runMaintenance(undefined, line => {
+        progress.push(line.message);
+        if (progress.length === 1) {
+          expect(notify).not.toHaveBeenCalled();
+          expect(connect).not.toHaveBeenCalled();
+          releaseRead();
+        }
+      });
+      expect(progress[0]).toBe('one.example.com · 读取库存和 DNS');
+      expect(progress).toContain('one.example.com · 当前解析已返回 1/1');
+      expect(progress.at(-1)).toBe('处理维护通知');
+      expect(run.notification).toMatchObject({ sent: true });
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(run.results[1]!.dns?.after).toEqual([second.split(':')[0]]);
+      const code = limit === 'platform' ? 'SUBREQUEST_LIMIT' : 'PROBE_BUDGET_EXHAUSTED';
+      expect(run.results[0]!.candidateErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code })]));
+      expect(run.results[0]!.candidates?.remaining).toBeGreaterThan(70);
+      if (limit === 'platform') {
+        expect(dnsWrites).toEqual([]);
+        expect(run.results[0]!.dns?.after).toEqual([current]);
+        expect(store.get('ip_pool_trash')).toBe(trash);
+        expect(store.get('ip_pool_default')).toBe(inventory.join('\n'));
+        expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
+      } else {
+        expect(connect).toHaveBeenCalledTimes(35); // TXT 读取也占用共享预算。
+        expect(dnsWrites).toEqual(['txt-current', 'a-shared']);
+        expect(run.results[2]!.dns?.after).toEqual([]); // 另一条记录沿用本轮已复检的结果。
+        expect(store.get('ip_pool_trash')).toContain(trash);
+        expect(store.get('ip_pool_trash')).toContain(current + ',null,null,null # 维护失效');
+        expect(store.get('ip_pool_default')).toContain(inventory.at(-1));
+      }
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it.each([
     ['203.0.113.10:443 # 旧备注', '203.0.113.10:443,null,null,null # 旧备注'],
     ['203.0.113.10:443,AS64500 # 旧备注', '203.0.113.10:443,AS64500,null,null # 旧备注'],
