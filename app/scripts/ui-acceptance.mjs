@@ -70,7 +70,7 @@ try {
     await read('window.__confirmAnswer = true; window.confirm = () => window.__confirmAnswer');
     assert.equal(await read('Boolean(document.querySelector("#pool-editor, [data-action=overwrite-input], [data-action=manage-inventory]"))'), false);
     assert.ok(await read('document.querySelector("#ip-input").placeholder.includes("[2001:db8::1]:8443")'));
-    assert.ok(await read('document.querySelector(".console-config").tagName === "DIV" && document.querySelector(".console-settings").textContent.includes("并发")'));
+    assert.ok(await read('document.querySelector(".console-config:not([open])") && document.querySelector(".console-settings").textContent.includes("并发")'));
     assert.equal(await read('Boolean(document.querySelector(".pool-source-actions .pool-help"))'), false);
     assert.ok(await read('document.querySelector(".dashboard-pool-card h2").textContent.includes("IP池管理") && document.querySelector(".dashboard-console-card h2").textContent.includes("控制台日志")'));
     assert.ok(await read('document.querySelector(".console-colo").textContent.includes("NRT")'));
@@ -217,9 +217,11 @@ try {
     const bigStart = server.requests.length;
     await openClean();
     await until('document.querySelector(".pool-feedback")?.textContent.includes("/216")');
+    assert.ok(await read('document.querySelector(".console-run")?.textContent.includes("/ 216")'));
     assert.ok(await read('Boolean(document.querySelector("[data-action=stop-clean]")) && document.querySelector(".dashboard-console-card > button").disabled'));
     await capture('clean-stream-' + width, '.dashboard-console-card');
     await until('document.querySelector(".pool-feedback")?.textContent.includes("保留 216") && !document.querySelector("[data-action=stop-clean]")');
+    assert.ok(await read('!document.querySelector(".console-run") && document.querySelector("#log-window").textContent.includes("node-0.example:443")'));
     assert.equal(server.requests.slice(bigStart).filter(item => item.path.endsWith('/clean')).length, 1);
     const bigRequests = server.requests.slice(bigStart);
     const checked = bigRequests.filter(item => item.path === '/api/check');
@@ -246,7 +248,15 @@ try {
     server.fixture.probeErrors['203.0.113.77:443'] = { status:'dead', code:'TARGET_TLS_ERROR', message:'候选 TLS 失败' };
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-success") && document.querySelector("#log-window").textContent.includes("候选 TLS 失败")');
-    assert.ok(await read('[...document.querySelectorAll(".console-event-error")].some(row => row.textContent.includes("[TARGET_TLS_ERROR]") && row.querySelector(".console-outcome")?.textContent === "失效")'));
+    const failure = '[...document.querySelectorAll("details.console-event-error")].find(row => row.textContent.includes("[TARGET_TLS_ERROR]"))';
+    assert.ok(await read(`(() => {const row = ${failure}; const summary = row?.querySelector("summary");
+      return summary && !row.open && summary.textContent.includes("TLS 验证失败") && !summary.textContent.includes("[TARGET_TLS_ERROR]") &&
+        [summary, ...summary.children].every(part => getComputedStyle(part).color === getComputedStyle(row).color)})()`));
+    await read(`(${failure}).querySelector("summary").click()`);
+    assert.ok(await read(`(${failure}).open && (${failure}).querySelector(".console-detail").getBoundingClientRect().height > 0`));
+    await read(`(${failure}).scrollIntoView({block:"nearest"})`);
+    await capture('console-detail-' + width, '.dashboard-console-card');
+    await read(`(${failure}).querySelector("summary").click(); document.querySelector("#log-window").scrollTop = document.querySelector("#log-window").scrollHeight`);
     server.fixture.probeErrors['203.0.113.77:443'] = { code:'PROBE_API_ERROR', message:'检测接口异常' };
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
@@ -266,9 +276,6 @@ try {
         return source.textContent === "维护" && source.title === ${JSON.stringify(label)} && row.textContent.includes(${JSON.stringify(message)});
       })`), true);
     }
-    const outcomes = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
-      row => [...row.querySelectorAll(".console-outcome")].map(token => token.textContent))`);
-    assert.deepEqual(outcomes, ['可用', '候选异常', '执行失败']);
     const logAddresses = await read(`[...document.querySelectorAll("#log-window .console-event")].slice(-5).flatMap(
       row => [...row.querySelectorAll(".syntax-address")].map(address => [address.textContent, address.querySelector(".syntax-number")?.textContent ?? null]))`);
     assert.deepEqual(logAddresses, [['proxy.example.com', null], ['203.0.113.10:443', ':443'], ['[2001:db8::1]:8443', ':8443']]);
@@ -292,6 +299,7 @@ try {
     assert.equal(await read('Boolean(document.querySelector(".version-notes"))'), false, 'Hover opens version history');
     await click('#version-trigger');
     await until('Boolean(document.querySelector("dialog[open] .version-notes li"))');
+    await until('document.querySelector(".version-notes").getAnimations().length === 0');
     assert.equal(await read('document.querySelector(".version-notes").getBoundingClientRect().left < 0 || document.querySelector(".version-notes").getBoundingClientRect().right > innerWidth'), false);
     await click('.version-notes > button');
     await until('!document.querySelector(".version-notes") && document.activeElement.id === "version-trigger"');
