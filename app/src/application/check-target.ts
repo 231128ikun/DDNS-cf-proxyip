@@ -1,6 +1,7 @@
 import { parseRuntimeSetting } from '../contracts/runtime-settings';
 import type { ProbeResult } from '../domain/probe-result';
-import { parseProxyTarget } from '../domain/proxy-target';
+import { hasExplicitProxyPort, parseProxyTarget } from '../domain/proxy-target';
+import { parsePoolText } from '../domain/pool-entry';
 import type { ProbeContext } from '../ports/probe';
 import { mapWithConcurrency } from '../util/concurrency';
 import type { CheckProxy } from './check-proxy';
@@ -50,11 +51,17 @@ export class CheckTarget {
   }
 
   async execute(input: string, context: ProbeContext = {}): Promise<CheckTargetOutcome> {
-    const value = input.trim();
+    const original = input.trim();
+    let value = original;
+    if (!needsDnsResolution(value) && !parseProxyTarget(value, 443)) {
+      const lines = parsePoolText(value).filter(line => !line.raw.startsWith('#'));
+      if (lines.length !== 1 || !lines[0]?.entry) return { ok: false, message: '请输入一个有效的 IP、域名和可选端口' };
+      value = lines[0].entry.address;
+    }
     if (needsDnsResolution(value)) {
       const resolved = await this.dependencies.resolver.execute(value, context);
       if (!resolved.ok) return resolved;
-      return await this.probeAll(value, resolved.source, context);
+      return await this.probeAll(original, resolved.source, context);
     }
 
     const target = parseProxyTarget(value, 443);
@@ -62,7 +69,7 @@ export class CheckTarget {
     const result = await this.dependencies.checkProxy.execute(target.authority, context);
     return {
       ok: true,
-      report: { input: value, source: { kind: 'direct' }, items: [{ address: target.authority, result }], skipped: [] },
+      report: { input: original, source: { kind: 'direct' }, items: [{ address: target.authority, result }], skipped: [] },
     };
   }
 
@@ -99,7 +106,7 @@ export class CheckTarget {
  * 只有"看起来是域名、又没有显式端口"的输入才做 DNS 解析：
  * IP 字面量、URL、`example.com:8443` 都按字面目标探测。
  */
-function needsDnsResolution(input: string): boolean {
+export function needsDnsResolution(input: string): boolean {
   const value = input.trim();
   if (!value || value.length > 253) return false;
   if (isTxtTarget(value)) return true;
@@ -107,12 +114,6 @@ function needsDnsResolution(input: string): boolean {
 
   const family = parseProxyTarget(value, 443)?.family;
   if (family === 'ipv4' || family === 'ipv6') return false;
-  if (hasExplicitPort(value)) return false;
+  if (hasExplicitProxyPort(value)) return false;
   return isDnsName(value);
-}
-
-function hasExplicitPort(value: string): boolean {
-  if (/^\[[^\]]+\]:\d{1,5}$/.test(value)) return true;
-  const lastColon = value.lastIndexOf(':');
-  return lastColon !== -1 && /^\d{1,5}$/.test(value.slice(lastColon + 1).trim());
 }

@@ -1,5 +1,5 @@
 import type { ProbeResult } from './probe-result';
-import { parseProxyTarget, type ProxyTarget } from './proxy-target';
+import { hasExplicitProxyPort, parseProxyTarget, type ProxyTarget } from './proxy-target';
 
 export type PoolStack = 'v4' | 'v6' | 'v4/v6';
 
@@ -42,7 +42,7 @@ export function parsePoolText(text: string): PoolLine[] {
 }
 
 interface LoosePoolEntryDraft {
-  readonly address: string;
+  address: string;
   readonly fields: string[];
 }
 
@@ -63,7 +63,7 @@ function splitPoolChunks(line: string): string[] {
       inComment = false;
       continue;
     }
-    if (inComment || (char !== ';' && char !== '；' && char !== '\t')) continue;
+    if (inComment || (char !== ';' && char !== '；')) continue;
     chunks.push(line.slice(start, index));
     start = index + 1;
   }
@@ -75,7 +75,9 @@ function normalizeLooseEntryChunk(chunk: string): string[] {
   const commentIndex = chunk.indexOf('#');
   const body = (commentIndex >= 0 ? chunk.slice(0, commentIndex) : chunk).trim();
   const comment = commentIndex >= 0 ? chunk.slice(commentIndex).trim() : '';
-  const tokens = body.split(/[,\uFF0C\s]+/).map((token) => token.trim()).filter(Boolean);
+  // \u9017\u53F7\u7A7A\u5B57\u6BB5\u4FDD\u7559\u4F4D\u7F6E\uFF1B\u7A7A\u767D\u540E\u7684\u7AEF\u53E3\u5148\u4EA4\u7ED9\u7EDF\u4E00\u5730\u5740\u89E3\u6790\u5668\u8BC6\u522B\u3002
+  const tokens = body.split(/[,\uFF0C]/).flatMap(column => column.trim().split(/\s+/)
+    .map((value, index) => ({ value, space: index > 0 })));
   if (tokens.length === 0) return comment ? [comment] : [];
 
   const drafts: LoosePoolEntryDraft[] = [];
@@ -87,7 +89,7 @@ function normalizeLooseEntryChunk(chunk: string): string[] {
     invalid.push(invalidBuffer.join(' '));
     invalidBuffer.length = 0;
   };
-  for (const token of tokens) {
+  for (const { value: token, space } of tokens) {
     if (!current) {
       if (isLooseAddressToken(token) && parseProxyTarget(token, 443)) {
         flushInvalid();
@@ -99,7 +101,20 @@ function normalizeLooseEntryChunk(chunk: string): string[] {
       continue;
     }
 
-    if (isPoolMetadataToken(token) && current.fields.length < 3) {
+    if (space && current.fields.length === 0 && /^\d+$/.test(token) && !/^https?:\/\//i.test(current.address)) {
+      const combined = current.address + ' ' + token;
+      const paired = parseProxyTarget(combined);
+      if (paired) {
+        current.address = paired.authority;
+        continue;
+      }
+      // 非法空白端口不能静默变成 ASN；已有显式端口后仍按元数据读取。
+      if (!hasExplicitProxyPort(current.address)) {
+        current.address = combined;
+        continue;
+      }
+    }
+    if ((!token || isPoolMetadataToken(token)) && current.fields.length < 3) {
       current.fields.push(token);
       continue;
     }
