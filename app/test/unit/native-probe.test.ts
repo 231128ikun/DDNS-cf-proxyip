@@ -15,7 +15,7 @@ function http(body: string, headers = ''): Uint8Array {
 }
 function connector(response: (host: string) => Uint8Array | Error = host => http(JSON.stringify({
   ip: host.includes('ipv6') ? '2001:db8::42' : '198.51.100.42', asn: 64500, country: 'jp', colo: ' icn ',
-}))) {
+})), keepOpen = false) {
   const writes: string[] = [], hosts: string[] = [], closes: ReturnType<typeof vi.fn>[] = [];
   const connect = vi.fn((_address: SocketAddress, _options: SocketOptions): ProbeSocket => {
     const close = vi.fn(async () => {}); closes.push(close);
@@ -28,7 +28,7 @@ function connector(response: (host: string) => Uint8Array | Error = host => http
         const value = response(host);
         return { ...socket, readable: new ReadableStream({ start(controller) {
           if (value instanceof Error) controller.error(value);
-          else { controller.enqueue(value); controller.close(); }
+          else { controller.enqueue(value.subarray(0, 24)); controller.enqueue(value.subarray(24)); if (!keepOpen) controller.close(); }
         } }) } as Socket;
       },
     };
@@ -92,6 +92,26 @@ describe('native candidate probe', () => {
     const io = connector(() => http(`${encode(body).length.toString(16)};name=value\r\n${body}\r\n0\r\n\r\n`, 'Transfer-Encoding: chunked\r\n'));
     expect(await new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect }).probe(target))
       .toMatchObject({ status: 'alive', exitFamily: 'ipv4', exits: [{ organization: '网络' }] });
+  });
+
+  it.each(['fixed', 'chunked'] as const)('completes a %s response even when the peer leaves the socket open', async framing => {
+    const body = '{"ip":"198.51.100.42","asOrganization":"网络"}';
+    const size = encode(body).length;
+    const io = connector(() => framing === 'fixed' ? http(body, 'Content-Length: ' + size + '\r\n')
+      : http(`${size.toString(16)}\r\n${body}\r\n0\r\nX-Trace: done\r\n\r\n`, 'Transfer-Encoding: chunked\r\n'), true);
+    expect(await new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect }).probe(target))
+      .toMatchObject({ status: 'alive', exitIp: '198.51.100.42' });
+    expect(io.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a socket quota failure unknown and stops further work in that invocation', async () => {
+    const connect = vi.fn(() => { throw new Error('connect failed', { cause: new Error('Too many subrequests by single Worker invocation.') }); });
+    const backup = { name: 'backup', probe: vi.fn(async () => dead(target)) };
+    const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect, backup });
+    expect(await probe.probe(target)).toMatchObject({ status: 'unknown', code: 'SUBREQUEST_LIMIT' });
+    expect(await probe.probe(target)).toMatchObject({ status: 'unknown', code: 'SUBREQUEST_LIMIT' });
+    expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(backup.probe).not.toHaveBeenCalled();
   });
 
   it('keeps the real exit family instead of assuming a URL name implies IPv6', async () => {
