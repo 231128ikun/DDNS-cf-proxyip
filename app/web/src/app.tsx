@@ -11,6 +11,7 @@ import {
   DashboardPage,
   type ConsoleLogEntry,
   type ConsoleTone,
+  type WashProgress,
   type DashboardActions,
   type PoolActionKey,
 } from './components/dashboard-page';
@@ -26,7 +27,7 @@ import type { RequestState } from './state/request-state';
 import { useResource } from './state/use-resource';
 import { loadTargetStatus, type TargetStatusView } from './state/target-status';
 import { useBatchCheck } from './state/use-batch-check';
-import { formatProbeLog } from './components/probe-log';
+import { logMaintenance, logProbe } from './components/probe-log';
 import { executionStatus } from './state/execution-status';
 import { currentTheme, cycleTheme } from './state/theme';
 
@@ -85,14 +86,17 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     setToast({ message, type });
   }, []);
 
-  const appendConsoleLog = useCallback((message: string, tone: ConsoleTone = 'info'): void => {
+  const [washProgress, setWashProgress] = useState<WashProgress | null>(null);
+  const appendConsoleLog = useCallback((message: string, tone: ConsoleTone = 'info', detail?: string, startup?: 'ready'): void => {
     const entry: ConsoleLogEntry = {
       id: ++logSequence.current,
       time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
       tone,
       message,
+      ...(startup ? { startup } : {}),
+      ...(detail ? { detail } : {}),
     };
-    setConsoleLogs((current) => [...current.slice(-199), entry]);
+    setConsoleLogs((current) => [...current.slice(-399), entry]);
   }, []);
 
   const resetLookup = useCallback((): void => {
@@ -206,6 +210,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     if (config.status === 'loading' || config.status === 'idle') return;
     setConsoleLogs(current => current.map(entry => entry.id !== 0 ? entry : { ...entry,
       tone: config.status === 'ready' ? 'success' : 'error',
+      startup: config.status === 'ready' ? 'config' : false,
       message: config.status === 'ready' ? '[配置] 已加载' + (config.data.source === 'kv' ? ' KV 配置' : '环境配置')
         : '[配置] 加载失败：' + config.message,
     }));
@@ -219,7 +224,8 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       : targetChoices.length ? '[系统] 就绪' : '未设置维护域名，请在配置中心添加';
     if (message === startupLogged.current) return;
     startupLogged.current = message;
-    appendConsoleLog(message, failed || !targetChoices.length ? 'warning' : 'success');
+    const ready = !failed && targetChoices.length > 0;
+    appendConsoleLog(message, ready ? 'success' : 'warning', undefined, ready ? 'ready' : undefined);
   }, [appendConsoleLog, config, health, pools, bindings, targetChoices]);
 
   const runPoolAction = useCallback(async (key: PoolActionKey, task: () => Promise<string>): Promise<void> => {
@@ -255,8 +261,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
         if (controller.signal.aborted || activeLookup.current !== controller) return;
         setCheck({ status: 'ready', data });
         for (const item of data.items) {
-          appendConsoleLog('[探测] ' + item.address + ' · ' + formatProbeLog(item.result),
-            item.result.status === 'dead' ? 'error' : item.result.status === 'unknown' || item.result.diagnostics?.length ? 'warning' : 'success');
+          logProbe(appendConsoleLog, '探测', item.address, item.result);
         }
         const statuses = data.items.reduce((counts, item) => {
           counts[item.result.status] += 1;
@@ -494,7 +499,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       .then((data) => {
         for (const item of data.results) {
           const lines = item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')];
-          lines.forEach((line, index) => appendConsoleLog('[维护] ' + line, item.lineTones?.[index] ?? (item.error ? 'error' : 'info')));
+          lines.forEach((line, index) => logMaintenance(appendConsoleLog, line, item.lineTones?.[index] ?? (item.error ? 'error' : 'info')));
         }
         const notification = data.notificationMessage;
         if (notification) appendConsoleLog('[通知] ' + notification, data.notification?.sent ? 'success' : data.notification?.reason === 'failed' ? 'error' : 'info');
@@ -560,11 +565,12 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
                 containerBusy={poolBusy !== null || maintenanceBusy} refreshPools={() => void refreshPools()}
               onPoolCount={(key, count) => patchPools(current => ({ pools: current.pools.map(pool => pool.key === key ? { ...pool, count } : pool) }))} batch={batchState}
                 configReady={config.status === 'ready'} checkConcurrency={webCheckConcurrency} bindingsReady={bindings.status === 'ready'} probeConfigured={config.status !== 'ready' || Boolean(config.data.config.probeIpv4Url || config.data.config.probeIpv6Url || config.data.config.checkApiBackup)}
-                leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} onWriteBusy={setPoolWriteBusy} />}
+                leaveGuard={poolLeaveGuard} containerChanged={poolContainerChanged} log={appendConsoleLog} onWashProgress={setWashProgress} onWriteBusy={setPoolWriteBusy} />}
             check={check}
             batch={batch}
             lookup={lookup}
             consoleLogs={consoleLogs}
+            washProgress={washProgress}
             batchProgressState={batchProgressState}
             targetStatus={targetStatus}
             bindings={bindings}
