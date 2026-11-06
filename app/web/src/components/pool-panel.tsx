@@ -27,7 +27,7 @@ interface PoolPanelProps {
   readonly onPoolCount: (key: string, count: number) => void;
   readonly batch: ReturnType<typeof useBatchCheck>;
   readonly configReady: boolean;
-  readonly checkConcurrency: number | 'all';
+  readonly checkConcurrency: number;
   readonly bindingsReady: boolean;
   readonly probeConfigured: boolean;
   readonly leaveGuard: { current: () => boolean };
