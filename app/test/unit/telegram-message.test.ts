@@ -28,9 +28,9 @@ describe('Telegram maintenance message', () => {
   it.each([
     { insufficient: true }, { errors: ['DNS 更新失败'] }, { probeErrors: 1 },
   ])('labels a failure without DNS changes as an alert: %j', failure => {
-    const message = buildTelegramMaintenanceMessage({ ...run, ...failure }, { isManual: false });
-    expect(message).toContain('DDNS 自动维护告警');
-    expect(message).not.toContain('DDNS 自动维护报告');
+    const message = buildTelegramMaintenanceMessage({ ...run, ...failure }, { isManual: true });
+    expect(message).toContain('DDNS 手动维护告警');
+    expect(message).not.toContain('DDNS 手动维护报告');
   });
 
   it('keeps the link out of scheduled reports', () => {

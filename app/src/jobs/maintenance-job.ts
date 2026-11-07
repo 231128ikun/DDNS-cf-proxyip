@@ -59,7 +59,8 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
     },
   };
 
-  if (!shouldNotifyMaintenance(run)) return { run, notification: null };
+  const notify = options.isManual ? shouldNotifyMaintenance(run) : run.changed;
+  if (!notify) return { run, notification: null };
 
   options.signal?.throwIfAborted();
   options.onProgress?.({ message: '处理维护通知', tone: 'info' });

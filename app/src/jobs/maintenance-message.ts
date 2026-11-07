@@ -15,7 +15,7 @@ export interface TelegramMaintenanceMessageOptions {
 
 /** 完整列出各域名确认的解析地址；长报告由通知适配器按完整行分段。 */
 export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, options: TelegramMaintenanceMessageOptions): string {
-  const alert = !run.changed && shouldNotifyMaintenance(run);
+  const alert = options.isManual && !run.changed && shouldNotifyMaintenance(run);
   const title = `DDNS ${options.isManual ? '手动' : '自动'}维护${alert ? '告警' : '报告'}`;
   const lines = [
     (options.isManual ? '🔧' : '⚙️') + ' <b>' + title + '</b>',
