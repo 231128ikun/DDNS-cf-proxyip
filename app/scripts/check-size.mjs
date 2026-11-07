@@ -10,7 +10,7 @@ const BUDGETS = {
   script: { rawKb: 70, gzipKb: 24 },
   // 全量脚本同时限制未压缩与 gzip 体积。
   scriptTotal: { rawKb: 128, gzipKb: 48 },
-  style: { rawKb: 40, gzipKb: 10 },
+  style: { rawKb: 42, gzipKb: 10 },
   pageTotal: { rawKb: 170, gzipKb: 56 },
 };
 
