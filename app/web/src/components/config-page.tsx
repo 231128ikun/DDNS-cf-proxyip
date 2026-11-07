@@ -32,11 +32,12 @@ interface ConfigPageProps {
   readonly notify: (message: string, type?: 'success' | 'error') => void;
   readonly config: RequestState<ConfigResponse>;
   readonly onReload: (signal?: AbortSignal) => Promise<boolean>;
-  readonly onSaved: (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>) => void;
+  readonly onSaved: (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>, mapping: Readonly<Record<string, string>>) => void;
   readonly pools: RequestState<PoolsResponse>;
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly bindingBusy: boolean;
   readonly onBindPool: (key: string, poolKey: string) => void;
+  readonly onSaveBindings: (mapping: Readonly<Record<string, string>>) => Promise<void>;
   readonly onReloadBindings: () => void;
   readonly onOpenBindingOrder: () => void;
 }
@@ -56,9 +57,10 @@ interface TargetEditor {
   readonly aPort: number;
 }
 
-/** 草稿行保留原 key，删除前项或改名不会把选择移到另一行；保存请求剔除此字段。 */
+/** 原 key 稳定关联池选择；本地字段不进入配置请求。 */
 interface TargetDraft extends TargetConfig {
   readonly sourceKey: string | null;
+  readonly pendingPoolKey: string | null;
 }
 
 interface ConfigForm {
@@ -87,7 +89,7 @@ const SECRET_LABELS: Readonly<Record<SecretKey, string>> = {
   tgToken: 'TG Bot Token',
 };
 const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string, string])[] = [
-  ['CONCURRENT_CHECKS', '检测并发', '控制手动批量检测、域名探测、洗库与维护补货；1–128。解析实况全并发。', 'cfg-concurrent-checks'],
+  ['CONCURRENT_CHECKS', '检测并发', '同时检测的地址数；默认 8，建议 4–16。批检、解析实况与维护共用，增大不能突破单次调用资源限制。', 'cfg-concurrent-checks'],
   ['CHECK_TIMEOUT', '检测超时(ms)', '原生候选连接超时；复检仍失败才清理。备用 API 请求超时不清理。', 'cfg-check-timeout'],
   ['REMOTE_LOAD_TIMEOUT', '远程加载超时(ms)', '远程 TXT URL 加载。', 'cfg-remote-timeout'],
   ['DOH_TIMEOUT', 'DoH超时(ms)', 'DNS over HTTPS 查询。', 'cfg-doh-timeout'],
@@ -96,8 +98,11 @@ const SETTINGS_FIELDS: readonly (readonly [keyof RuntimeSettings, string, string
 ];
 
 export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, config: load, onReload, onSaved, pools, bindings, bindingBusy,
-  onBindPool, onReloadBindings, onOpenBindingOrder }: ConfigPageProps) {
+  onBindPool, onSaveBindings, onReloadBindings, onOpenBindingOrder }: ConfigPageProps) {
   const applied = useRef<ConfigResponse | null>(null);
+  const savePending = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const saveBusy = saving || submitting;
   // 已落库基线用于提示是否有未保存改动，并控制保存/还原按钮状态。
   const [baseline, setBaseline] = useState('');
   const [form, setForm] = useState<ConfigForm | null>(null);
@@ -109,11 +114,12 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   const [zoneError, setZoneError] = useState('');
   const [targetError, setTargetError] = useState('');
 
-  const applyResponse = useCallback((response: ConfigResponse): void => {
+  const applyResponse = useCallback((response: ConfigResponse, pendingPools: Readonly<Record<string, string>> = {}): void => {
     const nextForm = formFromConfig(response.config);
     applied.current = response;
-    setForm(nextForm);
-    // 基线跟着刚落库的响应走：保存或重载之后"未保存改动"必须重新归零。
+    setForm({ ...nextForm, targets: nextForm.targets.map(target => ({ ...target,
+      pendingPoolKey: pendingPools[target.sourceKey!] ?? null })) });
+    // 配置回执是落库基线；未确认的池选择仍保留为草稿。
     setBaseline(snapshot(nextForm, EMPTY_DRAFTS));
     setSecrets(response.config.secrets);
     setDrafts(EMPTY_DRAFTS);
@@ -128,6 +134,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   const retried = useRef(false);
   useEffect(() => {
     if (load.status === 'ready') {
+      if (savePending.current) return undefined;
       if (applied.current !== load.data) {
         // 顶部开关只更新全局标志，远端表单基线未变时保留本地表单和编辑区草稿。
         if (applied.current && snapshot(formFromConfig(load.data.config), EMPTY_DRAFTS) === baseline) {
@@ -195,7 +202,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
       draft: withoutZone(current.draft, index, form.zones.length - 1) } : current);
   };
 
-  const patchTarget = (index: number, partial: Partial<TargetConfig>): void => {
+  const patchTarget = (index: number, partial: Partial<TargetDraft>): void => {
     setForm((current) => current ? { ...current, targets: current.targets.map((target, position) => position === index ? mergeTarget(target, partial) : target) } : current);
     setEditingTarget((current) => current?.index === index
       ? { ...current, draft: mergeTarget(current.draft, partial) } : current);
@@ -210,7 +217,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
       aPort: typeof target.port === 'number' ? target.port : 443 });
   };
 
-  const patchTargetDraft = (partial: Partial<TargetConfig>): void => {
+  const patchTargetDraft = (partial: Partial<TargetDraft>): void => {
     setTargetError('');
     setEditingTarget((current) => {
       if (!current) return null;
@@ -234,7 +241,8 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
 
   const commitTarget = (): void => {
     if (!form || !editingTarget) return;
-    const target = { ...normalizeTargetDraft(editingTarget.draft, form.zones), sourceKey: editingTarget.draft.sourceKey };
+    const target = { ...normalizeTargetDraft(editingTarget.draft, form.zones),
+      sourceKey: editingTarget.draft.sourceKey, pendingPoolKey: editingTarget.draft.pendingPoolKey };
     if (!target.domain) { setTargetError('请先填写权限配置和域名前缀'); return; }
     try {
       if (target.mode === 'A') readInteger(String(target.port), '端口', 1, 65535);
@@ -274,29 +282,64 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
     field?.scrollIntoView({ block: 'center' });
   }, [saveError]);
 
-  const handleSave = (): void => {
-    if (!form || saving || editing) return;
+  const handleSave = async (): Promise<void> => {
+    if (!form || saveBusy || bindingBusy || savePending.current || editing) return;
     setSaveError(null);
     let update: ConfigUpdateRequest;
+    let pendingPools: Readonly<Record<string, string>>;
     try {
       update = buildUpdate(form, drafts);
       const validated = parseConfigUpdate(update);
       if (!validated.ok) throw new Error(validated.message);
+      pendingPools = Object.fromEntries(form.targets.flatMap((target, index) => {
+        const key = bindingKey(update.targets![index]!);
+        if (target.pendingPoolKey !== null) return [[key, target.pendingPoolKey]];
+        if (target.sourceKey === key) return [];
+        const item = bindings.status === 'ready' ? bindings.data.items.find(item => item.key === target.sourceKey) : undefined;
+        if (!item) throw new Error('原 IP 池绑定未读取，请刷新绑定或明确选择 IP 池后再保存');
+        return [[key, item.poolKey]];
+      }));
     } catch (error) {
       setSaveError(error instanceof Error ? error : new Error(errorMessage(error)));
       return;
     }
 
-    onSaveConfig(update)
-      .then((response) => {
-        applyResponse(response);
-        const targetKeys = Object.fromEntries(form.targets.flatMap((target, index) => target.sourceKey && update.targets?.[index]
-          ? [[target.sourceKey, bindingKey(update.targets[index]!)]] : []));
-        onSaved(response, targetKeys);
-        notify('配置已保存到 KV');
-      })
-      .catch((error: unknown) => setSaveError(new Error(errorMessage(error))));
+    savePending.current = true;
+    setSubmitting(true);
+    let response: ConfigResponse | null = null;
+    let targetKeys: Readonly<Record<string, string>> = {};
+    let confirmedPools: Readonly<Record<string, string>> = {};
+    try {
+      // 只有池草稿时只重试绑定，不重复写入已确认的配置。
+      const configSnapshot = snapshot({ ...form, targets: form.targets.map(target => ({ ...target, pendingPoolKey: null })) }, drafts);
+      response = configSnapshot !== baseline ? await onSaveConfig(update) : applied.current;
+      if (!response) throw new Error('配置尚未读取，请刷新后重试');
+      const savedTargets = response.config.targets;
+      targetKeys = Object.fromEntries(form.targets.flatMap((target, index) => target.sourceKey && savedTargets[index]
+        ? [[target.sourceKey, bindingKey(savedTargets[index]!)]] : []));
+      const hasPendingPools = Object.keys(pendingPools).length > 0;
+      if (hasPendingPools) {
+        applyResponse(response, pendingPools);
+        await onSaveBindings(pendingPools);
+      }
+      confirmedPools = pendingPools;
+      applyResponse(response);
+      notify(hasPendingPools ? '配置及 IP 池绑定已保存到 KV' : '配置已保存到 KV');
+    } catch (error) {
+      setSaveError(new Error(response
+        ? `配置已保存，IP 池绑定未确认保存；维护可能仍使用默认池或原绑定。${errorMessage(error)}`
+        : errorMessage(error)));
+    } finally {
+      if (response) onSaved(response, targetKeys, confirmedPools);
+      savePending.current = false;
+      setSubmitting(false);
+    }
   };
+
+  const orderedTargets = useMemo(() => form ? sortByKeyOrder(form.targets.map((target, index) => ({
+    target: { ...target, ...normalizeTargetDraft(target, form.zones) }, index, key: target.sourceKey ?? bindingKey(target),
+  })), bindings.status === 'ready' ? bindings.data.items.map(item => item.key) : []) : [],
+  [form?.targets, form?.zones, bindings]);
 
   if (load.status === 'loading' || load.status === 'idle' || (load.status === 'ready' && !form)) {
     return <div id="page-config" role="tabpanel" aria-labelledby="tab-config" class="card p-4" tabIndex={0}>
@@ -318,20 +361,18 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
   const targetZone = activeTarget?.zoneIndex === null || activeTarget?.zoneIndex === undefined
     ? null
     : form.zones[activeTarget.zoneIndex] ?? null;
-  const orderedTargets = sortByKeyOrder(form.targets.map((target, index) => ({ target: { ...target, ...normalizeTargetDraft(target, form.zones) }, index,
-    key: target.sourceKey ?? bindingKey(target) })), bindings.status === 'ready' ? bindings.data.items.map(item => item.key) : []);
 
   return (
-    <fieldset id="page-config" role="tabpanel" aria-labelledby="tab-config" disabled={saving} aria-busy={saving}>
+    <fieldset id="page-config" role="tabpanel" aria-labelledby="tab-config" disabled={saveBusy} aria-busy={saveBusy}>
       <ResourceFeedback state={load} id="retry-config" onRetry={() => void onReload()} />
       <div class="config-toolbar card" hidden={!dirty && !editing}>
         <span role="status">{editing ? '请先确认或取消编辑' : '配置有未保存改动'}</span>
         <div class="config-edit-actions">
           <button id="btn-cancel-config" class="btn btn-sm btn-outline-secondary" type="button"
-            disabled={saving || editing} onClick={() => applyResponse(load.data)}>还原改动</button>
+            disabled={saveBusy || bindingBusy || editing} onClick={() => applyResponse(load.data)}>还原改动</button>
           <button id="btn-save-config" class="btn btn-sm btn-success" type="button"
-            disabled={saving || editing} onClick={handleSave}>
-            <Icon name="save" /> {saving ? '保存中…' : '保存到 KV'}
+            disabled={saveBusy || bindingBusy || editing} onClick={handleSave}>
+            <Icon name="save" /> {saveBusy ? '保存中…' : '保存到 KV'}
           </button>
         </div>
         {saveError && !(saveError instanceof FieldError) && <small class="text-danger" role="alert">{saveError.message}</small>}
@@ -341,7 +382,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
           <h2 class="card-title m-0 fw-bold"><Icon name="settings" /> 基础配置</h2>
         </summary>
         <div class="config-details-body">
-          <fieldset class="config-task-settings" aria-label="自动化设置" disabled={saving}>
+          <fieldset class="config-task-settings" aria-label="自动化设置" disabled={saveBusy}>
             {([['scheduledEnabled', '自动维护', 'cfg-scheduled-enabled'], ['tgEnabled', 'Telegram 通知', 'cfg-tg-enabled']] as const).map(([key, label, id]) => (
               <label class="setting-switch" key={key}>
                 <input id={id} type="checkbox" role="switch" checked={load.data.config[key]} onChange={(event) => onToggleSetting(key, event.currentTarget.checked)} />
@@ -419,7 +460,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                 <TextField id={`zone-id-${editingZone.index}`} label="Zone ID" help="Cloudflare 区域 ID。" value={activeZone.zoneId} placeholder="Zone ID" onValue={(value) => patchZone({ zoneId: value })} />
                 <TextField id={`zone-token-${editingZone.index}`} label="CF Key" help="留空保持原值；需要 DNS 编辑权限。" type="password" autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : 'CF API Token'} onValue={(value) => patchZone({ apiKey: value })} />
               </div>
-              <ConfigEditorActions error={zoneError} disabled={saving} onCancel={() => setEditingZone(null)} onSave={commitZone} />
+              <ConfigEditorActions error={zoneError} disabled={saveBusy} onCancel={() => setEditingZone(null)} onSave={commitZone} />
             </>
           )}
         </div>
@@ -459,7 +500,8 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                   {target.asn && <span>ASN {target.asn}</span>}
                 </div>
               </button>
-              <TargetPoolField target={target} bindings={bindings} pools={pools} busy={bindingBusy} onBind={onBindPool} />
+              <TargetPoolField target={target} bindings={bindings} pools={pools} busy={bindingBusy} onBind={onBindPool}
+                onDraft={(pendingPoolKey) => patchTarget(index, { pendingPoolKey })} />
               <div class="actions">
                 <label class="switch" title="单独控制这个域名是否参与维护">
                   <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
@@ -533,8 +575,10 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                 <TextField id={`target-country-${editingTarget.index}`} label="国家" help="可填多个，逗号分隔；任一命中即可。" value={activeTarget.country} placeholder="JP,US,SG" onValue={(value) => patchTargetDraft({ country: value })} />
                 <TextField id={`target-asn-${editingTarget.index}`} label="ASN" help="可填多个，逗号分隔；任一命中即可。" value={activeTarget.asn} placeholder="13335,209242" onValue={(value) => patchTargetDraft({ asn: value })} />
                 <NumberField id={`target-port-${editingTarget.index}`} label="端口" help="A/AAAA 模式使用。" value={activeTarget.mode === 'TXT' ? '任意' : String(activeTarget.port)} min={1} max={65535} disabled={activeTarget.mode === 'TXT'} onChange={(value) => patchTargetDraft({ port: Number(value) })} />
+                <TargetPoolField target={activeTarget} bindings={bindings} pools={pools} busy={bindingBusy} draftOnly
+                  onBind={onBindPool} onDraft={(pendingPoolKey) => patchTargetDraft({ pendingPoolKey })} />
               </div>
-              <ConfigEditorActions error={targetError} disabled={saving} onCancel={() => setEditingTarget(null)} onSave={commitTarget} />
+              <ConfigEditorActions error={targetError} disabled={saveBusy} onCancel={() => setEditingTarget(null)} onSave={commitTarget} />
             </>
           )}
         </div>
@@ -565,26 +609,33 @@ function exitFilterLabel(value: TargetConfig['exitFilter']): string {
   return '任意出口';
 }
 
-function TargetPoolField({ target, bindings, pools, busy, onBind }: {
+function TargetPoolField({ target, bindings, pools, busy, draftOnly = false, onBind, onDraft }: {
   readonly target: TargetDraft;
   readonly bindings: RequestState<DomainBindingsResponse>;
   readonly pools: RequestState<PoolsResponse>;
   readonly busy: boolean;
+  readonly draftOnly?: boolean;
   readonly onBind: (key: string, poolKey: string) => void;
+  readonly onDraft: (poolKey: string) => void;
 }) {
   const item = bindings.status === 'ready' ? bindings.data.items.find(binding => binding.key === target.sourceKey) : undefined;
   const persisted = target.sourceKey !== null && target.sourceKey === bindingKey(target);
-  const poolKey = item?.poolKey ?? DEFAULT_POOL_KEY;
+  const staged = draftOnly || !persisted || target.pendingPoolKey !== null;
+  const poolKey = target.pendingPoolKey ?? item?.poolKey ?? (target.sourceKey === null ? DEFAULT_POOL_KEY : '');
   return (
     <label class="field target-pool-field">
       <span>IP 池</span>
       <select class="form-select form-select-sm domain-binding-select" value={poolKey}
         aria-label={`${targetDisplayDomain(target)} 绑定的 IP 池`} aria-busy={busy}
-        disabled={busy || !persisted || !item?.enabled || !target.enabled || pools.status !== 'ready'}
-        onChange={(event) => { if (target.sourceKey) onBind(target.sourceKey, event.currentTarget.value); }}>
+        disabled={busy || pools.status !== 'ready' || (!staged && (!item?.enabled || !target.enabled))}
+        onChange={(event) => {
+          if (staged) onDraft(event.currentTarget.value);
+          else if (target.sourceKey) onBind(target.sourceKey, event.currentTarget.value);
+        }}>
+        {!poolKey && <option value="">绑定未读取</option>}
         {poolOptions(pools, poolKey).filter(pool => isUserPoolKey(pool.key)).map(pool => <option key={pool.key} value={pool.key}>{pool.name}</option>)}
       </select>
-      <small>{persisted ? '更改后立即保存' : '先保存维护域名，再选择 IP 池'}</small>
+      <small>{!poolKey ? '刷新绑定或明确选择 IP 池' : staged ? '随配置一起保存到 KV' : '更改后立即保存'}</small>
     </label>
   );
 }
@@ -725,7 +776,7 @@ function SecretField({
 function formFromConfig(config: PublicAppConfig): ConfigForm {
   return {
     zones: config.zones.map((zone) => ({ ...zone, apiKey: '', hasApiKey: zone.hasApiKey })),
-    targets: config.targets.map((target) => ({ ...target, sourceKey: bindingKey(target) })),
+    targets: config.targets.map((target) => ({ ...target, sourceKey: bindingKey(target), pendingPoolKey: null })),
     probeIpv4Url: config.probeIpv4Url,
     probeIpv6Url: config.probeIpv6Url,
     checkApiBackup: config.checkApiBackup,
@@ -758,7 +809,7 @@ function buildUpdate(form: ConfigForm, drafts: SecretDrafts): ConfigUpdateReques
       apiKey: zone.apiKey.trim(),
       label: zone.label.trim() || zone.name.trim(),
     })),
-    targets: form.targets.map(({ sourceKey: _sourceKey, ...target }) => normalizeTargetDraft(target, form.zones)),
+    targets: form.targets.map(({ sourceKey: _sourceKey, pendingPoolKey: _pendingPoolKey, ...target }) => normalizeTargetDraft(target, form.zones)),
     ...(authKey === undefined ? {} : { authKey }),
     probeIpv4Url: form.probeIpv4Url.trim(),
     probeIpv6Url: form.probeIpv6Url.trim(),
@@ -794,6 +845,7 @@ function createEmptyTarget(defaultMinActive: string): TargetDraft {
   const minActive = Number.parseInt(defaultMinActive, 10);
   return {
     sourceKey: null,
+    pendingPoolKey: DEFAULT_POOL_KEY,
     mode: 'A',
     domain: '',
     baseDomain: '',
@@ -810,7 +862,7 @@ function createEmptyTarget(defaultMinActive: string): TargetDraft {
   };
 }
 
-function mergeTarget<T extends TargetConfig>(target: T, partial: Partial<TargetConfig>): T {
+function mergeTarget<T extends TargetConfig>(target: T, partial: Partial<T>): T {
   const merged = { ...target, ...partial };
   const countries = partial.country === undefined ? merged.countries : splitList(merged.country);
   const asns = partial.asn === undefined ? merged.asns : splitList(merged.asn);

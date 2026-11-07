@@ -3,7 +3,7 @@ import type { MaintenanceAddressCheck, MaintenanceRunResponse, MaintenanceRunRes
 import type { NotifyResult } from '../contracts/notification';
 import { extractPoolAddressKey, isUnknownMetaValue } from '../domain/pool-entry';
 import { probeMatchesTarget } from '../domain/managed-target';
-import type { ProbeResult } from '../domain/probe-result';
+import { isProbeErrorResult, type ProbeResult } from '../domain/probe-result';
 import { createPublicTextRedactor } from '../contracts/public-text';
 import type { MaintenanceRunSummary, TargetMaintenanceResult } from './maintain-managed-targets';
 
@@ -21,7 +21,7 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
   const safeDns = { before: dns.before.map(redactAddress), after: dns.after.map(redactAddress), added: dns.added.map(redactAddress), removed: dns.removed.map(redactAddress) };
   const candidateErrors = new Map<string, { code: string; message: string; count: number }>();
   for (const candidate of report.candidateResults ?? []) {
-    if (candidate.result.status !== 'unknown') continue;
+    if (!isProbeErrorResult(candidate.result)) continue;
     const code = candidate.result.code ?? 'PROBE_ERROR';
     const message = redact(candidate.result.message ?? '检测未取得结论');
     const key = code + ':' + message;
@@ -36,6 +36,7 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
     const details = [countries.join('/').slice(0, 60), asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80),
       probe.colo, probe.latencyMs === undefined ? undefined : '耗时 ' + probe.latencyMs + 'ms'].filter(Boolean).join(' · ');
     checks.set(redactAddress(value), { value: redactAddress(value), address: redactAddress(address), status: probe.status, matchesTarget: probeMatchesTarget(probe, target), details: redact(details),
+      exitFamily: probe.exitFamily,
       ...(probe.colo ? { colo: redact(probe.colo) } : {}), ...(probe.latencyMs === undefined ? {} : { latencyMs: probe.latencyMs }),
       ...(countries.length ? { country: redact(countries.join('/').slice(0, 60)) } : {}),
       ...(asns.length ? { asn: redact(asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80)) } : {}),
@@ -46,7 +47,7 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
   for (const item of report.candidateResults ?? report.plan.additions) {
     if (dns.added.includes(item.value) || item.result.status !== 'alive') addCheck(item.value, item.address, item.result);
   }
-  return { domain: target.domain, mode: target.mode, poolKey, poolName: redact(poolName), dnsUpdated: report.dnsUpdated,
+  return { domain: target.domain, mode: target.mode, exitFilter: target.exitFilter, poolKey, poolName: redact(poolName), dnsUpdated: report.dnsUpdated,
     added: report.added, deleted: report.deleted, probeErrors: report.probeErrors, error: errors.join('；') || null, errors,
     dns: safeDns, activeCount: report.activeCount ?? report.plan.activeCount, minActive: target.minActive,
     ...(target.port ? { port: target.port } : {}), checks: [...checks.values()],
@@ -58,8 +59,9 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
 
 export function toMaintenanceRunResponse(run: MaintenanceRunSummary, notification?: NotifyResult | null): MaintenanceRunResponse {
   const redact = createPublicTextRedactor(run.results.flatMap(result => [result.zone.apiToken, result.zone.zoneId]));
-  const completed = !run.insufficient && !run.errors.length && notification?.reason !== 'failed';
+  const completed = !run.insufficient && !run.errors.length && !run.probeErrors && notification?.reason !== 'failed';
   const message = run.insufficient ? '维护结束：活跃数量未达标' : run.errors.length ? '维护结束：存在执行错误'
+    : run.probeErrors ? '维护结束：存在检测异常'
     : notification?.reason === 'failed' ? '维护完成，通知发送失败' : run.changed ? 'DNS 已更新' : 'DNS 无需变更';
   return { ok: true, changed: run.changed, insufficient: run.insufficient, errors: run.errors.map(redact), probeErrors: run.probeErrors, completed, message,
     results: run.results.map(result => {

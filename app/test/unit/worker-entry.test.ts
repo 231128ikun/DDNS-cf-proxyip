@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createProbeAdapterFromConfig, type RuntimeEnv } from '../../src/config/runtime';
+import { createProbeAdapterFromConfig, createSubrequestBudget, type RuntimeEnv } from '../../src/config/runtime';
 import { APP_VERSION, createWorker } from '../../src/worker';
 import { ApiClient } from '../../web/src/api/client';
+import { localWorkerContext } from '../helpers/native-probe';
 
 /**
  * 发布 Worker 的装配回归：面板由 Cloudflare 静态资源分发（`wrangler.toml` 的 `[assets]`），
@@ -16,17 +17,158 @@ const context = {
 
 async function request(path: string, init?: RequestInit, runtimeEnv: RuntimeEnv = env, worker = createWorker()): Promise<Response> {
   const input = new Request(`https://panel.example${path}`, init) as Parameters<NonNullable<ExportedHandler<RuntimeEnv>['fetch']>>[0];
-  return await worker.fetch!(input, runtimeEnv, context);
+  return await worker.fetch!(input, runtimeEnv, localWorkerContext(worker, runtimeEnv));
 }
 
 describe('发布 Worker 装配', () => {
+  it('runs seven targets through actual workerd loopback invocations and storage', async () => {
+    const { build } = await import('esbuild');
+    const { Miniflare, convertV4MiniflareOptions, Response: TestResponse } = await import('miniflare');
+    const { resolve } = await import('node:path');
+    const root = resolve(import.meta.dirname, '../..');
+    const bundled = await build({ bundle: true, write: false, format: 'esm', platform: 'neutral',
+      external: ['cloudflare:sockets', 'cloudflare:workers', 'node:async_hooks'], alias: { crypto: resolve(root, 'src/adapters/probe/web-crypto.ts') },
+      stdin: { resolveDir: root, sourcefile: 'local-worker-boundary.js', contents: `
+        import { AsyncLocalStorage } from 'node:async_hooks';
+        import { WorkerEntrypoint } from 'cloudflare:workers';
+        import { createWorker, dispatchWorkerInvocation } from './src/worker.ts';
+        import { NativeProbeAdapter } from './src/adapters/probe/native.ts';
+        const scopes = new AsyncLocalStorage();
+        let stats;
+        function charge() {
+          const scope = scopes.getStore();
+          if (scope.used >= 50) throw new Error('Too many subrequests by single Worker invocation.');
+          scope.used++;
+        }
+        function chargeInternal() {
+          const scope = scopes.getStore();
+          if (scope.internal >= 1000) throw new Error('Too many subrequests by single Worker invocation.');
+          scope.internal++;
+        }
+        function limitedContext(ctx) {
+          return {props:ctx.props, waitUntil:p=>ctx.waitUntil(p), passThroughOnException:()=>ctx.passThroughOnException(),
+            exports:{default:{dispatch(...args){chargeInternal();return ctx.exports.default.dispatch(...args);}}}};
+        }
+        function limitedEnv(env) {
+          const kv = env.IP_DATA;
+          return {...env, IP_DATA:{get(...args){chargeInternal();return kv.get(...args);},
+            list(...args){chargeInternal();return kv.list(...args);}, put(...args){chargeInternal();return kv.put(...args);}}};
+        }
+        const fetchImpl = globalThis.fetch;
+        globalThis.fetch = (...args) => { charge(); return fetchImpl(...args); };
+        const app = createWorker(config => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
+          secure: async socket => socket,
+          connect() {
+            charge(); stats.connections++; stats.open++;
+            let rejectOpened, closed = false;
+            const opened = stats.slow ? new Promise((_, reject) => { rejectOpened = reject; }) : Promise.resolve({});
+            const body = JSON.stringify({ ip:'198.51.100.42', asn:64500, country:'US', colo:'NRT' });
+            const bytes = new TextEncoder().encode('HTTP/1.1 200 OK\\r\\nContent-Length: ' + body.length + '\\r\\n\\r\\n' + body);
+            return { opened, closed:Promise.resolve(),
+              readable:new ReadableStream({start(c){c.enqueue(bytes);c.close();}}), writable:new WritableStream(),
+              async close(){if(!closed){closed=true;stats.open--;rejectOpened?.(new Error('closed'));}}, startTls(){throw new Error('unused');} };
+          },
+        }));
+        export default class TestWorker extends WorkerEntrypoint {
+          async fetch(request) {
+            stats = {scopes:[], connections:0, open:0, slow:new URL(request.url).searchParams.has('slow')};
+            const scope = {used:0, internal:0}; stats.scopes.push(scope);
+            return scopes.run(scope, async () => {
+              const env = limitedEnv(this.env), ctx = limitedContext(this.ctx);
+              let response;
+              if (new URL(request.url).pathname === '/test-cancel') {
+                let controller;
+                const cancelled = new ReadableStream({start(c){controller=c;}});
+                const operation = ctx.exports.default.dispatch('https://worker.internal/api/check', {
+                  method:'POST', headers:[['Content-Type','application/json'],['Authorization','Bearer fixture-auth']],
+                  body:JSON.stringify({proxyip:'203.0.113.1:443'}), redirect:'manual',
+                }, {directProbe:true}, cancelled);
+                while (stats.open === 0) await new Promise(resolve=>setTimeout(resolve, 1));
+                const openAtCancel = stats.open;
+                controller.close();
+                const reply = await operation;
+                const result = await new Response(reply.body).json();
+                reply[Symbol.dispose]?.();
+                response = Response.json({openAtCancel, open:stats.open, status:reply.status, probeStatus:result.items?.[0]?.result?.status, code:result.items?.[0]?.result?.code});
+              } else if (new URL(request.url).pathname === '/test-scheduled') {
+                const tasks=[];
+                await app.scheduled({}, env, {...ctx, waitUntil:p=>tasks.push(p)});
+                await Promise.all(tasks);
+                response = Response.json({ok:true});
+              } else response = await app.fetch(request, env, ctx);
+              const headers = new Headers(response.headers);
+              headers.set('x-test-connections', String(stats.connections));
+              headers.set('x-test-invocations', String(stats.scopes.length));
+              headers.set('x-test-max-used', String(Math.max(...stats.scopes.map(s=>s.used))));
+              headers.set('x-test-max-internal', String(Math.max(...stats.scopes.map(s=>s.internal))));
+              return new Response(response.body, {status:response.status, headers});
+            });
+          }
+          dispatch(url, init, props, cancelled) {
+            const scope = {used:0, internal:0}; stats.scopes.push(scope);
+            return scopes.run(scope, () => dispatchWorkerInvocation(app, limitedEnv(this.env), limitedContext(this.ctx), url, init, props, cancelled));
+          }
+        }
+      ` } });
+    const modes = ['TXT', 'A', 'A', 'TXT', 'TXT', 'TXT', 'A'];
+    const targets = modes.map((mode, index) => ({ domain: `target${index}.example.com`, mode, zoneIndex: 0, minActive: 3 }));
+    const address = (index: number, item: number) => `203.0.113.${index * 3 + item + 1}`;
+    const mf = new Miniflare(convertV4MiniflareOptions({ name: 'maintenance-local-test', modules: true,
+      compatibilityDate: '2026-09-24', compatibilityFlags: ['nodejs_compat'], script: bundled.outputFiles![0]!.text,
+      kvNamespaces: ['IP_DATA'], outboundService: async request => {
+        const url = new URL(request.url);
+        expect(url.hostname).toBe('api.cloudflare.com');
+        expect(request.method).toBe('GET');
+        const index = targets.findIndex(target => target.domain === url.searchParams.get('name'));
+        expect(index).toBeGreaterThanOrEqual(0);
+        const type = url.searchParams.get('type');
+        const result = type === 'AAAA' ? [] : type === 'TXT'
+          ? [{ id:`txt${index}`, type, name:targets[index]!.domain, content:'"' + Array.from({length:3}, (_, item) => address(index,item) + ':443').join(',') + '"' }]
+          : Array.from({length:3}, (_, item) => ({ id:`a${index}-${item}`, type, name:targets[index]!.domain, content:address(index,item) }));
+        return TestResponse.json({success:true, result});
+      } }));
+    try {
+      const { IP_DATA } = await mf.getBindings<{ IP_DATA: KVNamespace }>();
+      await IP_DATA.put('app_config', JSON.stringify({ authKey:'fixture-auth', tgEnabled:false, checkApiBackup:'',
+        zones:[{baseDomain:'example.com', zoneId:'fixture-zone', apiKey:'fixture-token'}], targets }));
+      const pool = '# 库存备注\n' + targets.flatMap((_, index) => Array.from({length:3}, (_, item) => address(index,item) + ':443,AS64500,US,v4')).join('\n');
+      await IP_DATA.put('ip_pool_default', pool);
+      await IP_DATA.put('ip_pool_trash', '# 垃圾桶备注');
+      for (const path of ['/api/maintenance/run', '/test-scheduled']) {
+        const response = await mf.dispatchFetch('https://test.local' + path, {method:'POST', headers:{Authorization:'Bearer fixture-auth'}});
+        const result = await response.json() as {completed?:boolean; probeErrors?:number; results?:{activeCount:number}[]};
+        expect(response.status).toBe(200);
+        if (path === '/api/maintenance/run') {
+          expect(result).toMatchObject({completed:true, probeErrors:0});
+          expect(result.results?.map(item => item.activeCount)).toEqual([3,3,3,3,3,3,3]);
+        }
+        expect(Number(response.headers.get('x-test-connections'))).toBe(42);
+        expect(Number(response.headers.get('x-test-invocations'))).toBeGreaterThan(21);
+        expect(Number(response.headers.get('x-test-max-used'))).toBeLessThanOrEqual(50);
+        expect(Number(response.headers.get('x-test-max-internal'))).toBeLessThanOrEqual(1000);
+        expect(await IP_DATA.get('ip_pool_default')).toBe(pool);
+        expect(await IP_DATA.get('ip_pool_trash')).toBe('# 垃圾桶备注');
+      }
+      const cancelled = await mf.dispatchFetch('https://test.local/test-cancel?slow');
+      const state = await cancelled.json() as {openAtCancel:number; open:number; status:number; probeStatus:string; code:string};
+      expect(cancelled.status).toBe(200);
+      expect(state.openAtCancel).toBeGreaterThan(0);
+      expect(state.open).toBe(0);
+      expect(state.status).toBe(200);
+      expect(state.probeStatus).toBe('unknown');
+      expect(state.code).toBe('CANCELLED');
+      expect(await IP_DATA.get('ip_pool_default')).toBe(pool);
+      expect(await IP_DATA.get('ip_pool_trash')).toBe('# 垃圾桶备注');
+    } finally { await mf.dispose(); }
+  }, 15_000);
+
   it.each(['platform', 'budget'] as const)('safely maintains an 89-address pool when probes reach the %s limit', async limit => {
     const current = '203.0.113.1:443';
     const second = '203.0.113.100:443';
     const inventory = Array.from({ length: 89 }, (_, index) => `203.0.113.${index + 1}:443,null,null,null # 备注 ${index + 1}`);
     const trash = '198.51.100.2:443,null,null,null # 原有备注';
     const store = new Map([
-      ['app_config', JSON.stringify({ tgEnabled: true, tgToken: 'test-notifier', tgId: 'test-chat', checkApiBackup: '',
+      ['app_config', JSON.stringify({ tgEnabled: true, tgToken: 'test-notifier', tgId: 'test-chat', checkApiBackup: limit === 'budget' ? 'https://probe.example/?candidate=' : '',
         zones: [{ baseDomain: 'example.com', zoneId: 'test-zone', apiKey: 'test-token' }],
         targets: [{ domain: 'one.example.com', mode: 'TXT', zoneIndex: 0, minActive: 1 },
           { domain: 'two.example.com', mode: 'A', zoneIndex: 0, minActive: 1 },
@@ -43,11 +185,12 @@ describe('发布 Worker 装配', () => {
     let releaseRead!: () => void;
     const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input));
+      const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.hostname === 'api.telegram.org') {
         notify();
         return Response.json({ ok: true });
       }
+      if (url.hostname === 'budget.example') return Response.json({ ok: true });
       expect(url.hostname).toBe('api.cloudflare.com');
       if (init?.method === 'DELETE') {
         dnsWrites.push(url.pathname.split('/').at(-1)!);
@@ -62,7 +205,13 @@ describe('发布 Worker 装配', () => {
       return Response.json({ success: true, result });
     }));
     try {
-      const worker = createWorker((config, deps) => createProbeAdapterFromConfig(config, { ...deps, connect }));
+      const worker = createWorker((config, deps) => {
+        const budget = deps?.budget ?? createSubrequestBudget();
+        if (limit === 'budget' && deps?.budget) {
+          for (let index = 0; index < 36; index++) void budget.probeFetch('https://budget.example/');
+        }
+        return createProbeAdapterFromConfig(config, { budget, connect });
+      });
       const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { IP_DATA: kv }, worker) });
       const progress: string[] = [];
       const run = await client.runMaintenance(undefined, line => {
@@ -73,8 +222,8 @@ describe('发布 Worker 装配', () => {
           releaseRead();
         }
       });
-      expect(progress[0]).toBe('one.example.com · 读取库存和 DNS');
-      expect(progress).toContain('one.example.com · 当前解析已返回 1/1');
+      expect(progress[0]).toBe('one.example.com (TXT) · 读取库存和 DNS');
+      expect(progress).toContain('one.example.com (TXT) · 当前解析已返回 1/1');
       expect(progress.at(-1)).toBe('处理维护通知');
       expect(run.notification).toMatchObject({ sent: true });
       expect(notify).toHaveBeenCalledTimes(1);
@@ -82,24 +231,20 @@ describe('发布 Worker 装配', () => {
       const code = limit === 'platform' ? 'SUBREQUEST_LIMIT' : 'PROBE_BUDGET_EXHAUSTED';
       expect(run.results[0]!.candidateErrors).toEqual(expect.arrayContaining([expect.objectContaining({ code })]));
       expect(run.results[0]!.candidates?.remaining).toBeGreaterThan(70);
-      if (limit === 'platform') {
-        expect(dnsWrites).toEqual([]);
-        expect(run.results[0]!.dns?.after).toEqual([current]);
-        expect(store.get('ip_pool_trash')).toBe(trash);
-        expect(store.get('ip_pool_default')).toBe(inventory.join('\n'));
-        expect(connect.mock.calls.length).toBeLessThanOrEqual(2);
-      } else {
-        expect(connect).toHaveBeenCalledTimes(35); // TXT 读取也占用共享预算。
-        expect(dnsWrites).toEqual(['txt-current', 'a-shared']);
-        expect(run.results[2]!.dns?.after).toEqual([]); // 另一条记录沿用本轮已复检的结果。
-        expect(store.get('ip_pool_trash')).toContain(trash);
-        expect(store.get('ip_pool_trash')).toContain(current + ',null,null,null # 维护失效');
-        expect(store.get('ip_pool_default')).toContain(inventory.at(-1));
-      }
+      expect(dnsWrites).toEqual([]);
+      expect(run.results[0]!.dns?.after).toEqual([current]);
+      expect(store.get('ip_pool_trash')).toBe(trash);
+      expect(store.get('ip_pool_default')).toBe(inventory.join('\n'));
+      // 一个地址触发平台异常，不把新的独立调用标记为已耗尽。
+      expect(connect.mock.calls.length).toBeGreaterThan(2);
     } finally { vi.unstubAllGlobals(); }
   });
 
   it.each([
+    ['203.0.113.10 8443 # 旧备注', '203.0.113.10:8443,null,null,null # 旧备注'],
+    ['203.0.113.10\t8443 # 旧备注', '203.0.113.10:8443,null,null,null # 旧备注'],
+    ['203.0.113.10：8443 # 旧备注', '203.0.113.10:8443,null,null,null # 旧备注'],
+    ['203.0.113.10:443,,US,v4 # 旧备注', '203.0.113.10:443,null,US,v4 # 旧备注'],
     ['203.0.113.10:443 # 旧备注', '203.0.113.10:443,null,null,null # 旧备注'],
     ['203.0.113.10:443,AS64500 # 旧备注', '203.0.113.10:443,AS64500,null,null # 旧备注'],
     ['203.0.113.10:443,AS64500,JP # 旧备注', '203.0.113.10:443,AS64500,JP,null # 旧备注'],
@@ -119,7 +264,7 @@ describe('发布 Worker 装配', () => {
     const client = new ApiClient({ fetchImpl: async (input, init) => request(String(input), init, { ...env, IP_DATA: kv }) });
     expect((await client.readPool('ip_pool_default')).content).toBe(legacy);
     await client.saveConfig({ tgId: 'fixture-chat' });
-    const address = legacy.startsWith('[') ? '[2001:db8::10]:8443' : '203.0.113.10:443';
+    const address = expected.split(',')[0]!;
     await client.savePool('ip_pool_default', address + ',null,null,null', 'append');
     expect((await client.readPool('ip_pool_default')).content.trim()).toBe(expected);
     expect((await client.config()).config.settings.DOH_TIMEOUT).toBe(9000);

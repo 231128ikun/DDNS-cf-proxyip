@@ -10,7 +10,7 @@ const server = await serveUiFixture();
 let browser;
 const results = [];
 try {
-  browser = await launchBrowser();
+  browser = await launchBrowser(undefined, { hideScrollbars: false });
   const { cdp } = browser;
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
@@ -96,6 +96,18 @@ try {
     await until('!document.querySelector("#pool-filter-help").hidden');
     await read('document.querySelector("[aria-label=筛选用法]").dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
     await until('document.querySelector("#pool-filter-help").hidden');
+    const looseStart = server.requests.length;
+    await set('#ip-input', '203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段');
+    await click('[aria-label="批量检测导入草稿"]');
+    await until('!document.querySelector("[aria-label=停止批量检测]") && document.querySelector("[aria-label=检测结果分类]")?.textContent.includes("可用 4")');
+    assert.deepEqual(server.requests.slice(looseStart).filter(item => item.path === '/api/check').map(item => item.input.proxyip).sort(),
+      ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72：443', '203.0.113.73:443']);
+    assert.deepEqual(await read('[...document.querySelectorAll(".pool-result-list .syntax-address")].map(item => item.textContent).sort()'),
+      ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72:443', '203.0.113.73:443']);
+    assert.equal(server.requests.slice(looseStart).filter(item => item.method === 'PUT').length, 0, '宽容输入检测不应写库存');
+    await capture('loose-input-' + width);
+    await click('[data-action=view-draft]');
+    await set('#ip-input', '');
     const sourceStart = server.requests.length;
     await click('[data-action=load-pool]');
     await until('document.querySelector("#ip-input").value.includes("保留备注") && !document.querySelector("[data-action=load-pool]").disabled');
@@ -223,6 +235,31 @@ try {
     await until('document.querySelector(".pool-feedback")?.textContent.includes("保留 216") && !document.querySelector("[data-action=stop-clean]")');
     assert.ok(await read('!document.querySelector(".console-run") && document.querySelector("#log-window").textContent.includes("node-0.example:443")'));
     assert.equal(server.requests.slice(bigStart).filter(item => item.path.endsWith('/clean')).length, 1);
+    await capture('console-scrollbar-' + width, '.dashboard-console-card');
+    const scroll = await read(`(() => {
+      const log = document.querySelector('#log-window');
+      log.scrollTop = log.scrollHeight;
+      const box = log.getBoundingClientRect();
+      const bar = getComputedStyle(log, '::-webkit-scrollbar');
+      const thumb = getComputedStyle(log, '::-webkit-scrollbar-thumb');
+      const canvas = document.createElement('canvas').getContext('2d');
+      canvas.fillStyle = thumb.backgroundColor; canvas.fillRect(0, 0, 1, 1);
+      return { x: box.right - parseFloat(bar.width) / 2, y: box.bottom - 8,
+        middle: box.top + box.height / 2, maximum: log.scrollHeight - log.clientHeight,
+        gutter: log.offsetWidth - log.clientWidth, radius: thumb.borderRadius,
+        track: bar.backgroundColor, alpha: canvas.getImageData(0, 0, 1, 1).data[3] };
+    })()`);
+    assert.ok(scroll.maximum > 0 && scroll.gutter >= 8, '控制台必须有可见的滚动条');
+    assert.equal(scroll.radius, '999px');
+    assert.equal(scroll.track, 'rgba(0, 0, 0, 0)');
+    assert.equal(scroll.alpha, 128, '滑块应保留半透明背景');
+    await read('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, x: scroll.x, y: scroll.y }, sessionId);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', button: 'left', buttons: 1, x: scroll.x, y: scroll.middle }, sessionId);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, x: scroll.x, y: scroll.middle }, sessionId);
+    await until('document.querySelector("#log-window").scrollTop < ' + (scroll.maximum - 32));
+    await capture('console-scrollbar-drag-' + width, '.dashboard-console-card');
+    await read('document.querySelector("#log-window").scrollTop = document.querySelector("#log-window").scrollHeight');
     const bigRequests = server.requests.slice(bigStart);
     const checked = bigRequests.filter(item => item.path === '/api/check');
     assert.equal(new Set(checked.map(item => item.input.proxyip)).size, 216);
@@ -261,14 +298,25 @@ try {
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
     server.fixture.maintenanceResponse = { ok:true, changed:false, insufficient:true, errors:['更新 TXT 记录失败'],probeErrors:1,results:[{domain:'proxy.example.com',mode:'TXT',poolKey:'ip_pool_default',poolName:'默认池',dnsUpdated:false,added:0,deleted:0,probeErrors:1,error:'更新 TXT 记录失败',lines:[
-      'proxy.example.com (TXT)', '解析 203.0.113.10:443 · [2001:db8::1]:8443 · 可用 · 耗时 120ms',
+      'proxy.example.com (TXT)', '解析 203.0.113.10:443 · [2001:db8::1]:8443 · 可用 · 仅 IPv4 出口 · 耗时 120ms · [EXIT_RESTRICTED] IPv4 探测可用；IPv6 出口失效：候选 TLS 验证失败',
       '候选异常 2 次 [PROBE_BUDGET_EXHAUSTED] 本轮检测预算已用尽，未完成检测', '执行失败：更新 TXT 记录失败',
     ],lineTones:['info','success','warning','error']}],completed:false,message:'维护结束：活跃数量未达标' };
     const maintenanceStart = server.requests.length;
-    await read('document.querySelector(".dashboard-console-card > button").click(); document.querySelector(".dashboard-console-card > button").click()');
-    await until('document.querySelector("#log-window").textContent.includes("读取库存和 DNS")');
-    assert.equal(await read('document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")'), false, '阶段进度应先于完成回执显示');
-    await until('document.querySelector(".console-event-error .console-message") && document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")');
+    const progressGate = Promise.withResolvers(), resultGate = Promise.withResolvers();
+    server.fixture.maintenancePause = stage => stage === 'progress' ? progressGate.promise : resultGate.promise;
+    try {
+      await read('document.querySelector(".dashboard-console-card > button").click(); document.querySelector(".dashboard-console-card > button").click()');
+      await until('document.querySelector("#log-window").textContent.includes("读取库存和 DNS")');
+      assert.equal(await read('document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")'), false, '阶段进度应先于完成回执显示');
+      progressGate.resolve();
+      await until('document.querySelector(".console-event-error .console-message") && document.querySelector("#log-window").textContent.includes("执行失败：更新 TXT 记录失败")');
+      assert.equal(await read('document.querySelector(".dashboard-console-card > button").disabled'), true, '目标明细未在整轮结束前返回');
+      resultGate.resolve();
+      await until('!document.querySelector(".dashboard-console-card > button").disabled');
+    } finally {
+      progressGate.resolve(); resultGate.resolve(); server.fixture.maintenancePause = null;
+    }
+    assert.equal(await read('[...document.querySelectorAll("#log-window .console-message")].filter(row => row.textContent.includes("执行失败：更新 TXT 记录失败")).length'), 1, '目标明细在完成回执中重复输出');
     for (const [tone, label, message] of [['info', '信息', 'proxy.example.com (TXT)'], ['success', '成功', '耗时 120ms'],
       ['warning', '告警', 'PROBE_BUDGET_EXHAUSTED'], ['error', '失败', '执行失败：更新 TXT 记录失败']]) {
       assert.equal(await read(`[...document.querySelectorAll(".console-event-${tone}")].some(row => {
@@ -282,6 +330,19 @@ try {
     assert.equal(server.requests.slice(maintenanceStart).filter(item => item.path === '/api/maintenance/run').length, 1, '维护被重复提交');
     await until('(() => {const log=document.querySelector("#log-window");return log.scrollHeight-log.scrollTop-log.clientHeight<32})()');
     await capture('console-' + width, '.dashboard-console-card');
+    const restricted = '[...document.querySelectorAll("details.console-event-success")].find(row => row.textContent.includes("[EXIT_RESTRICTED]"))';
+    assert.ok(await read(`(() => { const row = ${restricted}; return row && !row.open
+      && row.querySelector("summary").textContent.includes("仅 IPv4 出口"); })()`));
+    await read(`const row = ${restricted}; row.querySelector("summary").click(); row.scrollIntoView({block:"nearest"});`);
+    await capture('maintenance-exit-' + width, '.dashboard-console-card');
+    const interruptedStart = server.requests.length;
+    server.fixture.maintenanceDisconnect = true;
+    await click('.dashboard-console-card > button');
+    await until('document.querySelector("#log-window").textContent.includes("维护响应提前结束") && !document.querySelector(".dashboard-console-card > button").disabled');
+    assert.equal(server.requests.slice(interruptedStart).filter(item => item.path === '/api/maintenance/run').length, 1, '断流后自动重放了维护请求');
+    assert.equal(await read('[...document.querySelectorAll("#log-window .console-message")].filter(row => row.textContent.includes("执行失败：更新 TXT 记录失败")).length'), 2, '断流丢弃已返回目标结果');
+    await capture('maintenance-interrupted-' + width, '.dashboard-console-card');
+    server.fixture.maintenanceDisconnect = false;
     await read('document.querySelector("#log-window").scrollTop=0; new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');

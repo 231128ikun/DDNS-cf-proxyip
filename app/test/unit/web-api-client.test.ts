@@ -104,7 +104,7 @@ describe('web API client pool endpoints', () => {
     });
   });
 
-  it.each([[2, 2], [7, 7], [0, 1], [999, 128], [Number.NaN, 32]])(
+  it.each([[2, 2], [7, 7], [0, 1], [999, 128], [Number.NaN, 8]])(
     'uses configured concurrency %s, bounds it to %s and preserves progress and source order',
     async (concurrency, expectedPeak) => {
       let active = 0;
@@ -547,6 +547,24 @@ describe('web API client domain binding and maintenance endpoints', () => {
     const client = new ApiClient({ fetchImpl });
     const progress = vi.fn();
     await expect(client.runMaintenance(undefined, progress)).rejects.toThrow('未取得维护完成回执');
+    expect(progress).toHaveBeenCalledExactlyOnceWith(line);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['json', '维护响应格式异常'], ['read', '维护连接中断']] as const)('keeps completed target lines after a %s stream failure without replaying maintenance', async (failure, message) => {
+    const line = { message: '完成：已确认可用 3/3', tone: 'success', targetKey: 'edge.example.com|A' };
+    let first = true;
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ pull(controller) {
+      if (first) {
+        first = false;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'progress', line }) + '\n'));
+      } else if (failure === 'json') {
+        controller.enqueue(new TextEncoder().encode('{broken json}\n'));
+        controller.close();
+      } else controller.error(new TypeError('network disconnected'));
+    } }), { headers: { 'Content-Type': 'application/x-ndjson' } }));
+    const progress = vi.fn();
+    await expect(new ApiClient({ fetchImpl }).runMaintenance(undefined, progress)).rejects.toThrow(message);
     expect(progress).toHaveBeenCalledExactlyOnceWith(line);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

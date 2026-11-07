@@ -198,13 +198,13 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     expect(writes).not.toHaveBeenCalled();
   });
 
-  it('probes all records without a 200-address cap or the batch concurrency ceiling', async () => {
+  it('probes all records with bounded address concurrency and no 200-address truncation', async () => {
     const records: DnsRecord[] = Array.from({ length: 201 }, (_, index) => ({
       id: String(index), type: 'A', name: 'edge.example.com', content: `203.0.113.${index + 1}`,
     }));
     const { client, requests, writes, peak } = setup(records);
     const view = await loadTargetStatus(client, 'edge.example.com|A', 2053);
-    expect(peak()).toBe(201);
+    expect(peak()).toBe(8);
     expect(view.records).toHaveLength(201);
     expect(view.probes).toHaveLength(201);
     expect(requests).toHaveLength(202);

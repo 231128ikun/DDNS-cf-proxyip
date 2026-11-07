@@ -132,7 +132,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
   const configuredTarget = configuredTargets?.find(target => bindingKey(target) === selectedTargetKey);
   const targetPort = configuredTarget?.port ?? 443;
   const [currentStatus, loadCurrentStatus] = useResource<TargetStatusView>((signal, progress) =>
-    loadTargetStatus(client, selectedTargetKey ?? '', targetPort, signal, progress));
+    loadTargetStatus(client, selectedTargetKey ?? '', targetPort, signal, progress, webCheckConcurrency));
   const activeStatus = useRef<AbortController | null>(null);
   const refreshCurrentStatus = useCallback((): Promise<boolean> => {
     activeStatus.current?.abort();
@@ -480,7 +480,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
     }
   };
 
-  const handleConfigSaved = (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>): void => {
+  const handleConfigSaved = (response: ConfigResponse, targetKeys: Readonly<Record<string, string>>, mapping: Readonly<Record<string, string>>): void => {
     initialOrderPending.current = false;
     const nextKeys = response.config.targets.map(bindingKey);
     setSelectedTargetKey(current => {
@@ -488,16 +488,35 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
       return next && nextKeys.includes(next) ? next : nextKeys[0] ?? null;
     });
     acceptConfig(response);
-    void refreshBindings();
+    if (confirmedBindings || Object.keys(mapping).length) {
+      const items = response.config.targets.flatMap(target => {
+        const key = bindingKey(target);
+        const previous = confirmedBindings?.items.find(item => item.key === key);
+        const poolKey = mapping[key] ?? previous?.poolKey;
+        if (!poolKey) return [];
+        const poolName = pools.status === 'ready' ? pools.data.pools.find(pool => pool.key === poolKey)?.name : undefined;
+        return [{ key, domain: target.domain, mode: target.mode, enabled: target.enabled, poolKey,
+          poolName: poolName ?? (previous?.poolKey === poolKey ? previous.poolName : poolKey) }];
+      });
+      const data = { items: sortByKeyOrder(items, confirmedBindings?.items.map(item => targetKeys[item.key] ?? item.key) ?? []) };
+      patchBindings(confirmedBindings ? () => data : data);
+    }
   };
   const handleRunMaintenance = (): void => {
     if (maintenancePending.current || poolWritePending.current || !poolLeaveGuard.current()) return;
     maintenancePending.current = true;
     setMaintenanceBusy(true);
     appendConsoleLog('[维护] 开始执行全部目标');
-    client.runMaintenance(undefined, line => appendConsoleLog('[维护] ' + line.message, line.tone))
+    const reported = new Set<string>();
+    client.runMaintenance(undefined, line => {
+      if (line.targetKey) {
+        reported.add(line.targetKey);
+        logMaintenance(appendConsoleLog, line.message, line.tone);
+      } else appendConsoleLog('[维护] ' + line.message, line.tone);
+    })
       .then((data) => {
         for (const item of data.results) {
+          if (reported.has(bindingKey(item))) continue;
           const lines = item.lines ?? [item.domain + '：' + (item.error ?? '维护明细未提供')];
           lines.forEach((line, index) => logMaintenance(appendConsoleLog, line, item.lineTones?.[index] ?? (item.error ? 'error' : 'info')));
         }
@@ -590,6 +609,7 @@ export function App({ client, initialConfig }: { readonly client: ApiClient; rea
           {ConfigPage ? (
             <ConfigPage onSaveConfig={saveConfig} onToggleSetting={handleToggleSetting} saving={configBusy} notify={notify} config={config} onReload={refreshConfig} onSaved={handleConfigSaved}
               pools={pools} bindings={bindings} bindingBusy={bindingBusy} onBindPool={handleBindPool}
+              onSaveBindings={mapping => client.saveDomainBindings(mapping).then(() => {})}
               onReloadBindings={() => { void refreshBindings(); void refreshPools(); }} onOpenBindingOrder={() => void openOrderDialog('bindings')} />
           ) : (
             <p id="page-config" role="tabpanel" aria-labelledby="tab-config" class="text-secondary text-center py-4">正在加载配置中心…</p>

@@ -45,6 +45,7 @@
   --color-console-border: #2c2c2e;
   --color-console-text: #d3d8e2;
   --color-console-muted: #8e8e93;
+  --color-console-scrollbar: color-mix(in srgb, var(--color-console-text) 50%, transparent);
   --color-console-success: #32d74b;
 
   --space-05: 2px;
@@ -369,6 +370,17 @@ body {
         .ready-pulse { animation: ready-pulse .6s ease-in-out 2; }
         @keyframes ready-pulse { 50% { opacity: .25; } }
         #log-window { overflow: auto; }
+        #log-window::-webkit-scrollbar { width: var(--space-4); height: var(--space-4); background: transparent; }
+        #log-window::-webkit-scrollbar-thumb {
+            background: var(--color-console-scrollbar);
+            border: var(--space-05) solid transparent;
+            border-radius: var(--radius-pill);
+            background-clip: padding-box;
+        }
+        #log-window::-webkit-scrollbar-thumb:hover { background-color: var(--color-console-muted); }
+        @supports not selector(::-webkit-scrollbar) {
+            #log-window { scrollbar-width: thin; scrollbar-color: var(--color-console-scrollbar) transparent; }
+        }
         .console-event { padding-inline-start: var(--space-8); }
         .console summary { cursor: pointer; min-height: var(--control-height-sm); padding-block: var(--space-1); }
         .console-event summary { list-style-position: outside; }

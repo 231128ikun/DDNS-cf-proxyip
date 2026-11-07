@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
-import { pathToFileURL } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 
 // 固定提交提供无障碍回归基准；验收需要该提交的 Git 历史。
@@ -36,7 +36,7 @@ export function createUiFixture() {
     poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
-    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null };
+    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, maintenancePause: null, bindingMapping: null };
 }
 
 /** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
@@ -76,11 +76,17 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
   const referenceHtml = reference ? renderReference(fixture.config, ref) : null;
   const referenceLoginHtml = reference ? renderReference(fixture.config, ref, true) : null;
-  const { default: worker } = await import(pathToFileURL(join(appRoot, 'dist', 'release', 'worker.js')).href);
   const harness = await createViteServer({ root: appRoot, configFile: false, server: { middlewareMode: true, ws: false, hmr: false }, appType: 'custom' });
-  let createWorker;
-  try { ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts')); }
+  let createWorker, localWorkerContext, parsePoolText, parseProxyTarget, needsDnsResolution;
+  try {
+    ({ createWorker } = await harness.ssrLoadModule('/src/worker.ts'));
+    ({ localWorkerContext } = await harness.ssrLoadModule('/test/helpers/native-probe.ts'));
+    ({ parsePoolText } = await harness.ssrLoadModule('/src/domain/pool-entry.ts'));
+    ({ parseProxyTarget } = await harness.ssrLoadModule('/src/domain/proxy-target.ts'));
+    ({ needsDnsResolution } = await harness.ssrLoadModule('/src/application/check-target.ts'));
+  }
   finally { await harness.close(); }
+  const worker = createWorker();
   // 普通批检与洗库走实际路由；替身限制每个请求最多探测一个目标。
   const probeWorker = createWorker(() => {
     let used = false;
@@ -107,7 +113,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       const values = {
         app_config: fixture.config,
-        domain_pool_mapping: Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
+        domain_pool_mapping: fixture.bindingMapping ?? Object.fromEntries(fixture.bindings.items.map(item => [item.key, item.poolKey])),
         domain_pool_order: fixture.bindings.items.map(item => item.key),
         ip_pool_names: Object.fromEntries(fixture.pools.map(item => [item.key, item.name])),
         ip_pool_order: fixture.pools.map(item => item.key),
@@ -127,9 +133,10 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       const data = JSON.parse(value);
       if (key === 'app_config') fixture.config = data;
-      else if (key === 'domain_pool_mapping') fixture.bindings.items = fixture.bindings.items.map(item => ({
-        ...item, poolKey: data[item.key] ?? item.poolKey,
-      }));
+      else if (key === 'domain_pool_mapping') {
+        fixture.bindingMapping = data;
+        fixture.bindings.items = fixture.bindings.items.map(item => ({ ...item, poolKey: data[item.key] ?? item.poolKey }));
+      }
       else if (key === 'ip_pool_names') fixture.pools = fixture.pools.map(item => ({ ...item, name: data[item.key] ?? item.name }));
       else if (key === 'ip_pool_order') fixture.pools = data.map(key => fixture.pools.find(item => item.key === key)).filter(Boolean);
       else throw new Error(`Unexpected UI fixture KV write: ${key}`);
@@ -142,8 +149,11 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       fixture.pools = fixture.pools.filter(item => item.key !== key);
     },
   };
+  const runWorker = (handler, input) => handler.fetch(input, { IP_DATA: kv }, localWorkerContext(handler, { IP_DATA: kv }));
   const requests = [];
-  const server = createServer(async (request, response) => {
+  const tlsDir = process.env.DDNS_UI_TLS_DIR;
+  const server = (tlsDir ? createHttpsServer : createServer)(tlsDir
+    ? { key: readFileSync(join(tlsDir, 'key.pem')), cert: readFileSync(join(tlsDir, 'cert.pem')) } : {}, async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     const json = (data, status = 200) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(data)); };
     if (url.pathname.startsWith('/api/')) {
@@ -169,8 +179,8 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
         if (url.pathname.endsWith('/restore') && fixture.restoreFailures-- > 0) return json({ error: '模拟恢复失败' }, 500);
         if (request.method === 'PUT' && fixture.poolWriteFailures-- > 0) return json({ error: '模拟池保存失败' }, 500);
         const handler = url.pathname.endsWith('/clean') ? probeWorker : worker;
-        const result = await handler.fetch(new Request(url, { method: request.method,
-          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }), { IP_DATA: kv });
+        const result = await runWorker(handler, new Request(url, { method: request.method,
+          headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) }, ...(body ? { body } : {}) }));
         const data = await result.json();
         const delay = read ? fixture.poolReadDelay : preview ? fixture.poolPreviewDelay : fixture.poolWriteDelay;
         const output = read && fixture.poolReadOverride !== null ? { ...data, content: fixture.poolReadOverride } : data;
@@ -179,10 +189,18 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) {
         if (request.headers.accept !== 'application/x-ndjson') return json(fixture.maintenanceResponse);
-        response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        response.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store, no-transform' });
         response.write(JSON.stringify({ type: 'progress', line: { tone: 'info', message: 'proxy.example.com · 读取库存和 DNS' } }) + '\n');
-        await new Promise(resolve => setTimeout(resolve, 450));
-        response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
+        const pause = fixture.maintenancePause;
+        await (pause ? pause('progress') : new Promise(resolve => setTimeout(resolve, 450)));
+        for (const item of fixture.maintenanceResponse.results) {
+          for (const [index, message] of (item.lines ?? []).entries()) {
+            response.write(JSON.stringify({ type: 'progress', line: { message, tone: item.lineTones?.[index] ?? 'info', targetKey: item.domain + '|' + item.mode } }) + '\n');
+          }
+        }
+        await (pause ? pause('result') : new Promise(resolve => setTimeout(resolve, 450)));
+        if (fixture.maintenanceDisconnect) response.end();
+        else response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
         return;
       }
       if (url.pathname === '/api/auth/status') {
@@ -220,9 +238,9 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
             return json({ error: '模拟绑定保存失败' }, 500);
           }
         }
-        const result = await worker.fetch(new Request(url, { method: request.method,
+        const result = await runWorker(worker, new Request(url, { method: request.method,
           headers: { 'content-type': 'application/json', ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}) },
-          ...(body ? { body } : {}) }), { IP_DATA: kv });
+          ...(body ? { body } : {}) }));
         const data = await result.json();
         if (result.ok && url.pathname === '/api/domain-bindings' && request.method === 'GET') fixture.bindings = data;
         if (result.ok && url.pathname === '/api/pools' && request.method === 'GET') fixture.pools = data.pools;
@@ -266,14 +284,16 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
           domainPoolOrder: fixture.bindings.items.map(item => item.key) });
       }
       if (url.pathname === '/api/check') {
-        // 验收只使用直连目标，不发真实 DNS 请求。
-        if (typeof input.proxyip !== 'string' || !/^(?:[\w.-]+:\d+|\[[\da-f:]+\]:\d+|\d+(?:\.\d+){3})$/i.test(input.proxyip)) return json({error:'验收仅支持直连目标'}, 400);
+        // 复用实际解析和目标分类，阻止验收发出真实 DNS 请求。
+        const lines = typeof input.proxyip === 'string' ? parsePoolText(input.proxyip).filter(line => !line.raw.startsWith('#')) : [];
+        const address = lines.length === 1 && lines[0].entry ? lines[0].entry.address : '';
+        if (!parseProxyTarget(address) || needsDnsResolution(address)) return json({error:'验收仅支持直连目标'}, 400);
         const abort = new AbortController();
         response.once('close', () => { if (!response.writableEnded) abort.abort(); });
         const req = new Request(url, {method:'POST', signal:abort.signal, body,
           headers:{'content-type':'application/json', ...(request.headers.cookie ? {cookie:request.headers.cookie} : {})}});
         Object.defineProperty(req, 'cf', {value:{colo:fixture.executionColo}});
-        const result = await probeWorker.fetch(req, {IP_DATA:kv});
+        const result = await runWorker(probeWorker, req);
         return json(await result.json(), result.status);
       }
       if (url.pathname === '/api/check-ip') return json({...baselineProbe, responseTime:12, asn:'AS64500', country:'US', stack:'v4'});
@@ -335,6 +355,6 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
     response.end(readFileSync(file));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { base: `http://127.0.0.1:${server.address().port}`, fixture, requests,
+  return { base: `${tlsDir ? 'https' : 'http'}://127.0.0.1:${server.address().port}`, fixture, requests,
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }

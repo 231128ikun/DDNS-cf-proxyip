@@ -1,6 +1,8 @@
 import { getPoolFixedName } from '../contracts/pool';
 import type { MaintenanceLogLine } from '../contracts/maintenance';
-import { resolvePoolKey } from '../domain/domain-binding';
+import { bindingKey, resolvePoolKey } from '../domain/domain-binding';
+import { maintenanceDisplayLines } from '../domain/maintenance-display';
+import { toMaintenanceTargetResult } from './maintenance-summary';
 import type { ManagedTarget } from '../domain/managed-target';
 import type { DnsZone } from '../ports/dns-repository';
 import type { MaintenanceSourceData, MaintenanceTargetConfig } from '../ports/maintenance-source';
@@ -40,19 +42,21 @@ export type MaintenanceRunReport = MaintenanceRunSummary & {
 export class MaintainManagedTargets {
   constructor(private readonly dependencies: MaintainManagedTargetsDependencies) {}
 
-  async execute(data: MaintenanceSourceData, fallbackZone: DnsZone, onProgress?: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunSummary> {
+  async execute(data: MaintenanceSourceData, fallbackZone: DnsZone, onProgress?: (line: MaintenanceLogLine) => void, signal?: AbortSignal): Promise<MaintenanceRunSummary> {
     const results: TargetMaintenanceResult[] = [];
 
     for (const config of data.targets) {
+      signal?.throwIfAborted();
       if (!config.enabled) continue;
       const zone = resolveZone(data.zones, config, fallbackZone);
       const poolKey = resolvePoolKey(data.poolMapping, config.target);
       const poolName = data.poolNames[poolKey] || getPoolFixedName(poolKey);
 
       try {
-        const report = await this.dependencies.maintainer.execute({ target: config.target, zone, poolKey }, onProgress);
+        const report = await this.dependencies.maintainer.execute({ target: config.target, zone, poolKey, ...(signal ? { signal } : {}) }, onProgress);
         results.push({ target: config.target, zone, poolKey, poolName, report, error: null });
       } catch (error) {
+        signal?.throwIfAborted();
         results.push({
           target: config.target,
           zone,
@@ -61,6 +65,12 @@ export class MaintainManagedTargets {
           report: null,
           error: error instanceof Error ? error.message : '维护执行失败',
         });
+      }
+      if (onProgress) {
+        const result = results[results.length - 1]!;
+        for (const line of maintenanceDisplayLines(toMaintenanceTargetResult(result))) {
+          onProgress({ ...line, targetKey: bindingKey(config.target) });
+        }
       }
     }
 

@@ -1,4 +1,6 @@
 import { shouldNotifyMaintenance, type MaintenanceRunReport } from '../application/maintain-managed-targets';
+import { hasMaintenanceWarnings, maintenanceExitLabel, maintenanceRemovalReason } from '../domain/maintenance-display';
+import { isProbeErrorResult } from '../domain/probe-result';
 import { toMaintenanceTargetResult } from '../application/maintenance-summary';
 import type { MaintenanceAddressCheck, MaintenanceRunResult } from '../contracts/maintenance';
 import { getPoolFixedName, TRASH_POOL_KEY } from '../contracts/pool';
@@ -13,7 +15,7 @@ export interface TelegramMaintenanceMessageOptions {
 
 /** 完整列出各域名确认的解析地址；长报告由通知适配器按完整行分段。 */
 export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, options: TelegramMaintenanceMessageOptions): string {
-  const alert = !run.changed && shouldNotifyMaintenance(run);
+  const alert = options.isManual && !run.changed && shouldNotifyMaintenance(run);
   const title = `DDNS ${options.isManual ? '手动' : '自动'}维护${alert ? '告警' : '报告'}`;
   const lines = [
     (options.isManual ? '🔧' : '⚙️') + ' <b>' + title + '</b>',
@@ -50,8 +52,9 @@ export function buildTelegramMaintenanceMessage(run: MaintenanceRunReport, optio
 
 function formatTarget(result: MaintenanceRunResult): string[] {
   const mode = result.mode === 'A' ? 'A/AAAA' + (result.port ? ' · 端口 ' + result.port : '') : 'TXT';
+  const requirement = { any: '任意', v4: '仅 IPv4', v6: '仅 IPv6', dual: '双栈' }[result.exitFilter ?? 'any'];
   const lines = ['━━ <code>' + escapeHtml(result.domain) + '</code> ━━', mode + ' · 最小活跃数 ' + (result.minActive ?? 0),
-    '📦 使用池：<b>' + escapeHtml(result.poolName) + '</b>'];
+    '📦 使用池：<b>' + escapeHtml(result.poolName) + '</b> · 出口要求：' + requirement];
   if (!result.dns) {
     lines.push('❌ 维护失败：' + escapeHtml(result.error ?? '未取得解析结果'));
     lines.push('⚠️ 未完成: 未确认/' + (result.minActive ?? 0));
@@ -69,7 +72,7 @@ function formatTarget(result: MaintenanceRunResult): string[] {
   if (!existing.length && !result.dns.added.length) lines.push('无解析地址');
   for (const value of existing) {
     const check = checks.get(value);
-    const icon = check?.status === 'alive' && check.matchesTarget ? '✅' : check?.status === 'dead' ? '❌' : '⚠️';
+    const icon = check?.status === 'alive' && check.matchesTarget && !isProbeErrorResult(check) ? '✅' : check?.status === 'dead' ? '❌' : '⚠️';
     lines.push(icon + ' <code>' + escapeHtml(result.mode === 'A' ? check?.address ?? value : value) + '</code>');
     lines.push('   ' + escapeHtml(check?.status === 'dead' && result.dns.removed.includes(value) ? checkMetadata(check) : checkDetails(check)));
   }
@@ -83,11 +86,11 @@ function formatTarget(result: MaintenanceRunResult): string[] {
   for (const value of result.dns.removed) {
     const check = checks.get(value);
     lines.push('   ' + (check?.status === 'dead' ? '❌' : '⚠️') + ' <code>' + escapeHtml(result.mode === 'A' ? check?.address ?? value : value) + '</code>',
-      '      ' + escapeHtml(checkMetadata(check)), '      原因: ' + escapeHtml(removalReason(check)));
+      '      ' + escapeHtml(checkMetadata(check)), '      原因: ' + escapeHtml(maintenanceRemovalReason(check, result.exitFilter)));
   }
   const removed = new Set(result.dns.removed.flatMap(value => [value, checks.get(value)?.address ?? value]));
   for (const value of result.archivedAddresses ?? []) {
-    if (!removed.has(value)) lines.push('🗑️ <code>' + escapeHtml(value) + '</code> · ' + escapeHtml(removalReason(checks.get(value))));
+    if (!removed.has(value)) lines.push('🗑️ <code>' + escapeHtml(value) + '</code> · ' + escapeHtml(maintenanceRemovalReason(checks.get(value))));
   }
   if (result.archived) lines.push('🗑️ 归档 ' + result.archived + ' 个地址');
   const candidates = result.candidates;
@@ -105,8 +108,7 @@ function formatTarget(result: MaintenanceRunResult): string[] {
     const check = checks.get(value);
     return check?.status === 'alive' && check.matchesTarget;
   });
-  const hasDiagnostics = result.probeErrors > 0 || (result.candidateErrors?.length ?? 0) > 0
-    || Boolean(result.error) || Boolean(result.errors?.length) || Boolean(candidates?.unknown);
+  const hasDiagnostics = hasMaintenanceWarnings(result);
   if (active >= minimum && currentIsHealthy && !hasDiagnostics && !result.dns.added.length && !result.dns.removed.length && !(result.archived ?? 0)) {
     lines.push('✨ 所有 IP 正常，无变化');
   }
@@ -116,22 +118,17 @@ function formatTarget(result: MaintenanceRunResult): string[] {
 
 function checkDetails(check: MaintenanceAddressCheck | undefined): string {
   if (!check) return '未确认';
-  const status = check.status === 'alive' ? check.matchesTarget ? '' : '筛选不匹配'
+  const status = check.status === 'alive' ? check.matchesTarget ? '' : isProbeErrorResult(check) ? '筛选未确认' : '筛选不匹配'
     : check.status === 'dead' ? '失效' : '未确认';
-  const diagnostic = check.status !== 'alive' && check.message ? (check.code ? '[' + check.code + '] ' : '') + check.message : '';
+  const diagnostic = (check.status !== 'alive' || isProbeErrorResult(check)) && check.message ? (check.code ? '[' + check.code + '] ' : '') + check.message : '';
   return [checkMetadata(check), status, diagnostic].filter(Boolean).join(' · ');
 }
 
 function checkMetadata(check: MaintenanceAddressCheck | undefined): string {
   if (!check) return '未确认';
-  return [check.colo, check.latencyMs === undefined ? undefined : check.latencyMs + 'ms', check.country, check.asn]
-    .filter(Boolean).join(' · ') || check.details || '未确认';
-}
-
-function removalReason(check: MaintenanceAddressCheck | undefined): string {
-  if (check?.status === 'dead') return check.code === 'TIMEOUT' ? '检测超时' : check.message ?? '检测失效';
-  if (check?.status === 'alive' && !check.matchesTarget) return '筛选不匹配';
-  return '记录移除';
+  const metadata = [check.colo, check.latencyMs === undefined ? undefined : check.latencyMs + 'ms', check.country, check.asn]
+    .filter(Boolean).join(' · ');
+  return [metadata || check.details, maintenanceExitLabel(check)].filter(Boolean).join(' · ') || '未确认';
 }
 
 function escapeHtml(value: string): string {

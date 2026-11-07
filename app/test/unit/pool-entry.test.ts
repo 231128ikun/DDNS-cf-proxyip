@@ -15,6 +15,42 @@ const target = parseProxyTarget('203.0.113.10:443');
 if (!target) throw new Error('test target is invalid');
 
 describe('pool entries', () => {
+  it.each(['203.0.113.10 8443', '203.0.113.10\t8443', '203.0.113.10：8443'])('retains the port through the shared pool input parser: %s', input => {
+    expect(cleanPoolText(input + ' # edge')).toBe('203.0.113.10:8443,null,null,null # edge');
+    expect(countPoolTextLines(input)).toBe(1);
+  });
+
+  it.each(['203.0.113.10 0', '203.0.113.10\t70000', '[2001:db8::1] 0'])('does not silently reinterpret an invalid whitespace port as metadata: %s', input => {
+    expect(cleanPoolText(input)).toBe('');
+    expect(countPoolTextLines(input)).toBe(1);
+  });
+
+  it.each([
+    ['https://203.0.113.10:443 64500 US v4', '203.0.113.10:443,AS64500,US,v4'],
+    ['https://203.0.113.10:443/path\t64500\tUS\tv4', '203.0.113.10:443,AS64500,US,v4'],
+    ['https://[2001:db8::1]:8443/path 64500 US v6', '[2001:db8::1]:8443,AS64500,US,v6'],
+  ])('keeps URL metadata instead of interpreting it as a second port: %s', (input, expected) => {
+    expect(cleanPoolText(input)).toBe(expected);
+  });
+
+  it('preserves empty positional metadata and legacy two-field entries', () => {
+    const inputs = ['203.0.113.10:443,,US,v4 # first', '203.0.113.11:443,AS64500,,v6', '203.0.113.12:443,64501'];
+    expect(parsePoolText(inputs.join('\n')).map(line => line.entry)).toEqual([
+      { address: '203.0.113.10:443', asn: null, country: 'US', stack: 'v4', comment: '# first' },
+      { address: '203.0.113.11:443', asn: 'AS64500', country: null, stack: 'v6', comment: '' },
+      { address: '203.0.113.12:443', asn: '64501', country: null, stack: null, comment: '' },
+    ]);
+  });
+
+  it('distinguishes whitespace ports from adjacent addresses and CSV metadata', () => {
+    const input = '203.0.113.10 8443,AS64500,US,v4 | 203.0.113.11\t2053\t203.0.113.12:443';
+    expect(cleanPoolText(input)).toBe([
+      '203.0.113.10:8443,AS64500,US,v4',
+      '203.0.113.11:2053,null,null,null',
+      '203.0.113.12:443,null,null,null',
+    ].join('\n'));
+  });
+
   it('parses existing and current formats with attached comments', () => {
     expect(parsePoolEntry('203.0.113.10:8443')).toEqual({
       address: '203.0.113.10:8443',

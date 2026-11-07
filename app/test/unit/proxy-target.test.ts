@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { parseProxyTarget } from '../../src/domain/proxy-target';
 
 describe('parseProxyTarget', () => {
+  it.each(['203.0.113.10 8443', '203.0.113.10	8443', '203.0.113.10：8443'])('normalizes an unambiguous loose address and port: %s', input => {
+    expect(parseProxyTarget(input)).toMatchObject({ host: '203.0.113.10', port: 8443, key: '203.0.113.10:8443' });
+  });
+
+  it('does not interpret a detached port as a hostname', () => {
+    expect(parseProxyTarget('8443')).toBeNull();
+  });
+
   it('parses IPv4 with port', () => {
     const target = parseProxyTarget('203.0.113.10:8443');
     expect(target).toMatchObject({

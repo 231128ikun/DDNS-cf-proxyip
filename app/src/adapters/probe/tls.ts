@@ -1,5 +1,5 @@
 import { LazyReadFunctionReadQueue, startTls, TrustedCert, type RootCertsDatabase } from 'subtls';
-import { appFetch } from '../../util/fetch';
+import { appFetch, FetchBudgetError } from '../../util/fetch';
 import { createRequestTimeout } from '../../util/request-timeout';
 import type { ProbeSocket } from './native';
 
@@ -28,7 +28,10 @@ async function trustRoots(fetchRoots: typeof fetch): Promise<RootCertsDatabase> 
     loads.set(fetchRoots, value);
   }
   try { return await loads.get(fetchRoots)!; }
-  catch { throw new TypeError('TLS 信任库加载失败，候选状态未知'); }
+  catch (error) {
+    if (error instanceof FetchBudgetError) throw error;
+    throw new TypeError('TLS 信任库加载失败，候选状态未知');
+  }
 }
 
 /** 显式发送 SNI 并验证证书链，绕开生产边缘 startTls 的 SNI 丢失问题。 */
@@ -44,14 +47,12 @@ export async function secureProbeSocket(socket: ProbeSocket, hostname: string,
     const chunk = await reader.read();
     return chunk.done ? undefined : chunk.value;
   });
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => closing ??= (async () => {
     await socket.close().catch(() => {});
     await reader.cancel().catch(() => {});
     reader.releaseLock(); writer.releaseLock();
-  };
+  })();
   try {
     const tls = await startTls(hostname, trusted, queue.read.bind(queue), data => {
       pending = pending.then(() => writer.write(data));

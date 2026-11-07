@@ -22,6 +22,7 @@ export interface MaintenanceJobOptions {
   readonly projectUrl?: string;
   readonly now?: () => Date;
   readonly onProgress?: (line: MaintenanceLogLine) => void;
+  readonly signal?: AbortSignal;
 }
 
 export interface MaintenanceJobResult {
@@ -42,7 +43,9 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
   ]);
   const beforeCounts = baseline ?? poolCounts(currentPools);
 
-  const summary = await options.maintainer.execute(data, options.fallbackZone, options.onProgress);
+  options.signal?.throwIfAborted();
+  const summary = await options.maintainer.execute(data, options.fallbackZone, options.onProgress, options.signal);
+  options.signal?.throwIfAborted();
   options.onProgress?.({ message: '汇总维护结果', tone: 'info' });
   const afterPools = await options.stats.current();
   const afterCounts = poolCounts(afterPools);
@@ -56,8 +59,10 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
     },
   };
 
-  if (!shouldNotifyMaintenance(run)) return { run, notification: null };
+  const notify = options.isManual ? shouldNotifyMaintenance(run) : run.changed;
+  if (!notify) return { run, notification: null };
 
+  options.signal?.throwIfAborted();
   options.onProgress?.({ message: '处理维护通知', tone: 'info' });
   const notification = await options.notifier.send(buildTelegramMaintenanceMessage(run, {
     isManual: options.isManual,

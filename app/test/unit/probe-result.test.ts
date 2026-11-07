@@ -23,6 +23,13 @@ describe('isProbeErrorResult', () => {
     expect(isProbeErrorResult(unknown(null, 'NOT_CONFIGURED', 'unset'))).toBe(true);
   });
 
+  it('counts a partial exit anomaly without changing its alive status', () => {
+    const result = { status: 'alive' as const, code: 'PARTIAL_EXIT' };
+    expect(isProbeErrorResult(result)).toBe(true);
+    expect(result.status).toBe('alive');
+    expect(isProbeErrorResult({ status: 'alive' })).toBe(false);
+  });
+
   it('excludes placeholders that never reached the probe', () => {
     expect(isProbeErrorResult(unknown(null, 'NOT_PROBED', 'waiting'))).toBe(false);
     expect(isProbeErrorResult(unknown(null, 'INVALID_DNS_VALUE', 'bad record'))).toBe(false);

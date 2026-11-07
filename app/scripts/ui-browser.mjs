@@ -106,7 +106,7 @@ export function parseDevToolsEndpoint(text) {
   } catch { return null; }
 }
 
-export async function launchBrowser(chrome) {
+export async function launchBrowser(chrome, { hideScrollbars = true } = {}) {
   const executable = [chrome, process.env.CHROME_PATH,
     `${process.env.ProgramFiles}/Google/Chrome/Application/chrome.exe`,
     `${process.env['ProgramFiles(x86)']}/Microsoft/Edge/Application/msedge.exe`,
@@ -116,9 +116,9 @@ export async function launchBrowser(chrome) {
   if (!executable) throw new Error('未找到 Chrome/Edge；请设置 CHROME_PATH');
   const profile = mkdtempSync(join(tmpdir(), 'ddns-ui-browser-'));
   const child = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', '--hide-scrollbars',
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-gpu', ...(hideScrollbars ? ['--hide-scrollbars'] : []),
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-    '--force-device-scale-factor=1', ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    '--force-device-scale-factor=1', ...(process.env.DDNS_UI_TLS_DIR ? ['--allow-insecure-localhost'] : []), ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let startup = '';
   let announced;
   let spawnError;

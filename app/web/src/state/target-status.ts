@@ -1,4 +1,5 @@
 import type { PoolCheckItemResponse } from '../../../src/contracts/pool-check';
+import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-settings';
 import type { TargetStatusRecord, TargetStatusResponse } from '../../../src/contracts/target-status';
 import { formatProxyAuthority } from '../../../src/domain/proxy-target';
 import { parseTxtAddresses } from '../../../src/domain/txt-record';
@@ -20,10 +21,11 @@ export function currentStatusRows(status: TargetStatusResponse, port: number | '
   });
 }
 
-/** 解析实况全并发检测现有记录；复用批量结果校验与取消，每个请求只检测一个地址。 */
+/** 解析实况复用逐地址调度、结果校验与取消。 */
 export async function loadTargetStatus(
   client: ApiClient, key: string, port: number | 'any', signal?: AbortSignal,
   onProgress?: (status: TargetStatusView) => void,
+  concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS,
 ): Promise<TargetStatusView> {
   signal?.throwIfAborted();
   const status = await client.currentStatus(key, signal);
@@ -35,7 +37,7 @@ export async function loadTargetStatus(
     if (signal?.aborted) return;
     probes.push(item);
     onProgress?.({ ...status, probes: [...probes] });
-  }, 'all');
+  }, concurrency);
   signal?.throwIfAborted();
   return { ...status, probes: checked.items };
 }

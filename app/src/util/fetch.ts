@@ -6,3 +6,10 @@
  * 单元测试注入的都是普通函数，因此只有真机才会暴露；所有适配器统一从这里取默认实现。
  */
 export const appFetch: typeof fetch = (input, init) => fetch(input, init);
+
+export class FetchBudgetError extends Error {
+  constructor() {
+    super('本轮 HTTP 请求预算已用尽');
+    this.name = 'FetchBudgetError';
+  }
+}

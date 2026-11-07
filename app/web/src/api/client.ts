@@ -17,7 +17,8 @@ import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts
 import type { AuthStatusResponse } from '../../../src/contracts/auth';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-settings';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
-import { MAINTENANCE_STREAM_TYPE, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse, type MaintenanceStreamEvent } from '../../../src/contracts/maintenance';
+import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import { isRecord } from '../../../src/contracts/parse';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 
 export interface ApiClientOptions {
@@ -81,7 +82,7 @@ export class ApiClient {
    * 浏览器限制并发，每个地址单独请求 Worker。
    * 单个 Worker 请求只承担一个目标的主/备探测，避免整批耗尽子请求预算。
    */
-  async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
+  async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
     const { checkBatch } = await loadBatchCheckModule();
     return checkBatch(this, text, signal, onProgress, concurrency);
   }
@@ -112,7 +113,7 @@ export class ApiClient {
     return await this.request<OkResponse>(poolPath(key), 'PATCH', { displayName }, signal);
   }
 
-  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number | 'all' = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS, onApply?: () => void): Promise<CleanPoolResponse> {
+  async cleanPool(key: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS, onApply?: () => void): Promise<CleanPoolResponse> {
     const source = await this.readPool(key, signal);
     if (source.key !== key) throw new ApiError('返回的 IP 池不符', 0);
     const {readPoolSnapshot, serializePoolEntries, snapshotEntries} = await import('../../../src/domain/pool-snapshot');
@@ -269,26 +270,20 @@ export class ApiClient {
 
 async function readMaintenanceStream(response: Response, onProgress: (line: MaintenanceLogLine) => void): Promise<MaintenanceRunResponse> {
   const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  let failure = '维护响应提前结束';
   try {
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let end: number;
-      while ((end = buffer.indexOf('\n')) !== -1) {
-        const event = JSON.parse(buffer.slice(0, end)) as MaintenanceStreamEvent;
-        buffer = buffer.slice(end + 1);
-        if (event.type === 'progress') onProgress(event.line);
-        else if (event.type === 'result' && event.result?.ok === true && Array.isArray(event.result.results)) return event.result;
-        else if (event.type === 'error') throw new ApiError(event.message, 0);
-      }
+    if (reader) {
+      const outcome = await readMaintenanceStreamResult<MaintenanceRunResponse>(reader.read.bind(reader), onProgress,
+        (value): value is MaintenanceRunResponse => isRecord(value) && value.ok === true && Array.isArray(value.results));
+      if ('result' in outcome) return outcome.result;
+      if (outcome.remote) throw new ApiError(outcome.message, 0);
+      failure = outcome.message;
     }
   } catch (error) {
     if (error instanceof ApiError || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    failure = error instanceof SyntaxError ? '维护响应格式异常' : '维护连接中断';
   } finally { await reader?.cancel().catch(() => {}); }
-  throw new ApiError('未取得维护完成回执，请核对解析与库存', 0);
+  throw new ApiError(failure + '，未取得维护完成回执；已返回的目标结果保留，请核对解析与库存', 0);
 }
 
 /** 池 key 由服务端白名单校验，这里只做 URL 编码，避免出现第二套规则。 */

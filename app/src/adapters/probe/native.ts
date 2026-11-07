@@ -3,6 +3,7 @@ import { alive, dead, unknown, type ProbeExit, type ProbeResult } from '../../do
 import { parseProxyTarget, type ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
 import { createRequestTimeout } from '../../util/request-timeout';
+import { FetchBudgetError } from '../../util/fetch';
 import { readProbeExit, readText, uniqueExits } from './probe-payload';
 import { isSubrequestLimit, isTcpLoop } from './probe-errors';
 import { createProbeRedactor, probeErrorMessage } from './diagnostics';
@@ -16,7 +17,6 @@ interface NativeProbeOptions {
   readonly connect: ProbeConnect;
   readonly secure?: (socket: ProbeSocket, hostname: string) => Promise<ProbeSocket>;
   readonly backup?: ProbeAdapter;
-  readonly takeAttempt?: () => boolean;
   readonly rootsFetch?: typeof fetch;
 }
 const READ_LIMIT = 65_536;
@@ -38,31 +38,40 @@ export class NativeProbeAdapter implements ProbeAdapter {
     const second = this.options.backup
       ? await this.limited(() => this.runAttempt(target, () => this.options.backup!.probe(target, context)), context.signal)
         ?? unknown(target, 'CANCELLED', '检测已取消')
-      : await this.check(target, context);
+      : await this.check(target, context, false);
     // 任一轮自身异常都不能凭另一轮的失败推断节点失效；明确成功可以恢复。
-    if (second.status === 'alive') return second;
+    if (second.status === 'alive') {
+      return first.status === 'unknown' && second.code === 'EXIT_RESTRICTED'
+        ? { ...second, code: 'PARTIAL_EXIT', message: '首次检测未确认：' + (first.message ?? '检测异常') + '；复检：' + second.message }
+        : second;
+    }
     return first.status === 'unknown' && second.status === 'dead' ? first : second;
   }
 
   private async runAttempt(target: ProxyTarget, task: () => Promise<ProbeResult>): Promise<ProbeResult> {
     if (this.subrequestLimitReached) return unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽');
-    if (this.options.takeAttempt?.() === false) return unknown(target, 'PROBE_BUDGET_EXHAUSTED', '本轮检测预算已用尽，未完成检测');
     const result = await task();
     if (result.code === 'SUBREQUEST_LIMIT') this.subrequestLimitReached = true;
     return result;
   }
 
-  private async check(target: ProxyTarget, context: ProbeContext): Promise<ProbeResult> {
+  private async check(target: ProxyTarget, context: ProbeContext, retryFailedExit = true): Promise<ProbeResult> {
     if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消');
-    let urls: URL[];
+    let branches: { url: URL; label: string }[];
     try {
-      urls = this.options.urls.filter(Boolean).map(value => new URL(value));
-      if (!urls.length || urls.some(url => url.protocol !== 'https:' || url.username || url.password || url.hash)) throw new Error();
+      branches = this.options.urls.flatMap((value, index) => value
+        ? [{ url: new URL(value), label: index === 0 ? 'IPv4' : 'IPv6' }] : []);
+      if (!branches.length || branches.some(({ url }) => url.protocol !== 'https:' || url.username || url.password || url.hash)) throw new Error();
     } catch { return unknown(target, 'NOT_CONFIGURED', '出口检测地址必须为 HTTPS JSON 接口'); }
     const connect = this.options.connect;
     const started = Date.now();
-    const results = await Promise.all(urls.map(url => this.limited(
-      () => this.runAttempt(target, () => this.checkExit(target, url, connect, context)), context.signal)));
+    const probeExit = (url: URL) => this.limited(
+      () => this.runAttempt(target, () => this.checkExit(target, url, connect, context)), context.signal);
+    let results = await Promise.all(branches.map(({ url }) => probeExit(url)));
+    if (retryFailedExit && results.some(result => result?.status === 'alive')) {
+      results = await Promise.all(results.map((result, index) => result?.status === 'dead'
+        ? probeExit(branches[index]!.url) : result));
+    }
     if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消');
     const exits = uniqueExits(results.flatMap(result => result?.status === 'alive' ? result.exits : []));
     const failed = results.find(result => result && result.status !== 'alive');
@@ -72,7 +81,18 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return alive(target, { endpoint: this.name, latencyMs: Date.now() - started, exits,
         ...(colo ? { colo } : {}),
         exitIp: exits[0]!.ip!, exitFamily: families.size > 1 ? 'dual' : exits[0]!.family,
-        ...(failed?.message ? { code: 'PARTIAL_EXIT', message: failed.message } : {}),
+        ...(failed ? {
+          code: results.some(result => result?.status === 'unknown') ? 'PARTIAL_EXIT' : 'EXIT_RESTRICTED',
+          message: results.map((result, index) => {
+            const label = branches[index]!.label;
+            if (result?.status === 'alive') {
+              const family = result.exitFamily === 'ipv6' ? 'IPv6' : 'IPv4';
+              return label + ' 探测可用' + (family === label ? '' : '（实际出口 ' + family + '）');
+            }
+            return label + (result?.status === 'dead' ? ' 出口失效' : ' 出口未确认')
+              + (result?.message ? '：' + result.message : '');
+          }).join('；'),
+        } : {}),
       });
     }
     return results.find(result => result?.code === 'SUBREQUEST_LIMIT' || result?.code === 'PROBE_BUDGET_EXHAUSTED')
@@ -137,6 +157,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       })()]);
     } catch (error) {
       if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消', details());
+      if (error instanceof FetchBudgetError) return unknown(target, 'PROBE_BUDGET_EXHAUSTED', error.message, details());
       const message = typeof error === 'string' ? error : probeErrorMessage(error);
       if (isSubrequestLimit(message)) return unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽', details());
       if (isTcpLoop(message)) return unknown(target, 'PROBE_API_ERROR', 'TCP Loop detected：运行平台拒绝回环连接', details());
@@ -149,7 +170,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return dead(target, { ...details(), code: phase, message: stage + '：' + this.redact(message).slice(0, 180) });
     } finally {
       timeout.signal.removeEventListener('abort', abort); timeout.cleanup();
-      void socket?.close().catch(() => {});
+      await socket?.close().catch(() => {});
     }
   }
 }

@@ -286,8 +286,9 @@ describe('runMaintenanceJob', () => {
     expect(job.stats.saved).toBeNull();
   });
 
-  it('stays silent on an unchanged scheduled run', async () => {
-    const job = createJob({ isManual: false });
+  it.each([{ probeErrors: 1 }, { activeCount: 0 }, { errors: ['更新 DNS 失败'] }])(
+    'keeps scheduled warnings in the result without notifying on unchanged DNS: %j', async warning => {
+    const job = createJob({ isManual: false, report: command => createReport({ target: command.target, ...warning }) });
 
     const result = await runMaintenanceJob({
       source: job.source,
@@ -298,8 +299,11 @@ describe('runMaintenanceJob', () => {
       isManual: false,
     });
 
+    expect(result.run).toMatchObject({ changed: false });
+    expect(result.run.probeErrors > 0 || result.run.insufficient || result.run.errors.length > 0).toBe(true);
     expect(result.notification).toBeNull();
     expect(job.notifier.messages).toEqual([]);
+    expect(job.stats.saved).toBeNull();
   });
 
   it.each([true, false])('ignores pool-only changes from cleanup or an older notification baseline: %s', async isManual => {
@@ -338,8 +342,8 @@ describe('runMaintenanceJob', () => {
     expect(job.notifier.messages[0]).toContain('━━ <code>edge.example.com</code> ━━');
   });
 
-  it('notifies and reports the failure reason when every target throws', async () => {
-    const job = createJob({ isManual: false, fail: true });
+  it.each([true, false])('reports execution errors and only sends a standalone alert on manual runs: %s', async isManual => {
+    const job = createJob({ isManual, fail: true });
 
     const result = await runMaintenanceJob({
       source: job.source,
@@ -347,11 +351,12 @@ describe('runMaintenanceJob', () => {
       notifier: job.notifier,
       stats: job.stats,
       fallbackZone,
-      isManual: false,
+      isManual,
     });
 
     expect(result.run.errors).toEqual(['edge.example.com: boom']);
-    expect(job.notifier.messages[0]).toContain('执行错误 1 项');
+    if (isManual) expect(job.notifier.messages[0]).toContain('执行错误 1 项');
+    else expect(job.notifier.messages).toEqual([]);
   });
 
   it('uses the notification baseline and saves it only after a successful scheduled notification', async () => {

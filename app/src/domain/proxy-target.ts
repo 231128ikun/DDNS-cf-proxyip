@@ -19,7 +19,7 @@ export function parseProxyTarget(input: string, defaultPort = 443): ProxyTarget 
   const original = input.trim();
   if (!original || original.length > 512) return null;
 
-  const parsed = parseAuthority(original, defaultPort);
+  const parsed = parseAuthority(original.replace(/：/g, ':'), defaultPort);
   if (!parsed) return null;
 
   const parsedHost = parseHost(parsed.host.toLowerCase());
@@ -46,6 +46,10 @@ export function dnsRecordTypeForHost(host: string): DnsRecordType {
   return host.includes(':') ? 'AAAA' : 'A';
 }
 
+export function hasExplicitProxyPort(value: string): boolean {
+  return /^(?:\[[^\]]+\]|[^:\s]+):\d{1,5}$/.test(value.trim().replace(/：/g, ':'));
+}
+
 function parseAuthority(value: string, defaultPort: number): { host: string; port: number } | null {
   if (/^https?:\/\//i.test(value)) {
     try {
@@ -56,6 +60,9 @@ function parseAuthority(value: string, defaultPort: number): { host: string; por
       return null;
     }
   }
+
+  const loose = /^(\S+)[ \t]+(\d+)$/.exec(value);
+  if (loose) return { host: stripIpv6Brackets(loose[1]!), port: Number(loose[2]) };
 
   const bracketed = /^\[([^\]]+)\](?::(\d+))?$/.exec(value);
   if (bracketed) {
@@ -90,7 +97,7 @@ function parseHost(host: string): Pick<ProxyTarget, 'host' | 'family'> | null {
       return { host: stripIpv6Brackets(new URL(`http://[${host}]`).hostname), family: 'ipv6' };
     } catch { return null; }
   }
-  return !NUMERIC_DOTTED_RE.test(host) && HOSTNAME_RE.test(host) ? { host, family: 'hostname' } : null;
+  return !/^\d+$/.test(host) && !NUMERIC_DOTTED_RE.test(host) && HOSTNAME_RE.test(host) ? { host, family: 'hostname' } : null;
 }
 
 function isIpv4(value: string): boolean {
