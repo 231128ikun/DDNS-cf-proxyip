@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { extname, join, resolve, sep } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import { createServer as createViteServer } from 'vite';
@@ -35,7 +36,7 @@ export function createUiFixture() {
     poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
-    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, bindingMapping: null };
+    currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, maintenancePause: null, bindingMapping: null };
 }
 
 /** 等待服务器真正完成请求；按钮消失不能证明一次回读成功。 */
@@ -150,7 +151,9 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   };
   const runWorker = (handler, input) => handler.fetch(input, { IP_DATA: kv }, localWorkerContext(handler, { IP_DATA: kv }));
   const requests = [];
-  const server = createServer(async (request, response) => {
+  const tlsDir = process.env.DDNS_UI_TLS_DIR;
+  const server = (tlsDir ? createHttpsServer : createServer)(tlsDir
+    ? { key: readFileSync(join(tlsDir, 'key.pem')), cert: readFileSync(join(tlsDir, 'cert.pem')) } : {}, async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     const json = (data, status = 200) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(data)); };
     if (url.pathname.startsWith('/api/')) {
@@ -186,15 +189,16 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       if (url.pathname === '/api/maintenance/run' && fixture.maintenanceResponse) {
         if (request.headers.accept !== 'application/x-ndjson') return json(fixture.maintenanceResponse);
-        response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        response.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store, no-transform' });
         response.write(JSON.stringify({ type: 'progress', line: { tone: 'info', message: 'proxy.example.com · 读取库存和 DNS' } }) + '\n');
-        await new Promise(resolve => setTimeout(resolve, 450));
+        const pause = fixture.maintenancePause;
+        await (pause ? pause('progress') : new Promise(resolve => setTimeout(resolve, 450)));
         for (const item of fixture.maintenanceResponse.results) {
           for (const [index, message] of (item.lines ?? []).entries()) {
             response.write(JSON.stringify({ type: 'progress', line: { message, tone: item.lineTones?.[index] ?? 'info', targetKey: item.domain + '|' + item.mode } }) + '\n');
           }
         }
-        await new Promise(resolve => setTimeout(resolve, 450));
+        await (pause ? pause('result') : new Promise(resolve => setTimeout(resolve, 450)));
         if (fixture.maintenanceDisconnect) response.end();
         else response.end(JSON.stringify({ type: 'result', result: fixture.maintenanceResponse }) + '\n');
         return;
@@ -351,6 +355,6 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
     response.end(readFileSync(file));
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { base: `http://127.0.0.1:${server.address().port}`, fixture, requests,
+  return { base: `${tlsDir ? 'https' : 'http'}://127.0.0.1:${server.address().port}`, fixture, requests,
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }

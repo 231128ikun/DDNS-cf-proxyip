@@ -35,7 +35,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, streamMaintenanceTask, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult } from './contracts/maintenance';
 
-export const APP_VERSION = '2026.11.06-21.23';
+export const APP_VERSION = '2026.11.07-10.54';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
