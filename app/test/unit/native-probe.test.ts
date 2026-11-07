@@ -130,6 +130,46 @@ describe('native candidate probe', () => {
       .toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' });
   });
 
+  it.each(['recover', 'unknown'] as const)('rechecks only the failed TLS branch and can %s', async outcome => {
+    const io = connector();
+    let attempts = 0;
+    const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect,
+      secure: async (socket, host) => {
+        if (host === 'ipv6.example') {
+          if (++attempts === 1) throw new Error('TLS handshake failed');
+          if (outcome === 'unknown') throw new Error('TCP Loop detected');
+        }
+        return socket.startTls({ expectedServerHostname: host });
+      },
+    });
+    const result = await probe.probe(target);
+    expect(io.connect).toHaveBeenCalledTimes(3);
+    expect(io.hosts.filter(host => host === 'ipv4.example')).toHaveLength(1);
+    if (outcome === 'recover') {
+      expect(result).toMatchObject({ status: 'alive', exitFamily: 'dual' });
+      expect(result.code).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ status: 'alive', code: 'PARTIAL_EXIT', exitFamily: 'ipv4' });
+      expect(result.message).toContain('IPv6 出口未确认');
+    }
+  });
+
+  it('confirms only IPv6 when the IPv4 branch fails twice', async () => {
+    const io = connector();
+    const probe = new NativeProbeAdapter({ urls, timeoutMs: 1000, connect: io.connect,
+      secure: async (socket, host) => {
+        if (host === 'ipv4.example') throw new Error('TLS handshake failed');
+        return socket.startTls({ expectedServerHostname: host });
+      },
+    });
+    const result = await probe.probe(target);
+    expect(result).toMatchObject({ status: 'alive', code: 'EXIT_RESTRICTED', exitFamily: 'ipv6' });
+    expect(result.message).toContain('IPv4 出口失效');
+    expect(result.message).toContain('IPv6 探测可用');
+    expect(io.connect).toHaveBeenCalledTimes(3);
+    expect(io.hosts).toEqual(['ipv6.example']);
+  });
+
   it.each(['unknown', 'dead', 'alive'] as const)('uses backup %s after candidate failure, not another native pass', async status => {
     const io = connector(() => new Error('connection refused'));
     const result = status === 'unknown' ? unknown(target, 'HTTP_ERROR', 'backup unavailable')

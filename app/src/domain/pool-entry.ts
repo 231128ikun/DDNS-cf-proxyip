@@ -206,7 +206,7 @@ export function poolMetadataFromProbe(result: ProbeResult): PoolMetadata {
       : [];
   const asn = joinMetadata(exits.map((exit) => normalizeAsn(exit.asn)));
   const country = joinMetadata(exits.map((exit) => normalizeCountry(exit.country)));
-  const stack = inferPoolStack(result.exitFamily, exits.map((exit) => exit.family));
+  const stack = result.code === 'PARTIAL_EXIT' ? null : inferPoolStack(result.exitFamily, exits.map((exit) => exit.family));
 
   return {
     ...(asn ? { asn } : {}),

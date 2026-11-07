@@ -1,6 +1,6 @@
 import type { NotifyResult } from './notification';
-import type { ProbeStatus } from '../domain/probe-result';
-import type { TargetMode } from '../domain/managed-target';
+import type { ExitFamily, ProbeStatus } from '../domain/probe-result';
+import type { ExitFilter, TargetMode } from '../domain/managed-target';
 import { isRecord } from './parse';
 
 export interface DomainBindingItem {
@@ -45,6 +45,7 @@ export interface MaintenanceAddressCheck {
   readonly address: string;
   readonly status: ProbeStatus;
   readonly matchesTarget: boolean;
+  readonly exitFamily?: ExitFamily;
   readonly details: string;
   readonly colo?: string;
   readonly latencyMs?: number;
@@ -98,6 +99,7 @@ export async function readMaintenanceStreamResult<Result>(
 export interface MaintenanceRunResult {
   readonly domain: string;
   readonly mode: TargetMode;
+  readonly exitFilter?: ExitFilter;
   readonly poolKey: string;
   readonly poolName: string;
   readonly dnsUpdated: boolean;

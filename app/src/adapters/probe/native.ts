@@ -38,9 +38,13 @@ export class NativeProbeAdapter implements ProbeAdapter {
     const second = this.options.backup
       ? await this.limited(() => this.runAttempt(target, () => this.options.backup!.probe(target, context)), context.signal)
         ?? unknown(target, 'CANCELLED', '检测已取消')
-      : await this.check(target, context);
+      : await this.check(target, context, false);
     // 任一轮自身异常都不能凭另一轮的失败推断节点失效；明确成功可以恢复。
-    if (second.status === 'alive') return second;
+    if (second.status === 'alive') {
+      return first.status === 'unknown' && second.code === 'EXIT_RESTRICTED'
+        ? { ...second, code: 'PARTIAL_EXIT', message: '首次检测未确认：' + (first.message ?? '检测异常') + '；复检：' + second.message }
+        : second;
+    }
     return first.status === 'unknown' && second.status === 'dead' ? first : second;
   }
 
@@ -51,17 +55,23 @@ export class NativeProbeAdapter implements ProbeAdapter {
     return result;
   }
 
-  private async check(target: ProxyTarget, context: ProbeContext): Promise<ProbeResult> {
+  private async check(target: ProxyTarget, context: ProbeContext, retryFailedExit = true): Promise<ProbeResult> {
     if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消');
-    let urls: URL[];
+    let branches: { url: URL; label: string }[];
     try {
-      urls = this.options.urls.filter(Boolean).map(value => new URL(value));
-      if (!urls.length || urls.some(url => url.protocol !== 'https:' || url.username || url.password || url.hash)) throw new Error();
+      branches = this.options.urls.flatMap((value, index) => value
+        ? [{ url: new URL(value), label: index === 0 ? 'IPv4' : 'IPv6' }] : []);
+      if (!branches.length || branches.some(({ url }) => url.protocol !== 'https:' || url.username || url.password || url.hash)) throw new Error();
     } catch { return unknown(target, 'NOT_CONFIGURED', '出口检测地址必须为 HTTPS JSON 接口'); }
     const connect = this.options.connect;
     const started = Date.now();
-    const results = await Promise.all(urls.map(url => this.limited(
-      () => this.runAttempt(target, () => this.checkExit(target, url, connect, context)), context.signal)));
+    const probeExit = (url: URL) => this.limited(
+      () => this.runAttempt(target, () => this.checkExit(target, url, connect, context)), context.signal);
+    let results = await Promise.all(branches.map(({ url }) => probeExit(url)));
+    if (retryFailedExit && results.some(result => result?.status === 'alive')) {
+      results = await Promise.all(results.map((result, index) => result?.status === 'dead'
+        ? probeExit(branches[index]!.url) : result));
+    }
     if (context.signal?.aborted) return unknown(target, 'CANCELLED', '检测已取消');
     const exits = uniqueExits(results.flatMap(result => result?.status === 'alive' ? result.exits : []));
     const failed = results.find(result => result && result.status !== 'alive');
@@ -71,7 +81,18 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return alive(target, { endpoint: this.name, latencyMs: Date.now() - started, exits,
         ...(colo ? { colo } : {}),
         exitIp: exits[0]!.ip!, exitFamily: families.size > 1 ? 'dual' : exits[0]!.family,
-        ...(failed?.message ? { code: 'PARTIAL_EXIT', message: failed.message } : {}),
+        ...(failed ? {
+          code: results.some(result => result?.status === 'unknown') ? 'PARTIAL_EXIT' : 'EXIT_RESTRICTED',
+          message: results.map((result, index) => {
+            const label = branches[index]!.label;
+            if (result?.status === 'alive') {
+              const family = result.exitFamily === 'ipv6' ? 'IPv6' : 'IPv4';
+              return label + ' 探测可用' + (family === label ? '' : '（实际出口 ' + family + '）');
+            }
+            return label + (result?.status === 'dead' ? ' 出口失效' : ' 出口未确认')
+              + (result?.message ? '：' + result.message : '');
+          }).join('；'),
+        } : {}),
       });
     }
     return results.find(result => result?.code === 'SUBREQUEST_LIMIT' || result?.code === 'PROBE_BUDGET_EXHAUSTED')

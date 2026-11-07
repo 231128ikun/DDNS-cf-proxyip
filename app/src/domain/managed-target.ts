@@ -104,7 +104,7 @@ export function normalizeList(
   return [...new Set(source.map((item) => normalizer(String(item).trim())).filter((item): item is string => Boolean(item)))];
 }
 
-function exitFilterMatches(family: string, filter: ExitFilter): boolean {
+export function exitFilterMatches(family: string, filter: ExitFilter): boolean {
   if (filter === 'any') return true;
   if (filter === 'v4') return family === 'v4' || family === 'ipv4';
   if (filter === 'v6') return family === 'v6' || family === 'ipv6';

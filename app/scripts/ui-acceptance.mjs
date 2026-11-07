@@ -298,7 +298,7 @@ try {
     await click('[aria-label=探测]');
     await until('document.querySelector(".execution-dot").classList.contains("text-danger")');
     server.fixture.maintenanceResponse = { ok:true, changed:false, insufficient:true, errors:['更新 TXT 记录失败'],probeErrors:1,results:[{domain:'proxy.example.com',mode:'TXT',poolKey:'ip_pool_default',poolName:'默认池',dnsUpdated:false,added:0,deleted:0,probeErrors:1,error:'更新 TXT 记录失败',lines:[
-      'proxy.example.com (TXT)', '解析 203.0.113.10:443 · [2001:db8::1]:8443 · 可用 · 耗时 120ms',
+      'proxy.example.com (TXT)', '解析 203.0.113.10:443 · [2001:db8::1]:8443 · 可用 · 仅 IPv4 出口 · 耗时 120ms · [EXIT_RESTRICTED] IPv4 探测可用；IPv6 出口失效：候选 TLS 验证失败',
       '候选异常 2 次 [PROBE_BUDGET_EXHAUSTED] 本轮检测预算已用尽，未完成检测', '执行失败：更新 TXT 记录失败',
     ],lineTones:['info','success','warning','error']}],completed:false,message:'维护结束：活跃数量未达标' };
     const maintenanceStart = server.requests.length;
@@ -330,6 +330,11 @@ try {
     assert.equal(server.requests.slice(maintenanceStart).filter(item => item.path === '/api/maintenance/run').length, 1, '维护被重复提交');
     await until('(() => {const log=document.querySelector("#log-window");return log.scrollHeight-log.scrollTop-log.clientHeight<32})()');
     await capture('console-' + width, '.dashboard-console-card');
+    const restricted = '[...document.querySelectorAll("details.console-event-success")].find(row => row.textContent.includes("[EXIT_RESTRICTED]"))';
+    assert.ok(await read(`(() => { const row = ${restricted}; return row && !row.open
+      && row.querySelector("summary").textContent.includes("仅 IPv4 出口"); })()`));
+    await read(`const row = ${restricted}; row.querySelector("summary").click(); row.scrollIntoView({block:"nearest"});`);
+    await capture('maintenance-exit-' + width, '.dashboard-console-card');
     const interruptedStart = server.requests.length;
     server.fixture.maintenanceDisconnect = true;
     await click('.dashboard-console-card > button');

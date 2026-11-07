@@ -36,6 +36,7 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
     const details = [countries.join('/').slice(0, 60), asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80),
       probe.colo, probe.latencyMs === undefined ? undefined : '耗时 ' + probe.latencyMs + 'ms'].filter(Boolean).join(' · ');
     checks.set(redactAddress(value), { value: redactAddress(value), address: redactAddress(address), status: probe.status, matchesTarget: probeMatchesTarget(probe, target), details: redact(details),
+      exitFamily: probe.exitFamily,
       ...(probe.colo ? { colo: redact(probe.colo) } : {}), ...(probe.latencyMs === undefined ? {} : { latencyMs: probe.latencyMs }),
       ...(countries.length ? { country: redact(countries.join('/').slice(0, 60)) } : {}),
       ...(asns.length ? { asn: redact(asns.map(value => 'AS' + value.replace(/^AS/i, '')).join('/').slice(0, 80)) } : {}),
@@ -46,7 +47,7 @@ export function toMaintenanceTargetResult(result: TargetMaintenanceResult): Main
   for (const item of report.candidateResults ?? report.plan.additions) {
     if (dns.added.includes(item.value) || item.result.status !== 'alive') addCheck(item.value, item.address, item.result);
   }
-  return { domain: target.domain, mode: target.mode, poolKey, poolName: redact(poolName), dnsUpdated: report.dnsUpdated,
+  return { domain: target.domain, mode: target.mode, exitFilter: target.exitFilter, poolKey, poolName: redact(poolName), dnsUpdated: report.dnsUpdated,
     added: report.added, deleted: report.deleted, probeErrors: report.probeErrors, error: errors.join('；') || null, errors,
     dns: safeDns, activeCount: report.activeCount ?? report.plan.activeCount, minActive: target.minActive,
     ...(target.port ? { port: target.port } : {}), checks: [...checks.values()],

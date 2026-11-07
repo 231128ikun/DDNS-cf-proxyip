@@ -6,14 +6,16 @@ import type { ProbeSocket } from '../../src/adapters/probe/native';
 import { FetchBudgetError } from '../../src/util/fetch';
 import { ApiClient } from '../../web/src/api/client';
 
-const trust = vi.hoisted(() => ({ ready: false, loads: new WeakMap<typeof fetch, Promise<unknown>>() }));
+const trust = vi.hoisted(() => ({ ready: false, failIpv6: false, loads: new WeakMap<typeof fetch, Promise<unknown>>() }));
 vi.mock('../../src/adapters/probe/tls', () => ({
-  secureProbeSocket: async (socket: ProbeSocket, _host: string, _roots: unknown, _handshake: unknown, fetchRoots: typeof fetch) => {
+  secureProbeSocket: async (socket: ProbeSocket, host: string, _roots: unknown, handshake: () => void, fetchRoots: typeof fetch) => {
     if (!trust.ready) {
       if (!trust.loads.has(fetchRoots)) trust.loads.set(fetchRoots, fetchRoots('https://roots.example/certificates').then(response => response.text()));
       await trust.loads.get(fetchRoots);
       trust.ready = true;
     }
+    handshake();
+    if (trust.failIpv6 && host.startsWith('ipv6.')) throw new Error('Not enough data returned by read function');
     return socket;
   },
 }));
@@ -22,6 +24,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 function fixture(concurrency: number, targetCount = 6, externalLimit = Number.POSITIVE_INFINITY, allUnknown = false) {
   trust.ready = false;
+  trust.failIpv6 = false;
   trust.loads = new WeakMap();
   const modes = ['TXT', 'A', 'A', 'TXT', 'TXT', 'TXT', 'A'];
   const targets = Array.from({ length: targetCount }, (_, index) => ({
@@ -228,6 +231,7 @@ describe('native maintenance invocation boundaries', () => {
     const f = fixture(8);
     const config = JSON.parse(f.store.get('app_config')!);
     f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: true, tgToken: 'fixture-token', tgId: '123' }));
+    f.store.set('ip_pool_default', f.store.get('ip_pool_default')!.replace(',v4 # 备注 0', ',v4/v6 # 备注 0'));
     const beforePool = f.store.get('ip_pool_default');
     const beforeTrash = f.store.get('ip_pool_trash');
     const send = vi.fn(async () => Response.json({ ok: true }));
@@ -245,6 +249,41 @@ describe('native maintenance invocation boundaries', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(f.store.get('ip_pool_default')).toBe(beforePool);
     expect(f.store.get('ip_pool_trash')).toBe(beforeTrash);
+    expect(f.open()).toBe(0);
+  });
+
+  it.each(['any', 'v4', 'v6', 'dual'])('uses confirmed IPv4 for %s targets without treating IPv6 TLS failure as a probe anomaly', async exitFilter => {
+    const f = fixture(8, 2);
+    trust.failIpv6 = true;
+    const config = JSON.parse(f.store.get('app_config')!);
+    for (const target of config.targets) target.exitFilter = exitFilter;
+    f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: true, tgToken: 'fixture-token', tgId: '123' }));
+    const beforePool = f.store.get('ip_pool_default');
+    const beforeTrash = f.store.get('ip_pool_trash');
+    const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ ok: true }));
+    const upstream = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+      f.requestUrl(input).hostname === 'api.telegram.org' ? send(input, init) : upstream(input, init));
+    const result = await f.client.runMaintenance();
+    const removed = exitFilter === 'v6' || exitFilter === 'dual';
+    expect(result).toMatchObject({ changed: removed, insufficient: removed, probeErrors: 0, completed: !removed });
+    expect(result.results.map(target => target.dns?.removed.length)).toEqual(removed ? [3, 3] : [0, 0]);
+    for (const target of result.results) {
+      const log = target.lines?.join('\n');
+      expect(log).toContain('IPv4 探测可用；IPv6 出口失效');
+      expect(log).toContain(removed ? '出口栈不符合要求' : '仅 IPv4 出口');
+    }
+    if (removed) {
+      expect(send).toHaveBeenCalledTimes(1);
+      const [input, init] = send.mock.calls[0]!;
+      const { text } = input instanceof Request ? await input.json() as { text: string } : JSON.parse(String(init?.body));
+      expect(text).toContain('仅 IPv4 出口');
+      expect(text).toContain('出口栈不符合要求');
+      expect(text).not.toContain('Not enough data');
+    } else expect(send).not.toHaveBeenCalled();
+    expect(f.store.get('ip_pool_default')).toBe(beforePool);
+    expect(f.store.get('ip_pool_trash')).toBe(beforeTrash);
+    expect(f.connect).toHaveBeenCalledTimes(18);
     expect(f.open()).toBe(0);
   });
 

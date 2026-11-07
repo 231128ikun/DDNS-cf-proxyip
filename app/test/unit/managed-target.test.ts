@@ -45,6 +45,17 @@ describe('managed target matching', () => {
     expect(probeMatchesTarget(unknown(target, 'NO_API', 'offline'), filteredTarget)).toBe(false);
   });
 
+  it.each([
+    ['ipv4', [true, true, false, false]],
+    ['ipv6', [true, false, true, false]],
+    ['dual', [true, false, false, true]],
+  ] as const)('matches confirmed %s against any, only IPv4, only IPv6 and dual', (exitFamily, expected) => {
+    const probe = alive(target, { exitFamily });
+    const matches = (['any', 'v4', 'v6', 'dual'] as const).map(exitFilter =>
+      probeMatchesTarget(probe, { ...filteredTarget, countries: [], asns: [], exitFilter }));
+    expect(matches).toEqual(expected);
+  });
+
   it('allows candidates with unknown stored metadata but rejects known mismatches', () => {
     const unknownMeta = parsePoolEntry('198.51.100.1:443');
     const mismatch = parsePoolEntry('198.51.100.2:443,AS64599,SG,v4');
