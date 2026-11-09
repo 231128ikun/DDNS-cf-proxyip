@@ -33,7 +33,7 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
+    poolContents: {}, kvWrites: [], kvWriteFailures: {}, poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, maintenancePause: null, bindingMapping: null };
@@ -123,6 +123,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       return options === 'json' || options?.type === 'json' ? JSON.parse(value) : value;
     },
     async put(key, value) {
+      if (fixture.kvWriteFailures[key] > 0) { fixture.kvWriteFailures[key]--; throw new Error('模拟 KV 写入失败'); }
       fixture.kvWrites.push(key);
       if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
         fixture.poolContents[key] = value;

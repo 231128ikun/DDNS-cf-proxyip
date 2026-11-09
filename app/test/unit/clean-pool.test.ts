@@ -54,7 +54,7 @@ describe('一键洗库', () => {
     expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('# 保留备注');
     expect(trash.batches).toHaveLength(1);
   });
-  it('存在未确认项时不写回也不入桶', async () => {
+  it('保留未确认项，仍清理复检确认失效的地址', async () => {
     const catalog = new MemoryPoolCatalog({
       [DEFAULT_POOL_KEY]: poolOf('alive.example:443', 'dead.example:443', 'flaky.example:443'),
     });
@@ -62,9 +62,10 @@ describe('一键洗库', () => {
 
     const report = await client.cleanPool(DEFAULT_POOL_KEY);
 
-    expect(report).toMatchObject({ ok: true, checked: 3, skipped: true, unknown: 1, kept: 0, trashed: 0 });
-    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('dead.example:443');
-    expect(trash.batches).toEqual([]);
+    expect(report).toMatchObject({ ok: true, checked: 3, skipped: false, unknown: 1, kept: 2, trashed: 1 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).not.toContain('dead.example:443');
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('flaky.example:443');
+    expect(trash.batches.flat()).toEqual([expect.objectContaining({ entryLine: expect.stringContaining('dead.example:443') })]);
   });
 
   it('失效项进垃圾桶，有效项写回原池', async () => {
@@ -243,22 +244,81 @@ it.each([
     timeoutMs: 1000, fetchImpl: fetchImpl as typeof fetch });
   const {client} = cleaningClient(catalog, trash, probe);
 
-  expect(await client.cleanPool(DEFAULT_POOL_KEY)).toMatchObject({ checked: 1, kept: 0, trashed: 0, unknown: 1, skipped: true });
+  expect(await client.cleanPool(DEFAULT_POOL_KEY)).toMatchObject({ checked: 1, kept: 1, trashed: 0, unknown: 1, skipped: false });
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   expect(write).not.toHaveBeenCalled();
   expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(content);
   expect(trash.batches).toEqual([]);
 });
 
+describe('partial cleaning boundaries', () => {
+  it.each([DEFAULT_POOL_KEY, TRASH_POOL_KEY])('handles 216 mixed results without dropping unknown entries in %s', async poolKey => {
+    const labels = ['alive', 'dead', 'flaky'];
+    const content = '# 标题\n' + Array.from({ length: 216 }, (_, i) => `${labels[i % 3]}.${i}.example:443,AS64500,JP,v4 # 备注${i} 来自 ip_pool_001`).join('\n');
+    const catalog = new MemoryPoolCatalog({ [poolKey]: content, ip_pool_001: '' });
+    const { client, requests, trash } = createCleaner(catalog);
+    expect(await client.cleanPool(poolKey)).toMatchObject({ checked: 216, unknown: 72, skipped: false,
+      kept: poolKey === TRASH_POOL_KEY ? 72 : 144, trashed: poolKey === TRASH_POOL_KEY ? 0 : 72,
+      ...(poolKey === TRASH_POOL_KEY ? { remaining: 144 } : {}) });
+    expect(requests.filter(item => item.path === '/api/check')).toHaveLength(216);
+    expect(requests.at(-1)).toEqual({ path: `/api/pools/${poolKey}/clean`, method: 'POST', probes: 0 });
+    const saved = catalog.data.get(poolKey)!;
+    expect(saved).toContain('# 标题');
+    expect(saved).toContain('flaky.215.example:443,AS64500,JP,v4 # 备注215 来自 ip_pool_001');
+    if (poolKey === TRASH_POOL_KEY) {
+      expect(saved).toContain('dead.214.example:443');
+      expect(saved).not.toContain('alive.213.example:443');
+      expect(catalog.data.get('ip_pool_001')).toContain('alive.213.example:443');
+      expect(trash.batches).toEqual([]);
+    } else {
+      expect(saved).not.toContain('dead.214.example:443');
+      expect(trash.batches.flat()).toHaveLength(72);
+    }
+  });
+
+  it('restores only alive trash entries and counts dead and unknown remaining, including duplicates already in the destination', async () => {
+    const content = ['alive.existing.example:443,AS64500,JP,v4 # 来自 ip_pool_001',
+      'alive.new.example:443,AS64500,JP,v4 # 来自 ip_pool_999',
+      'dead.example:443,AS64500,JP,v4 # 来自 ip_pool_001',
+      'flaky.example:443,AS64510,DE,v6 # 保留来源 来自 ip_pool_001'].join('\n');
+    const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: content, ip_pool_001: 'alive.existing.example:443 # 原备注' });
+    const { client, trash } = createCleaner(catalog);
+    expect(await client.cleanPool(TRASH_POOL_KEY)).toMatchObject({ checked: 4, kept: 1, remaining: 2, unknown: 1, trashed: 0, skipped: false });
+    expect(catalog.data.get(TRASH_POOL_KEY)).not.toContain('alive.');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toContain('flaky.example:443,AS64510,DE,v6 # 保留来源 来自 ip_pool_001');
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toContain('alive.new.example:443');
+    expect(catalog.data.get('ip_pool_001')).toContain('# 原备注');
+    expect(trash.batches).toEqual([]);
+  });
+
+  it.each(['ip_pool_001', TRASH_POOL_KEY])('keeps safe copies after partial trash restoration write failure at %s', async failedKey => {
+    const content = 'alive.example:443,null,null,null # 来自 ip_pool_001\nflaky.example:443,AS64500,JP,v4 # 保留 来自 ip_pool_001';
+    const catalog = new MemoryPoolCatalog({ [TRASH_POOL_KEY]: content, ip_pool_001: '' });
+    const { client } = createCleaner(catalog);
+    const originalWrite = catalog.write.bind(catalog);
+    const write = vi.spyOn(catalog, 'write').mockImplementation(async (key, value) => {
+      if (key === failedKey) throw new Error('write failed');
+      await originalWrite(key, value);
+    });
+    await expect(client.cleanPool(TRASH_POOL_KEY)).rejects.toThrow();
+    expect(catalog.data.get(TRASH_POOL_KEY)).toBe(content);
+    expect(catalog.data.get('ip_pool_001')).toBe(failedKey === 'ip_pool_001' ? '' : 'alive.example:443,null,null,null');
+    write.mockRestore();
+    expect(await client.cleanPool(TRASH_POOL_KEY)).toMatchObject({ kept: failedKey === 'ip_pool_001' ? 1 : 0, remaining: 1, unknown: 1, skipped: false });
+    expect(catalog.data.get(TRASH_POOL_KEY)).not.toContain('alive.example');
+    expect(catalog.data.get(TRASH_POOL_KEY)).toContain('# 保留 来自 ip_pool_001');
+  });
+});
+
 describe('native probe cleaning boundary', () => {
-  it.each([['loop', new Error('TCP Loop detected'), true], ['runtime', new TypeError('runtime unavailable'), true], ['candidate', new Error('connection refused'), false]] as const)('%s protects only detector failures', async (_label, error, skipped) => {
+  it.each([['loop', new Error('TCP Loop detected'), true], ['runtime', new TypeError('runtime unavailable'), true], ['candidate', new Error('connection refused'), false]] as const)('%s protects only detector failures', async (_label, error, unconfirmed) => {
     const original = poolOf('203.0.113.10:443,AS64500,JP,v4 # note', '203.0.113.11:443');
     const catalog = new MemoryPoolCatalog({ [DEFAULT_POOL_KEY]: original });
     const trash = new RecordingTrashRepository();
     const {client} = cleaningClient(catalog, trash, failingNativeProbe(error));
     const report = await client.cleanPool(DEFAULT_POOL_KEY);
-    expect(report.skipped).toBe(skipped);
-    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(skipped ? original : '');
-    expect(trash.batches.flat().length).toBe(skipped ? 0 : 2);
+    expect(report).toMatchObject({ skipped: false, unknown: unconfirmed ? 2 : 0, kept: unconfirmed ? 2 : 0 });
+    expect(catalog.data.get(DEFAULT_POOL_KEY)).toBe(unconfirmed ? original : '');
+    expect(trash.batches.flat().length).toBe(unconfirmed ? 0 : 2);
   });
 });

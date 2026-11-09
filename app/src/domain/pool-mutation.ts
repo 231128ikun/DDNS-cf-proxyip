@@ -75,15 +75,17 @@ interface PoolInspection {
 
 export function planPoolCleaning(poolKey: string, report: PoolInspection, source?: PoolSnapshot) {
   const unknown = report.unknown + report.invalid.length;
-  const skipped = unknown > 0;
+  const skipped = report.invalid.length > 0;
   const alive = skipped ? [] : report.items.filter(item => item.result.status === 'alive');
   const dead = skipped ? [] : report.items.filter(item => item.result.status === 'dead');
+  const retained = skipped ? [] : report.items.filter(item => item.result.status !== 'dead');
   const inTrash = poolKey === TRASH_POOL_KEY;
   const trash: TrashCandidate[] = inTrash ? [] : dead.map(item => ({ entryLine: formatPoolEntry(item.entry), reason: '洗库失效', poolKey }));
   return {
-    summary: { checked: report.total, kept: inTrash ? 0 : alive.length, trashed: trash.length, unknown, skipped },
+    summary: { checked: report.total, kept: inTrash ? 0 : retained.length, trashed: trash.length, unknown, skipped },
     restoreAddresses: inTrash ? alive.map(item => item.address) : [],
-    nextText: serializePoolEntries(new Map(alive.map(item => [item.address, item.entry])), source),
+    nextText: source && !alive.length && !dead.length ? source.text
+      : serializePoolEntries(new Map(retained.map(item => [item.address, item.entry])), source),
     trash,
   };
 }

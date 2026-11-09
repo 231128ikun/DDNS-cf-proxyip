@@ -162,7 +162,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     finally { sidePending.current = false; setSideBusy(false); }
   };
   const cleanPool = async (): Promise<void> => {
-    if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常时不清理。`)) return;
+    if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常的地址保留，格式无效或检测未完成时不清理。`)) return;
     sidePending.current = true; setSideBusy(true);
     const controller = cleanController.current = new AbortController();
     setCleaning(true); model.message = '正在读取库存…';
@@ -171,7 +171,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     log(`[洗库] 读取库存 · ${name}`);
     try {
       const result = await client.cleanPool(poolKey, controller.signal, event => {
-        model.message = `检测中 ${event.completed}/${event.total} · 全部确认后写入`;
+        model.message = `检测中 ${event.completed}/${event.total} · 完成后核对并写入`;
         render(value => value + 1);
         progress(event.completed + ' / ' + event.total);
         logProbe(log, '洗库', event.item.address, event.item);
@@ -182,12 +182,12 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         log('[洗库] 检测完成，正在核对库存并提交清理');
       });
       model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
-        : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}`;
+        : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}${result.unknown ? ` · 异常保留 ${result.unknown} 条` : ''}`;
       if (!result.skipped) {
         const message = model.message; model.forgetPool(poolKey); model.message = message;
         if (!inTrash || result.remaining !== undefined) onPoolCount(poolKey, result.remaining ?? result.kept);
       }
-      log('[洗库] ' + model.message, result.skipped ? 'warning' : 'success');
+      log('[洗库] ' + model.message, result.skipped || result.unknown ? 'warning' : 'success');
     } catch (error) { model.message = controller.signal.aborted ? '洗库已停止，未取得完成确认，请核对库存' : errorMessage(error); log('[洗库] ' + model.message, controller.signal.aborted ? 'warning' : 'error'); }
     finally { onWashProgress(null); cleanController.current = null; sidePending.current = false; setCleaning(false); setSideBusy(false); }
   };

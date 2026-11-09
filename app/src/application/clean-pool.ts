@@ -33,11 +33,11 @@ export class CleanPool {
       const restored = plan.restoreAddresses.length
         ? await this.dependencies.pools.restoreTrash(plan.restoreAddresses, true, undefined, content)
         : { restored: 0 };
-      return { ok: true, poolKey, ...plan.summary, kept: restored.restored, remaining: report.dead };
+      return { ok: true, poolKey, ...plan.summary, kept: restored.restored, remaining: report.dead + report.unknown };
     }
     // 入桶成功后才能移除原池条目，写入失败宁可保留副本。
     if (plan.trash.length) await this.dependencies.trash.addToTrash(plan.trash);
-    await this.dependencies.pools.save(poolKey, plan.nextText, 'replace', undefined, content);
+    if (plan.nextText !== content) await this.dependencies.pools.save(poolKey, plan.nextText, 'replace', undefined, content);
     return { ok: true, poolKey, ...plan.summary };
   }
 }

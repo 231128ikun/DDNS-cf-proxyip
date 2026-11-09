@@ -42,14 +42,16 @@ describe('pure pool mutation plans', () => {
     expect(repeat.writes.map(write => write.poolKey)).toEqual([TRASH_POOL_KEY]);
   });
 
-  it('classifies inspection results without IO and keeps unknown cleaning all-or-nothing', () => {
+  it('classifies inspection results without IO and preserves unknown entries individually', () => {
     const entry = readPoolSnapshot(address).entries.values().next().value!.entry;
     const item = { address, entry, result: dead(target, { code: 'TIMEOUT' }) };
     const report = { total: 1, unknown: 0, invalid: [], items: [item] };
     const plan = planPoolCleaning(DEFAULT_POOL_KEY, report);
     expect(plan.trash).toEqual([{ entryLine: `${address},null,null,null`, reason: '洗库失效', poolKey: DEFAULT_POOL_KEY }]);
     expect(plan.summary).toEqual({ checked: 1, kept: 0, trashed: 1, unknown: 0, skipped: false });
-    expect(planPoolCleaning(DEFAULT_POOL_KEY, { ...report, unknown: 1, items: [{ ...item, result: unknown(target, 'HTTP_ERROR', '500') }] }).summary.skipped).toBe(true);
+    expect(planPoolCleaning(DEFAULT_POOL_KEY, { ...report, unknown: 1, items: [{ ...item, result: unknown(target, 'HTTP_ERROR', '500') }] }).summary)
+      .toEqual({ checked: 1, kept: 1, trashed: 0, unknown: 1, skipped: false });
+    expect(planPoolCleaning(DEFAULT_POOL_KEY, { ...report, invalid: ['invalid'] }).summary.skipped).toBe(true);
     expect(planPoolCleaning(TRASH_POOL_KEY, { ...report, items: [{ ...item, result: alive(target) }] }).restoreAddresses).toEqual([address]);
   });
 });
