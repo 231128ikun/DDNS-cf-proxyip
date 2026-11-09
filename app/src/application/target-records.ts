@@ -1,21 +1,13 @@
-import { bindingKey, normalizeBindingKey } from '../domain/domain-binding';
 import { dnsRecordTypeForHost, parseProxyTarget } from '../domain/proxy-target';
 import { parseTxtAddresses } from '../domain/txt-record';
 import type { DnsRepository, DnsZone } from '../ports/dns-repository';
-import type { MaintenanceSource, MaintenanceTargetConfig } from '../ports/maintenance-source';
-import { resolveZone } from './maintain-managed-targets';
-import { TargetStatusInputError } from './target-status';
+import type { MaintenanceSource } from '../ports/maintenance-source';
+import { resolveManagedTarget, TargetStatusInputError } from './resolve-managed-target';
 
 export interface TargetRecordsDependencies {
   readonly source: MaintenanceSource;
   readonly dns: DnsRepository;
   readonly fallbackZone: DnsZone;
-}
-
-/** 解析出的维护目标与 Zone 凭据；add/remove 共用，避免重复实现 key→target→zone 的解析。 */
-interface ResolvedTarget {
-  readonly config: MaintenanceTargetConfig;
-  readonly zone: DnsZone;
 }
 
 /**
@@ -26,7 +18,7 @@ export class TargetRecords {
   constructor(private readonly dependencies: TargetRecordsDependencies) {}
 
   async add(targetKey: string, value: string): Promise<{ readonly ok: true }> {
-    const { config, zone } = await this.resolve(targetKey);
+    const { config, zone } = await resolveManagedTarget(this.dependencies.source, targetKey, this.dependencies.fallbackZone);
     const input = value.trim();
     if (!input) throw new TargetStatusInputError('请输入要添加的 IP');
 
@@ -57,7 +49,7 @@ export class TargetRecords {
   }
 
   async remove(targetKey: string, recordId: string, address?: string): Promise<{ readonly ok: true }> {
-    const { config, zone } = await this.resolve(targetKey);
+    const { config, zone } = await resolveManagedTarget(this.dependencies.source, targetKey, this.dependencies.fallbackZone);
     if (!recordId) throw new TargetStatusInputError('缺少要删除的记录');
 
     if (config.target.mode === 'TXT') {
@@ -81,15 +73,5 @@ export class TargetRecords {
     }
     await this.dependencies.dns.deleteRecord(zone, recordId);
     return { ok: true };
-  }
-
-  private async resolve(targetKey: string): Promise<ResolvedTarget> {
-    const key = normalizeBindingKey(targetKey);
-    if (!key) throw new TargetStatusInputError('管理域名标识无效');
-
-    const data = await this.dependencies.source.load();
-    const config = data.targets.find((item) => bindingKey(item.target) === key);
-    if (!config) throw new TargetStatusInputError('管理域名不存在或已被删除，请刷新后重试');
-    return { config, zone: resolveZone(data.zones, config, this.dependencies.fallbackZone) };
   }
 }

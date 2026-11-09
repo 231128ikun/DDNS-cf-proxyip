@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TargetRecords } from '../../src/application/target-records';
-import { TargetStatusInputError } from '../../src/application/target-status';
+import { TargetStatusInputError } from '../../src/application/resolve-managed-target';
 import type { DnsRepository, DnsZone } from '../../src/ports/dns-repository';
 import type { MaintenanceSource, MaintenanceSourceData } from '../../src/ports/maintenance-source';
 

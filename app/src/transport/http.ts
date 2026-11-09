@@ -34,7 +34,8 @@ import {
 } from '../contracts/probe';
 import type { RemoteLoadRequest, RemoteLoadResponse } from '../contracts/remote-load';
 import type { TargetStatusResponse } from '../contracts/target-status';
-import { TargetStatusInputError, type TargetStatus } from '../application/target-status';
+import type { TargetStatus } from '../application/target-status';
+import { TargetStatusInputError } from '../application/resolve-managed-target';
 import type { TargetRecords } from '../application/target-records';
 import type { MaintenanceJobResult } from '../jobs/maintenance-job';
 import { countPoolTextLines } from '../domain/pool-text';
