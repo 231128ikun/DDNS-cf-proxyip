@@ -2,7 +2,7 @@ import { asRecord } from '../../contracts/parse';
 import { alive, dead, unknown, type ProbeExit, type ProbeResult } from '../../domain/probe-result';
 import { parseProxyTarget, type ProxyTarget } from '../../domain/proxy-target';
 import type { ProbeAdapter, ProbeContext } from '../../ports/probe';
-import { createRequestTimeout } from '../../util/request-timeout';
+import { createRequestTimeout, waitWithSignal } from '../../util/request-timeout';
 import { FetchBudgetError } from '../../util/fetch';
 import { readProbeExit, readText, uniqueExits } from './probe-payload';
 import { isSubrequestLimit, isTcpLoop } from './probe-errors';
@@ -18,17 +18,22 @@ interface NativeProbeOptions {
   readonly secure?: (socket: ProbeSocket, hostname: string) => Promise<ProbeSocket>;
   readonly backup?: ProbeAdapter;
   readonly rootsFetch?: typeof fetch;
+  readonly defer?: (task: Promise<boolean>) => void;
+  readonly disableNative?: boolean;
 }
 const READ_LIMIT = 65_536;
+export const SOCKET_CLOSE_TIMEOUT_MS = 1_000;
 
 /** 候选 TCP + 显式 SNI/Host；两个出口分支复用同一 TLS 适配器。 */
 export class NativeProbeAdapter implements ProbeAdapter {
   readonly name = 'native';
   private active = 0;
-  private waiting: (() => void)[] = [];
+  private waiting: ((available: boolean) => void)[] = [];
   private subrequestLimitReached = false;
+  private cleanupFailed = false;
   private readonly redact: (message: string) => string;
   constructor(private readonly options: NativeProbeOptions) {
+    this.cleanupFailed = options.disableNative === true;
     this.redact = createProbeRedactor(options.urls.map(urlTemplate => ({ name: 'native', urlTemplate })));
   }
 
@@ -66,7 +71,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
     const connect = this.options.connect;
     const started = Date.now();
     const probeExit = (url: URL) => this.limited(
-      () => this.runAttempt(target, () => this.checkExit(target, url, connect, context)), context.signal);
+      hold => this.runAttempt(target, () => this.checkExit(target, url, connect, context, hold)), context.signal);
     let results = await Promise.all(branches.map(({ url }) => probeExit(url)));
     if (retryFailedExit && results.some(result => result?.status === 'alive')) {
       results = await Promise.all(results.map((result, index) => result?.status === 'dead'
@@ -100,37 +105,61 @@ export class NativeProbeAdapter implements ProbeAdapter {
   }
 
   // 后端批量共用四个 TCP 配额，留出 KV / 备用 HTTP 连接；排队不消耗候选超时。
-  private async limited(task: () => Promise<ProbeResult>, signal?: AbortSignal): Promise<ProbeResult | undefined> {
+  private async limited(task: (hold: (closing: Promise<void>) => void) => Promise<ProbeResult>, signal?: AbortSignal): Promise<ProbeResult | undefined> {
     if (signal?.aborted) return undefined;
-    if (this.active >= 4) {
+    if (this.active >= 4 && !this.cleanupFailed) {
       const acquired = await new Promise<boolean>(resolve => {
-        const wake = () => { signal?.removeEventListener('abort', cancel); resolve(true); };
+        const wake = (available: boolean) => { signal?.removeEventListener('abort', cancel); resolve(available); };
         const cancel = () => { this.waiting = this.waiting.filter(item => item !== wake); resolve(false); };
         this.waiting.push(wake); signal?.addEventListener('abort', cancel, { once: true });
       });
-      if (!acquired) return undefined;
+      if (!acquired) return signal?.aborted ? undefined : task(() => {});
     } else this.active++;
-    try { return signal?.aborted ? undefined : await task(); }
-    finally { const next = this.waiting.shift(); if (next) next(); else this.active--; }
+    const release = () => { const next = this.waiting.shift(); if (next) next(true); else this.active--; };
+    let cleanup: Promise<boolean> | undefined;
+    // 结论可以先交付；关闭完成前不交接连接槽，收尾异常则停止开新连接。
+    const hold = (closing: Promise<void>) => {
+      const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS);
+      cleanup = waitWithSignal(closing, timeout.signal).then(() => true).catch(() => {
+        this.cleanupFailed = true;
+        for (const wake of this.waiting.splice(0)) wake(false);
+        return false;
+      }).finally(() => { timeout.cleanup(); release(); });
+    };
+    try { return signal?.aborted ? undefined : await task(hold); }
+    finally {
+      if (!cleanup) release();
+      else if (this.options.defer) this.options.defer(cleanup);
+      else await cleanup;
+    }
   }
 
-  private async checkExit(target: ProxyTarget, url: URL, connect: ProbeConnect, context: ProbeContext): Promise<ProbeResult> {
+  private async checkExit(target: ProxyTarget, url: URL, connect: ProbeConnect, context: ProbeContext,
+    hold: (closing: Promise<void>) => void): Promise<ProbeResult> {
+    if (this.cleanupFailed) return unknown(target, 'PROBE_API_ERROR', '原生连接收尾异常，候选状态未知');
     const timeout = createRequestTimeout(this.options.timeoutMs, context.signal);
     const started = Date.now();
     let socket: ProbeSocket | undefined;
+    let connected: Promise<ProbeSocket> | undefined;
+    let closing: Promise<void> | undefined;
+    const close = () => closing ??= (async () => { const current = socket ?? await connected?.catch(() => undefined); await current?.close(); })();
     let phase = 'PROBE_API_ERROR';
     const details = () => ({ endpoint: this.name, latencyMs: Date.now() - started });
     let abort: () => void = () => {};
     const cancelled = new Promise<never>((_, reject) => {
-      abort = () => { void socket?.close().catch(() => {}); reject(new Error('cancelled')); };
+      abort = () => { void close().catch(() => {}); reject(new Error('cancelled')); };
       timeout.signal.addEventListener('abort', abort, { once: true });
     });
     try {
       return await Promise.race([cancelled, (async () => {
         phase = 'TARGET_CONNECT_ERROR';
-        socket = await connect({ hostname: target.family === 'ipv6' ? `[${target.host}]` : target.host, port: target.port }, { secureTransport: 'off', allowHalfOpen: false });
+        connected = Promise.resolve(connect({ hostname: target.family === 'ipv6' ? `[${target.host}]` : target.host,
+          port: target.port }, { secureTransport: 'off', allowHalfOpen: false }));
+        phase = 'PROBE_API_ERROR';
+        socket = await connected;
+        phase = 'TARGET_CONNECT_ERROR';
         void socket.closed.catch(() => {});
-        if (timeout.signal.aborted) { void socket.close().catch(() => {}); throw new Error('cancelled'); }
+        if (timeout.signal.aborted) { void close().catch(() => {}); throw new Error('cancelled'); }
         await socket.opened;
         if (timeout.signal.aborted) throw new Error('cancelled');
         phase = this.options.secure ? 'TARGET_TLS_ERROR' : 'PROBE_API_ERROR';
@@ -162,7 +191,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       if (isSubrequestLimit(message)) return unknown(target, 'SUBREQUEST_LIMIT', 'Worker 子请求额度已用尽', details());
       if (isTcpLoop(message)) return unknown(target, 'PROBE_API_ERROR', 'TCP Loop detected：运行平台拒绝回环连接', details());
       if (timeout.didTimeout()) return phase === 'PROBE_API_ERROR'
-        ? unknown(target, 'PROBE_API_ERROR', 'TLS 信任库准备超时，候选状态未知', details())
+        ? unknown(target, 'PROBE_API_ERROR', '原生检测准备超时，候选状态未知', details())
         : dead(target, { ...details(), code: 'TIMEOUT', message: '候选连接超时' });
       if (phase === 'PROBE_API_ERROR' || error instanceof TypeError) return unknown(target, 'PROBE_API_ERROR', '原生检测运行异常', details());
       const stage = phase === 'TARGET_CONNECT_ERROR' ? '候选 TCP 连接失败'
@@ -170,7 +199,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return dead(target, { ...details(), code: phase, message: stage + '：' + this.redact(message).slice(0, 180) });
     } finally {
       timeout.signal.removeEventListener('abort', abort); timeout.cleanup();
-      await socket?.close().catch(() => {});
+      hold(close());
     }
   }
 }
