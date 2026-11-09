@@ -70,7 +70,7 @@ export function renderReference(config, ref = UI_BASELINE_REF, login = false) {
 }
 
 /** 本地验收：配置与绑定读写使用同次构建的 Worker 和内存 KV，外部操作使用替身。 */
-export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF, empty = false } = {}) {
+export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF, empty = false, port = 0 } = {}) {
   if (!existsSync(join(webRoot, 'index.html'))) throw new Error('请先运行 npm run build');
   const fixture = createUiFixture();
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
@@ -354,7 +354,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
     response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   return { base: `${tlsDir ? 'https' : 'http'}://127.0.0.1:${server.address().port}`, fixture, requests,
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }

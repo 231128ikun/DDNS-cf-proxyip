@@ -84,6 +84,8 @@
   --control-height-sm: 32px;
   --control-height-compact: 32px;
   --modal-width: 400px;
+  --config-modal-width: 640px;
+  --modal-backdrop-blur: 4px;
   --order-modal-width: 520px;
   --order-list-max-height: min(55vh, 460px);
   --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.3);
@@ -594,30 +596,13 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
   font-size: var(--font-size-field);
   text-align: center;
 }
-.config-edit-panel {
-  display: none;
-  margin-top: var(--space-5);
-  padding: var(--space-6);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-card-sm);
-  background: var(--color-surface);
-}
-        .config-edit-panel.active {
-            display: block;
-        }
-        .config-edit-heading {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: baseline;
-            justify-content: space-between;
-            gap: var(--space-1) var(--space-4);
-            margin-bottom: var(--space-7);
-        }
-.config-edit-heading h3 {
-  margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: 700;
-}
+.custom-modal.config-editor-modal { max-width: var(--config-modal-width); display: flex; flex-direction: column; overflow: hidden; }
+.config-editor-modal .custom-modal-title, .config-editor-hint { flex-shrink: 0; }
+.config-editor-hint { margin: calc(0px - var(--space-3)) 0 var(--space-8); color: var(--color-text-muted); font-size: var(--font-size-field); line-height: 1.5; }
+.config-editor-form { display: flex; flex-direction: column; min-height: 0; }
+.config-editor-body { overflow-y: auto; min-height: 0; padding: var(--space-1); }
+.config-editor-form > .config-edit-actions { flex-shrink: 0; margin-top: var(--space-7); padding-top: var(--space-7); border-top: 1px solid var(--color-border); }
+.config-editor-form .btn { min-height: var(--control-height); }
 .config-edit-actions {
   display: flex;
   justify-content: flex-end;
@@ -923,7 +908,7 @@ input[type="checkbox"] { accent-color: var(--color-primary); }
             display: flex;
             align-items: center;
             justify-content: center;
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(var(--modal-backdrop-blur));
         }
         .custom-modal-overlay:not([open]) { display: none; }
         .custom-modal-overlay::backdrop { background: transparent; }

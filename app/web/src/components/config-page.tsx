@@ -20,6 +20,7 @@ import { bindingKey } from '../../../src/domain/domain-binding';
 import { errorMessage } from '../api/errors';
 import type { RequestState } from '../state/request-state';
 import { Icon } from './icon';
+import { Modal } from './modal';
 import { ResourceFeedback } from './resource-feedback';
 import { poolOptions } from '../state/pool-options';
 
@@ -422,7 +423,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
       <section class="card p-4 mb-3" aria-labelledby="zone-config-title">
         <div class="config-section-heading">
           <h2 id="zone-config-title" class="card-title m-0 fw-bold"><Icon name="globe" /> 域名权限配置</h2>
-          <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.zones.length >= MAX_ZONES} onClick={addZone}>
+          <button class="btn btn-sm btn-outline-primary" type="button" aria-haspopup="dialog" disabled={form.zones.length >= MAX_ZONES} onClick={addZone}>
             <Icon name="plus" /> 添加权限配置
           </button>
         </div>
@@ -433,7 +434,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
               class="config-mini-card"
               key={index}
             >
-              <button class="config-card-open" type="button" aria-expanded={editingZone?.index === index} aria-controls="zone-edit-panel" onClick={() => editZone(index)}>
+              <button class="config-card-open" type="button" aria-haspopup="dialog" onClick={() => editZone(index)}>
                 <h3>{zone.label || zone.name || zone.baseDomain || '未命名权限配置'}</h3>
                 {(zone.label || zone.name) !== zone.baseDomain && <div class="meta"><span>{zone.baseDomain || '未设置维护域名'}</span></div>}
                 <div class="meta">
@@ -442,35 +443,34 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                 </div>
               </button>
               <div class="actions">
-                <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => editZone(index)}>编辑</button>
+                <button class="btn btn-sm btn-outline-primary" type="button" aria-haspopup="dialog" onClick={() => editZone(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeZone(index)}>删除</button>
               </div>
             </article>
           ))}
         </div>
-        <div id="zone-edit-panel" class={`config-edit-panel${activeZone ? ' active' : ''}`}>
-          {activeZone && editingZone !== null && (
-            <>
-              <div class="config-edit-heading">
-                <h3>{editingZone.index >= form.zones.length ? '添加' : '编辑'}权限配置</h3>
-              </div>
-              <div class="config-grid">
+        {activeZone && editingZone !== null && (
+          <Modal id="zone-editor-title" title={`${editingZone.index >= form.zones.length ? '添加' : '编辑'}权限配置`}
+            className="config-editor-modal" onClose={() => setEditingZone(null)}>
+            <p class="config-editor-hint">确认后更新页面草稿，点击“保存到 KV”生效。</p>
+            <div id="zone-edit-panel" class="config-editor-form">
+              <div class="config-editor-body config-grid">
                 <TextField id={`zone-name-${editingZone.index}`} label="备注" help="可选；不填时使用维护域名。" value={activeZone.label} placeholder="可选" onValue={(value) => patchZone({ label: value, name: value })} />
                 <TextField id={`zone-domain-${editingZone.index}`} label="目标维护域名" help="目前只支持托管在cf的域名" value={activeZone.baseDomain} placeholder="example.com" onValue={(value) => patchZone({ baseDomain: value })} />
                 <TextField id={`zone-id-${editingZone.index}`} label="Zone ID" help="Cloudflare 区域 ID。" value={activeZone.zoneId} placeholder="Zone ID" onValue={(value) => patchZone({ zoneId: value })} />
                 <TextField id={`zone-token-${editingZone.index}`} label="CF Key" help="留空保持原值；需要 DNS 编辑权限。" type="password" autoComplete="new-password" value={activeZone.apiKey} placeholder={activeZone.hasApiKey ? '已配置，留空保持不变' : 'CF API Token'} onValue={(value) => patchZone({ apiKey: value })} />
               </div>
               <ConfigEditorActions error={zoneError} disabled={saveBusy} onCancel={() => setEditingZone(null)} onSave={commitZone} />
-            </>
-          )}
-        </div>
+            </div>
+          </Modal>
+        )}
       </section>
 
       <section id="maintained-domains" class="card p-4 mb-3 domain-binding-card" aria-labelledby="target-config-title">
         <div class="config-section-heading">
           <h2 id="target-config-title" class="card-title m-0 fw-bold"><Icon name="compass" /> 维护域名管理</h2>
           <div class="domain-binding-actions">
-            <button class="btn btn-sm btn-outline-primary" type="button" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
+            <button class="btn btn-sm btn-outline-primary" type="button" aria-haspopup="dialog" disabled={form.targets.length >= MAX_TARGETS} onClick={addTarget}>
               <Icon name="plus" /> 添加维护域名
             </button>
             <button class="btn btn-sm btn-outline-secondary domain-binding-refresh" type="button" aria-label="刷新域名池绑定" title="刷新 IP 池绑定" disabled={bindingBusy} onClick={onReloadBindings}><Icon name="refresh" /></button>
@@ -487,7 +487,7 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
               data-target-index={index}
               key={index}
             >
-              <button class="config-card-open" type="button" aria-expanded={editingTarget?.index === index} aria-controls="target-edit-panel" onClick={() => editTarget(index)}>
+              <button class="config-card-open" type="button" aria-haspopup="dialog" onClick={() => editTarget(index)}>
                 <h3 class="domain-binding-name">{targetDisplayDomain(target)}</h3>
                 <div class="meta">
                   <span>{target.mode === 'TXT' ? 'TXT' : `A/AAAA · ${target.port}`}</span>
@@ -507,19 +507,18 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                   <input type="checkbox" aria-label={`维护开关：${targetDisplayDomain(target)}`} checked={target.enabled} onChange={(event) => patchTarget(index, { enabled: event.currentTarget.checked })} />
                   <span>维护</span>
                 </label>
-                <button class="btn btn-sm btn-outline-primary" type="button" onClick={() => editTarget(index)}>编辑</button>
+                <button class="btn btn-sm btn-outline-primary" type="button" aria-haspopup="dialog" onClick={() => editTarget(index)}>编辑</button>
                 <button class="btn btn-sm btn-outline-danger" type="button" onClick={() => removeTarget(index)}>删除</button>
               </div>
             </article>
           ))}
         </div>
-        <div id="target-edit-panel" class={`config-edit-panel${activeTarget ? ' active' : ''}`}>
-          {activeTarget && editingTarget !== null && (
-            <>
-              <div class="config-edit-heading">
-                <h3>{editingTarget.index >= form.targets.length ? '添加' : '编辑'}维护域名</h3>
-              </div>
-              <div class="config-grid">
+        {activeTarget && editingTarget !== null && (
+          <Modal id="target-editor-title" title={`${editingTarget.index >= form.targets.length ? '添加' : '编辑'}维护域名`}
+            className="config-editor-modal" onClose={() => setEditingTarget(null)}>
+            <p class="config-editor-hint">确认后更新页面草稿，点击“保存到 KV”生效。</p>
+            <div id="target-edit-panel" class="config-editor-form">
+              <div class="config-editor-body config-grid">
                 <label class="field">
                   <span>权限配置</span>
                   <small>选择配置1/2/3。</small>
@@ -579,9 +578,9 @@ export function ConfigPage({ onSaveConfig, onToggleSetting, saving, notify, conf
                   onBind={onBindPool} onDraft={(pendingPoolKey) => patchTargetDraft({ pendingPoolKey })} />
               </div>
               <ConfigEditorActions error={targetError} disabled={saveBusy} onCancel={() => setEditingTarget(null)} onSave={commitTarget} />
-            </>
-          )}
-        </div>
+            </div>
+          </Modal>
+        )}
       </section>
     </fieldset>
   );

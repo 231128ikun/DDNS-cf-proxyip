@@ -42,6 +42,14 @@ vi.mock('preact/hooks', () => ({
   useState: hooks.useState, useRef: hooks.useRef, useEffect: hooks.useEffect, useLayoutEffect: hooks.useEffect,
   useCallback: (callback: unknown) => callback, useMemo: (factory: () => unknown) => factory(),
 }));
+// 模态的浏览器焦点与遮罩行为由 UI 验收覆盖；这里验证同一表单的草稿与保存回调。
+vi.mock('../../web/src/components/modal', async () => {
+  const { h } = await import('preact');
+  return { Modal: ({ id, title, className, onClose, children }: {
+    id: string; title: string; className: string; onClose: () => void; children: import('preact').ComponentChildren;
+  }) =>
+    h('dialog', { 'aria-labelledby': id, class: className, onClose }, h('h2', { id }, title), children) };
+});
 // 动态路径避免服务端测试 tsconfig 将 JSX 组件作为服务端源码编译。
 const componentPath = '../../web/src/components/config-page.tsx';
 const { ConfigPage } = await import(componentPath);
@@ -140,6 +148,69 @@ async function setup(existing = false) {
     fail: (key: string) => { failKey = key; } };
 }
 afterEach(() => { vi.unstubAllGlobals(); });
+
+describe('配置编辑弹窗', () => {
+  it('权限新增与编辑复用同一弹窗，确认只更新草稿，保存保留已有凭据', async () => {
+    const ui = await setup();
+    expect(elements(ui.render()).some(node => node.type === 'dialog')).toBe(false);
+    invoke(button(ui.render(), '添加权限配置'), 'onClick');
+    expect(text(find(ui.render(), node => node.type === 'dialog'))).toContain('添加权限配置');
+    invoke(field(ui.render(), 'zone-domain-1'), 'onInput', 'example.net');
+    invoke(button(ui.render(), '确认修改'), 'onClick');
+    expect(elements(ui.render()).some(node => node.type === 'dialog')).toBe(false);
+    expect(ui.writes).toEqual([]);
+    invoke(button(ui.render(), '编辑'), 'onClick');
+    expect(text(find(ui.render(), node => node.type === 'dialog'))).toContain('编辑权限配置');
+    invoke(field(ui.render(), 'zone-name-0'), 'onInput', '改名权限');
+    invoke(button(ui.render(), '确认修改'), 'onClick');
+    await invoke(field(ui.render(), 'btn-save-config'), 'onClick');
+    expect(ui.writes).toEqual(['app_config']);
+    const config = JSON.parse(ui.store.get('app_config')!);
+    expect(config.zones[0]).toMatchObject({ label: '改名权限', apiKey: 'test-key' });
+    expect(config.zones[1].baseDomain).toBe('example.net');
+  });
+
+  it.each(['权限', '目标'])('取消 %s 弹窗只丢弃当前编辑，保留页面其他草稿', async kind => {
+    const ui = await setup();
+    invoke(field(ui.render(), 'cfg-tg-id'), 'onInput', 'staged-chat');
+    if (kind === '权限') {
+      invoke(button(ui.render(), '添加权限配置'), 'onClick');
+      invoke(field(ui.render(), 'zone-domain-1'), 'onInput', 'cancelled.example');
+    } else ui.draft();
+    invoke(find(ui.render(), node => node.type === 'dialog'), 'onClose');
+    expect(elements(ui.render()).some(node => node.type === 'dialog')).toBe(false);
+    expect(ui.writes).toEqual([]);
+    expect(text(ui.render())).toContain('配置有未保存改动');
+    await invoke(field(ui.render(), 'btn-save-config'), 'onClick');
+    const config = JSON.parse(ui.store.get('app_config')!);
+    expect(config.zones).toHaveLength(1);
+    expect(config.targets).toHaveLength(0);
+    expect(config.tgId).toBe('staged-chat');
+  });
+
+  it('校验失败留在弹窗中，修正后才确认；TXT 切回 A/AAAA 保留端口', async () => {
+    const ui = await setup();
+    invoke(button(ui.render(), '添加权限配置'), 'onClick');
+    invoke(button(ui.render(), '确认修改'), 'onClick');
+    expect(text(find(ui.render(), node => node.type === 'dialog'))).toContain('请至少填写');
+    invoke(button(ui.render(), '取消'), 'onClick');
+    ui.draft();
+    invoke(field(ui.render(), 'target-port-0'), 'onInput', '8443');
+    invoke(field(ui.render(), 'target-mode-0'), 'onChange', 'TXT');
+    expect(field(ui.render(), 'target-port-0').props.disabled).toBe(true);
+    invoke(field(ui.render(), 'target-mode-0'), 'onChange', 'A');
+    expect(field(ui.render(), 'target-port-0').props.value).toBe('8443');
+    invoke(field(ui.render(), 'target-min-0'), 'onInput', '101');
+    invoke(button(ui.render(), '确认修改'), 'onClick');
+    expect(text(find(ui.render(), node => node.type === 'dialog'))).toContain('最少可用数必须在');
+    expect(ui.writes).toEqual([]);
+    invoke(field(ui.render(), 'target-min-0'), 'onInput', '3');
+    invoke(button(ui.render(), '确认修改'), 'onClick');
+    expect(elements(ui.render()).some(node => node.type === 'dialog')).toBe(false);
+    await invoke(field(ui.render(), 'btn-save-config'), 'onClick');
+    expect(JSON.parse(ui.store.get('app_config')!).targets[0].port).toBe(8443);
+  });
+});
 
 describe('维护域名草稿 IP 池选择', () => {
   it.each(['A', 'TXT'])('先保存 %s 配置，再通过真实路由保存预选绑定，保留历史映射', async mode => {
