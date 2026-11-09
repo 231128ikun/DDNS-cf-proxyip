@@ -245,6 +245,23 @@ describe('web API client pool endpoints', () => {
     expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
   });
 
+  it('preserves invalid comment reporting, merged duplicate metadata and first source positions', async () => {
+    const calls: string[] = [];
+    const client = new ApiClient({ fetchImpl: async (_url, init) => {
+      const proxyip = JSON.parse(String(init?.body)).proxyip;
+      calls.push(proxyip);
+      return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
+        items: [{ address: proxyip, result: { status: 'unknown', exitFamily: 'unknown', exits: [] } }], skipped: [] });
+    } });
+    const indices: number[] = [];
+    const report = await client.checkBatch('# header\n203.0.113.10:443,AS64500,JP,v4 # keep\n???\n203.0.113.10:443,null,null,null\n203.0.113.11:443',
+      undefined, event => indices.push(event.sourceIndex), 1);
+    expect(calls).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
+    expect(indices).toEqual([1, 4]);
+    expect(report.invalid).toEqual(['# header', '???']);
+    expect(report.items[0]?.line).toBe('203.0.113.10:443,AS64500,JP,v4 # keep');
+  });
+
   it('returns final items in source order when requests finish out of order', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const proxyip = JSON.parse(String(init?.body)).proxyip as string;

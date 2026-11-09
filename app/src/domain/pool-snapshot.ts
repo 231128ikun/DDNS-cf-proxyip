@@ -3,6 +3,7 @@ import { canonicalAddressKey, formatPoolEntry, mergePoolEntry, parsePoolAddress,
 export interface PoolSnapshotItem {
   readonly raw: string;
   readonly entry: PoolEntry;
+  readonly sourceIndex: number;
 }
 
 export interface PoolSnapshot {
@@ -17,13 +18,13 @@ export function readPoolSnapshot(text: string): PoolSnapshot {
   const entries = new Map<string, PoolSnapshotItem>();
   const lines = parsePoolText(text);
   const invalid: string[] = [];
-  for (const line of lines) {
-    if (!line.entry || !parsePoolAddress(line.entry)) { if (!line.raw.startsWith('#')) invalid.push(line.raw); continue; }
-    const key = canonicalAddressKey(line.entry.address);
-    if (!key) { invalid.push(line.raw); continue; }
-    const previous = entries.get(key);
+  for (const [sourceIndex, line] of lines.entries()) {
+    const target = line.entry ? parsePoolAddress(line.entry) : null;
+    if (!line.entry || !target) { if (!line.raw.startsWith('#')) invalid.push(line.raw); continue; }
+    const previous = entries.get(target.key);
     const entry = previous ? mergePoolEntry(previous.entry, line.entry) : line.entry;
-    entries.set(key, { raw: previous ? formatPoolEntry(entry) : line.raw, entry });
+    entries.set(target.key, { raw: previous ? formatPoolEntry(entry) : line.raw, entry,
+      sourceIndex: previous?.sourceIndex ?? sourceIndex });
   }
   return { text, entries, lines, invalid };
 }

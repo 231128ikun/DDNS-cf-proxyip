@@ -1,7 +1,8 @@
 import { ApiError, type ApiClient } from './client';
 import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse } from '../../../src/contracts/pool-check';
 import { isProbeResponse, type CheckTargetResponse } from '../../../src/contracts/probe';
-import { formatPoolEntry, mergePoolEntry, parsePoolEntry, parsePoolText, updatePoolEntryFromProbe } from '../../../src/domain/pool-entry';
+import { formatPoolEntry, updatePoolEntryFromProbe, type PoolEntry } from '../../../src/domain/pool-entry';
+import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
@@ -113,7 +114,7 @@ function isCheckTargetItemResponse(value: unknown): value is CheckTargetResponse
 }
 
 interface ParsedPoolCheckTarget {
-  readonly entry: NonNullable<ReturnType<typeof parsePoolEntry>>;
+  readonly entry: PoolEntry;
   readonly target: NonNullable<ReturnType<typeof parseProxyTarget>>;
   readonly sourceLine: string;
   readonly sourceIndex: number;
@@ -124,22 +125,12 @@ function parsePoolCheckTargets(text: string): {
   readonly targets: readonly ParsedPoolCheckTarget[];
   readonly invalid: readonly string[];
 } {
-  const targets = new Map<string, ParsedPoolCheckTarget>();
-  const invalid: string[] = [];
-  for (const [sourceIndex, line] of parsePoolText(text).entries()) {
-    if (!line.entry) {
-      invalid.push(line.raw);
-      continue;
-    }
-    const target = parseProxyTarget(line.entry.address, 443);
-    if (!target) {
-      invalid.push(line.entry.address);
-      continue;
-    }
-    const previous = targets.get(target.key);
-    const entry = previous ? mergePoolEntry(previous.entry, line.entry) : line.entry;
-    targets.set(target.key, { entry, target, sourceLine: previous ? formatPoolEntry(entry) : line.raw,
-      sourceIndex: previous?.sourceIndex ?? sourceIndex });
-  }
-  return { targets: [...targets.values()], invalid };
+  const source = readPoolSnapshot(text);
+  const invalidLines = new Set(source.invalid);
+  return {
+    targets: [...source.entries.values()].map(item => ({ entry: item.entry, target: parseProxyTarget(item.entry.address, 443)!,
+      sourceLine: item.raw, sourceIndex: item.sourceIndex })),
+    // 批检仍报告独立注释行；库存快照的无损读取规则不变。
+    invalid: source.lines.flatMap(line => !line.entry ? [line.raw] : invalidLines.has(line.raw) ? [line.entry.address] : []),
+  };
 }

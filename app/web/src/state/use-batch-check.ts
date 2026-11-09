@@ -6,7 +6,7 @@ import type { ApiClient } from '../api/client';
 import { errorMessage, isAbort } from '../api/errors';
 import type { PoolCheckProgressState } from '../components/dashboard-page';
 import type { RequestState } from './request-state';
-import { describeBatch, remainingBatch } from './batch-resume';
+import { createBatchSource, describeBatch, remainingBatch } from './batch-resume';
 import { logProbe, type ConsoleLog } from '../components/probe-log';
 
 /** 批量检测中断时的进度摘要。 */
@@ -39,7 +39,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
   const [batchInterrupt, setBatchInterrupt] = useState<BatchInterrupt | null>(null);
   const activeBatch = useRef<AbortController | null>(null);
   const aliveSoFar = useRef(0);
-  const batchSource = useRef('');
+  const batchSource = useRef<ReturnType<typeof createBatchSource> | null>(null);
   const batchCompleted = useRef(new Set<number>());
   const batchGroups = useRef(new Map<number, PoolCheckItemResponse[]>());
   const batchSourceMap = useRef<readonly number[] | null>(null);
@@ -56,7 +56,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     setBatchReport(null);
     setBatchProgressState(null);
     setBatchInterrupt(null);
-    batchSource.current = '';
+    batchSource.current = null;
     batchCompleted.current.clear();
     batchGroups.current.clear();
     batchSourceMap.current = null;
@@ -68,22 +68,22 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       return;
     }
     if (activeBatch.current) return;
-    const sourceText = resume ? batchSource.current : sourceOverride ?? ipText;
-    const resumed = resume ? remainingBatch(sourceText, batchCompleted.current) : null;
-    const text = resumed?.text ?? sourceText;
-    if (!text.trim()) {
+    const source = resume ? batchSource.current : createBatchSource(sourceOverride ?? ipText);
+    const resumed = resume && source ? remainingBatch(source, batchCompleted.current) : null;
+    const text = resumed?.text ?? source?.text ?? '';
+    if (!source || !text.trim()) {
       notify(resume ? '没有未完成的检测项' : '请先输入或从库加载 IP', 'error');
       return;
     }
     onStart?.();
     if (!resume) {
       setBatchInterrupt(null);
-      batchSource.current = sourceText;
+      batchSource.current = source;
       batchCompleted.current.clear();
       batchGroups.current.clear();
       batchSourceMap.current = null;
       aliveSoFar.current = 0;
-      setBatchReport(describeBatch(sourceText, batchGroups.current, batchCompleted.current));
+      setBatchReport(describeBatch(source, batchGroups.current, batchCompleted.current));
     }
     if (resumed) {
       // An unfinished source is retried as a whole; its partial group must be replaced.
@@ -92,7 +92,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       }
       aliveSoFar.current = [...batchGroups.current.values()].flat().filter(item => item.status === 'alive').length;
       batchSourceMap.current = resumed.sourceIndices;
-      setBatchReport(describeBatch(sourceText, batchGroups.current, batchCompleted.current));
+      setBatchReport(describeBatch(source, batchGroups.current, batchCompleted.current));
     }
     const retained = [...batchGroups.current.values()].flat().length;
     const controller = new AbortController();
@@ -111,7 +111,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
       group.push(event.item);
       batchGroups.current.set(sourceIndex, group);
       if (event.sourceComplete) batchCompleted.current.add(sourceIndex);
-      setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
+      setBatchReport(describeBatch(source, batchGroups.current, batchCompleted.current));
       logProbe(appendConsoleLog, '检测', event.item.address, event.item);
     }, webCheckConcurrency)
       .then((report) => {
@@ -129,8 +129,8 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         };
         setBatchProgressState({ completed: items.length, total: items.length });
         setBatch({ status: 'ready', data: combined });
-        setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
-        batchSource.current = '';
+        setBatchReport(describeBatch(source, batchGroups.current, batchCompleted.current));
+        batchSource.current = null;
         batchCompleted.current.clear();
         batchGroups.current.clear();
         batchSourceMap.current = null;
@@ -147,8 +147,8 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         if (isAbort(error) || activeBatch.current !== controller) return;
         activeBatch.current = null;
         setCheckingBatch(false);
-        setBatchReport(describeBatch(batchSource.current, batchGroups.current, batchCompleted.current));
-        batchSource.current = '';
+        setBatchReport(describeBatch(source, batchGroups.current, batchCompleted.current));
+        batchSource.current = null;
         batchCompleted.current.clear();
         batchGroups.current.clear();
         batchSourceMap.current = null;
@@ -161,12 +161,13 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
 
   const handleStopBatch = (): void => {
     const controller = activeBatch.current;
-    if (!controller) return;
+    const source = batchSource.current;
+    if (!controller || !source) return;
     onInterrupt();
     controller.abort();
     activeBatch.current = null;
     setCheckingBatch(false);
-    const report = describeBatch(batchSource.current, batchGroups.current, batchCompleted.current);
+    const report = describeBatch(source, batchGroups.current, batchCompleted.current);
     setBatchReport(report);
     const completed = batchCompleted.current.size;
     const total = completed + report.incomplete.length;
@@ -190,7 +191,7 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
     setBatch({ status: 'idle' });
     setBatchProgressState(null);
     aliveSoFar.current = 0;
-    batchSource.current = '';
+    batchSource.current = null;
     batchCompleted.current.clear();
     batchGroups.current.clear();
     batchSourceMap.current = null;
