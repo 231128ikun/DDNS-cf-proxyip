@@ -2,15 +2,16 @@ import type {
   PoolCheckProgressEvent,
   PoolCheckResponse,
 } from '../../../src/contracts/pool-check';
-import type {
-  CleanPoolResponse,
-  CleanPoolRequest,
-  CreatePoolResponse,
-  PoolContentResponse,
-  SavePoolRequest,
-  PoolSaveResponse,
-  PoolsResponse,
-  RestoreTrashResponse,
+import {
+  TRASH_POOL_KEY,
+  type CleanPoolResponse,
+  type CleanPoolRequest,
+  type CreatePoolResponse,
+  type PoolContentResponse,
+  type SavePoolRequest,
+  type PoolSaveResponse,
+  type PoolsResponse,
+  type RestoreTrashResponse,
 } from '../../../src/contracts/pool';
 import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
@@ -121,12 +122,13 @@ export class ApiClient {
     if (!snapshot.entries.size) throw new ApiError('池中没有有效地址，无需洗库', 0);
     const report = await this.checkBatch(serializePoolEntries(snapshotEntries(snapshot)), signal, onProgress, concurrency);
     signal?.throwIfAborted();
-    const unknown = report.unknown + snapshot.invalid.length + report.invalid.length;
-    if (unknown) return {ok:true, poolKey:key, checked:report.total, kept:0, trashed:0, unknown, skipped:true};
+    const invalid = snapshot.invalid.length + report.invalid.length;
+    if (invalid) return {ok:true, poolKey:key, checked:report.total, kept:0, trashed:0, unknown:report.unknown + invalid, skipped:true};
     const input: CleanPoolRequest = {content:source.content, report};
     onApply?.();
     const result = await this.request<CleanPoolResponse>(`${poolPath(key)}/clean`, 'POST', input, signal);
     if (result?.ok !== true || result.poolKey !== key || result.checked !== report.total || typeof result.skipped !== 'boolean'
+      || (key === TRASH_POOL_KEY && !result.skipped && result.remaining === undefined)
       || ![result.kept, result.trashed, result.unknown, result.remaining ?? 0].every(count => Number.isSafeInteger(count) && count >= 0)) {
       throw new ApiError('未取得有效洗库回执，请核对库存', 0);
     }

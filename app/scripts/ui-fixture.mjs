@@ -33,7 +33,7 @@ export function createUiFixture() {
   return { config, pools, bindings, records, nextRecord: 0, failConfigSave: false, failRecordSave: false,
     failOrderSave: null, orderSaveDelay: 0, orderChunkDelay: 0, poolListFailures: 0, bindingListFailures: 0,
     poolListDelay: 0, bindingListDelay: 0, configSaveDelay: 0, bindingSaveDelay: 0, bindingSaveFailures: 0,
-    poolContents: {}, kvWrites: [], poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
+    poolContents: {}, kvWrites: [], kvWriteFailures: {}, poolReadDelay: 0, poolPreviewDelay: 0, poolWriteDelay: 0, poolWriteFailures: 0, poolReadOverride: null, poolListCounts: {},
     restoreFailures: 0, remoteContent: '203.0.113.99:443', remoteFailures: 0,
     probeDelay: 0, probeDelays: {}, probeErrors: {}, executionColo: 'NRT', probeMetrics: { active: 0, peak: 0 }, configDelay: 0, configFailures: 0,
     currentStatusDelay: 0, entryChunkDelay: 0, appChunkDelay: 0, batchChunkDelay: 0, maintenanceResponse: null, maintenanceDisconnect: false, maintenancePause: null, bindingMapping: null };
@@ -70,7 +70,7 @@ export function renderReference(config, ref = UI_BASELINE_REF, login = false) {
 }
 
 /** 本地验收：配置与绑定读写使用同次构建的 Worker 和内存 KV，外部操作使用替身。 */
-export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF, empty = false } = {}) {
+export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF, empty = false, port = 0 } = {}) {
   if (!existsSync(join(webRoot, 'index.html'))) throw new Error('请先运行 npm run build');
   const fixture = createUiFixture();
   if (empty) { fixture.config.zones = []; fixture.config.targets = []; fixture.bindings.items = []; }
@@ -123,6 +123,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       return options === 'json' || options?.type === 'json' ? JSON.parse(value) : value;
     },
     async put(key, value) {
+      if (fixture.kvWriteFailures[key] > 0) { fixture.kvWriteFailures[key]--; throw new Error('模拟 KV 写入失败'); }
       fixture.kvWrites.push(key);
       if (/^ip_pool_(?:default|trash|\d{3})$/.test(key)) {
         fixture.poolContents[key] = value;
@@ -354,7 +355,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
     response.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.md': 'text/markdown; charset=utf-8' })[extname(file)] || 'application/octet-stream' });
     response.end(readFileSync(file));
   });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   return { base: `${tlsDir ? 'https' : 'http'}://127.0.0.1:${server.address().port}`, fixture, requests,
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }

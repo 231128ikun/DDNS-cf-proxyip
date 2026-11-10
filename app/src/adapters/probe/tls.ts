@@ -49,9 +49,9 @@ export async function secureProbeSocket(socket: ProbeSocket, hostname: string,
   });
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => closing ??= (async () => {
-    await socket.close().catch(() => {});
-    await reader.cancel().catch(() => {});
-    reader.releaseLock(); writer.releaseLock();
+    try {
+      await Promise.all([Promise.resolve().then(() => socket.close()), Promise.resolve().then(() => reader.cancel())]);
+    } finally { try { reader.releaseLock(); } finally { writer.releaseLock(); } }
   })();
   try {
     const tls = await startTls(hostname, trusted, queue.read.bind(queue), data => {
@@ -70,5 +70,5 @@ export async function secureProbeSocket(socket: ProbeSocket, hostname: string,
       writable: new WritableStream({ async write(data) { await tls.write(data); await pending; }, abort: close }),
       startTls() { throw new Error('TLS 已建立'); },
     };
-  } catch (error) { await close(); throw error; }
+  } catch (error) { await close().catch(() => {}); throw error; }
 }

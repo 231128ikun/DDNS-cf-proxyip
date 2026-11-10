@@ -6,6 +6,17 @@ export interface RequestTimeout {
   readonly cleanup: () => void;
 }
 
+/** 中止等待时仍接住底层操作的迟到结果或异常。 */
+export function waitWithSignal<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const stop = () => { signal.removeEventListener('abort', stop); reject(signal.reason); };
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
+    task.then(value => { signal.removeEventListener('abort', stop); resolve(value); },
+      error => { signal.removeEventListener('abort', stop); reject(error); });
+  });
+}
+
 export function createRequestTimeout(timeoutMs: number, externalSignal?: AbortSignal): RequestTimeout {
   const controller = new AbortController();
   let timedOut = false;

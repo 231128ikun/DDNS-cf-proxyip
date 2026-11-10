@@ -84,6 +84,8 @@ export interface ProbeAdapterDeps {
   readonly fetchImpl?: typeof fetch;
   readonly connect?: ProbeConnect;
   readonly budget?: ReturnType<typeof createSubrequestBudget>;
+  readonly defer?: (task: Promise<boolean>) => void;
+  readonly disableNative?: boolean;
 }
 
 /** 只累计 HTTP 子请求；TCP socket 由探针限制同时连接数，不占用 HTTP 配额。 */
@@ -115,6 +117,8 @@ export function createProbeAdapterFromConfig(config: ProbeConfig, deps: ProbeAda
   return new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
     connect,
     rootsFetch: budget.probeFetch,
+    ...(deps.defer ? { defer: deps.defer } : {}),
+    ...(deps.disableNative ? { disableNative: true } : {}),
     ...(backup ? { backup } : {}),
   });
 }

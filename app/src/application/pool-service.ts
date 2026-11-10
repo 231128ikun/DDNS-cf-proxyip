@@ -8,6 +8,7 @@ import {
   isUserPoolKey,
 } from '../contracts/pool';
 import { canonicalAddressKey } from '../domain/pool-entry';
+import { normalizePoolOrder } from '../domain/pool-order';
 import { readPoolSnapshot, type PoolSnapshot } from '../domain/pool-snapshot';
 import { planPoolSave, planPoolRestore } from '../domain/pool-mutation';
 import { sourcePoolFromTrash } from '../domain/trash';
@@ -169,17 +170,4 @@ function normalizeContent(value: unknown): string {
   if (typeof value !== 'string') throw new PoolInputError('IP 池内容必须是文本');
   if (value.length > MAX_POOL_CONTENT_LENGTH) throw new PoolInputError('IP 池内容超出长度限制');
   return value.replace(/\r\n?/g, '\n').trim();
-}
-
-function normalizePoolOrder(submitted: readonly string[], actual: readonly string[]): readonly string[] {
-  const submittedSet = new Set(submitted);
-  const middle = submitted.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY && submittedSet.has(key));
-  const actualMiddle = actual.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY);
-  for (const key of actualMiddle) if (!middle.includes(key)) middle.push(key);
-
-  return [
-    ...(actual.includes(DEFAULT_POOL_KEY) ? [DEFAULT_POOL_KEY] : []),
-    ...middle,
-    ...(actual.includes(TRASH_POOL_KEY) ? [TRASH_POOL_KEY] : []),
-  ];
 }

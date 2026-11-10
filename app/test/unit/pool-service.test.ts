@@ -93,6 +93,14 @@ describe('PoolService', () => {
     expect(catalog.order).toEqual([DEFAULT_POOL_KEY, 'ip_pool_002', 'ip_pool_001', TRASH_POOL_KEY]);
   });
 
+  it('rejects stale ordering instead of silently filling missing pools', async () => {
+    const catalog = new MemoryPoolCatalog({ 'ip_pool_001': '', 'ip_pool_002': '' });
+    const before = [...catalog.order];
+    await expect(new PoolService(catalog).saveOrder([DEFAULT_POOL_KEY, 'ip_pool_001', TRASH_POOL_KEY]))
+      .rejects.toThrow('池列表已变化，请刷新后重试');
+    expect(catalog.order).toEqual(before);
+  });
+
   it('restores trash to its source pool and strips the trash comment', async () => {
     const catalog = new MemoryPoolCatalog({
       'ip_pool_001': '',

@@ -27,7 +27,7 @@ try {
         server.fixture.config.tgToken = 'fixture-telegram-token';
         await cdp.send('Network.setCookie', { name: 'ddns_auth', value: 'fixture-panel-key', url: server.base }, sessionId);
       }
-      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: width === 375 ? 812 : 1000, mobile: width < 768, deviceScaleFactor: 1 }, sessionId);
       const loaded = cdp.wait(sessionId, 'Page.loadEventFired');
       await cdp.send('Page.navigate', { url: server.base }, sessionId);
       await loaded;
@@ -50,7 +50,7 @@ try {
         if (document.querySelector('#zone-config-title').textContent.trim() !== '域名权限配置') issues.push('permissions heading does not match the domain task');
         if (document.querySelector('#target-config-title').textContent.trim() !== '维护域名管理') issues.push('maintained domain heading does not match the domain task');
         if (document.querySelectorAll('#page-config input[role="switch"]').length !== 2 || document.querySelector('.hero input[role="switch"], .config-options')) issues.push('task settings are duplicated or outside configuration');
-        if (document.querySelectorAll('#target-config-title').length !== 1 || document.querySelectorAll('#target-edit-panel').length !== 1) issues.push('domain settings entry is duplicated');
+        if (document.querySelectorAll('#target-config-title').length !== 1 || document.querySelector('#zone-edit-panel, #target-edit-panel, #page-config dialog')) issues.push('domain editor is duplicated or mounted while closed');
         if (document.querySelectorAll('#page-config .config-mini-card .domain-binding-select').length !== 2) issues.push('pool binding is not integrated with maintained domains');
         if (document.querySelector('#page-dashboard .domain-binding-card')) issues.push('dashboard still has a second binding panel');
         const columns = getComputedStyle(document.querySelector('#maintained-domains .config-card-grid')).gridTemplateColumns.split(' ').length;
@@ -77,10 +77,87 @@ try {
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true,
         clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 } }, sessionId);
       writeFileSync(join(out, `${state}.png`), Buffer.from(shot.data, 'base64'));
+      if ([375, 1440].includes(width)) {
+        const start = server.requests.length;
+        const zoneTrigger = '#page-config > section:has(#zone-config-title) .config-mini-card .actions button:first-child';
+        const permissionHeight = await read('document.querySelector("#zone-config-title").closest("section").getBoundingClientRect().height');
+        const captureModal = async (name, panel) => {
+          await cdp.until(sessionId, `Boolean(document.querySelector('dialog[open] #${panel}')?.offsetWidth)`);
+          await cdp.until(sessionId, 'document.getAnimations().every(animation => animation.playState !== "running")');
+          const metrics = await read(`(() => {
+            const modal = document.querySelector('.config-editor-modal');
+            const box = modal.getBoundingClientRect();
+            const body = modal.querySelector('.config-editor-body');
+            const footer = modal.querySelector('.config-edit-actions').getBoundingClientRect();
+            return { fits: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+              centered: Math.abs((box.left + box.right) / 2 - innerWidth / 2) < 1,
+              footer: footer.bottom <= box.bottom && footer.top >= box.top,
+              scroll: getComputedStyle(body).overflowY === 'auto',
+              columns: getComputedStyle(body).gridTemplateColumns.split(' ').length,
+              title: parseFloat(getComputedStyle(modal.querySelector('h2')).fontSize),
+              readable: [...body.querySelectorAll('input, select')].every(input => parseFloat(getComputedStyle(input).fontSize) >= 14 && input.getBoundingClientRect().height >= 36),
+              blur: getComputedStyle(document.querySelector('dialog[open]')).backdropFilter,
+              overflow: modal.scrollWidth > modal.clientWidth || body.scrollWidth > body.clientWidth,
+              locked: document.body.style.overflow === 'hidden' };
+          })()`);
+          assert(metrics.fits && metrics.centered && metrics.footer && metrics.scroll && metrics.readable
+            && metrics.title >= 18 && metrics.locked && !metrics.overflow && metrics.blur.includes('blur(4px)'), `${name}: modal layout ${JSON.stringify(metrics)}`);
+          assert.equal(metrics.columns, width === 375 ? 1 : 2, `${name}: incorrect form columns`);
+          const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+          writeFileSync(join(out, `${state}-${name}.png`), Buffer.from(shot.data, 'base64'));
+        };
+        await cdp.click(sessionId, zoneTrigger);
+        await captureModal('edit-permission', 'zone-edit-panel');
+        assert.equal(await read('document.querySelector("#zone-config-title").closest("section").getBoundingClientRect().height'), permissionHeight, 'Opening the editor stretched the permissions section');
+        await read('document.querySelector("#zone-name-0").value = "取消草稿"; document.querySelector("#zone-name-0").dispatchEvent(new Event("input", {bubbles:true}))');
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, sessionId);
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, sessionId);
+        await cdp.until(sessionId, '!document.querySelector("dialog[open]")');
+        assert(await read(`document.activeElement === document.querySelector(${JSON.stringify(zoneTrigger)}) && document.body.style.overflow !== 'hidden' && !document.querySelector('#page-config').textContent.includes('取消草稿')`), 'Escape did not cancel only the editor and return focus');
+        const targetTrigger = '#maintained-domains .config-mini-card .actions button:first-of-type';
+        await cdp.click(sessionId, targetTrigger);
+        await captureModal('edit-target', 'target-edit-panel');
+        await read('document.querySelector("#target-port-0").value = "8443"; document.querySelector("#target-port-0").dispatchEvent(new Event("input", {bubbles:true}))');
+        for (const mode of ['TXT', 'A']) {
+          await read(`(() => { const select = document.querySelector('#target-mode-0'); select.value = '${mode}'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+          await read('new Promise(resolve => requestAnimationFrame(resolve))');
+          assert.equal(await read('document.querySelector("#target-port-0").disabled'), mode === 'TXT');
+        }
+        assert.equal(await read('document.querySelector("#target-port-0").value'), '8443', 'Record type switch lost the address port');
+        await read('document.querySelector("#target-min-0").value = "101"; document.querySelector("#target-min-0").dispatchEvent(new Event("input", {bubbles:true}))');
+        await cdp.click(sessionId, '#target-edit-panel .config-edit-actions button:last-child');
+        await cdp.until(sessionId, 'Boolean(document.querySelector("dialog[open] [role=alert]"))');
+        assert.equal(server.requests.slice(start).filter(request => request.method === 'PUT').length, 0, 'Editor validation wrote configuration');
+        await read('document.querySelector("#target-edit-panel .config-editor-body").scrollTop = 10000');
+        await captureModal('target-validation', 'target-edit-panel');
+        await read('document.querySelector("#target-edit-panel .config-edit-actions button:last-child").focus()');
+        for (let step = 0; step < 3; step++) {
+          await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 }, sessionId);
+          await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 }, sessionId);
+          // 原生模态允许 Tab 经过浏览器工具栏，但不能进入背景页面控件。
+          assert(await read('document.activeElement === document.body || document.querySelector("dialog[open]").contains(document.activeElement)'), 'Tab reached a background control');
+        }
+        assert(await read('document.querySelector("dialog[open]").contains(document.activeElement)'), 'Tab did not return to the modal');
+        await read('document.querySelector("#target-prefix-0").scrollIntoView({block:"center",behavior:"instant"})');
+        const dragStart = await read('(() => { const box = document.querySelector("#target-prefix-0").getBoundingClientRect(); return {x:box.left+20,y:box.top+box.height/2}; })()');
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...dragStart, button: 'left', clickCount: 1 }, sessionId);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, buttons: 1 }, sessionId);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 2, y: 2, button: 'left', clickCount: 1 }, sessionId);
+        assert(await read('Boolean(document.querySelector("dialog[open]")) && document.querySelector("#target-port-0").value === "8443" && document.querySelector("#target-min-0").value === "101"'), 'Dragging from a field onto the backdrop discarded the draft');
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 2, y: 2, button: 'left', clickCount: 1 }, sessionId);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...dragStart, buttons: 1 }, sessionId);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...dragStart, button: 'left', clickCount: 1 }, sessionId);
+        assert(await read('Boolean(document.querySelector("dialog[open]")) && document.querySelector("#target-port-0").value === "8443"'), 'Dragging from the backdrop into a field discarded the draft');
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 2, y: 2, button: 'left', clickCount: 1 }, sessionId);
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 2, y: 2, button: 'left', clickCount: 1 }, sessionId);
+        await cdp.until(sessionId, '!document.querySelector("dialog[open]")');
+        assert(await read(`document.activeElement === document.querySelector(${JSON.stringify(targetTrigger)}) && document.querySelector('#btn-save-config').closest('.config-toolbar').hidden`), 'Backdrop cancel changed the confirmed target or lost focus');
+        assert.equal(server.requests.slice(start).filter(request => request.method === 'PUT').length, 0, 'Canceling a modal wrote configuration');
+      }
       if (configured && [375, 1440].includes(width)) {
         const draftStart = server.requests.length;
         await cdp.click(sessionId, '#maintained-domains .domain-binding-actions button:first-child');
-        await cdp.until(sessionId, 'Boolean(document.querySelector("#target-edit-panel.active")?.offsetWidth)');
+        await cdp.until(sessionId, 'Boolean(document.querySelector("dialog[open] #target-edit-panel")?.offsetWidth)');
         assert(await read('!document.querySelector("#target-edit-panel .domain-binding-select").disabled'), 'New target cannot preselect a pool');
         await read('const select = document.querySelector("#target-edit-panel .domain-binding-select"); select.value = "ip_pool_002"; select.dispatchEvent(new Event("change", {bubbles:true})); select.scrollIntoView({block:"center",behavior:"instant"})');
         const draftShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
@@ -108,7 +185,7 @@ try {
         await cdp.click(sessionId, '#maintained-domains .config-mini-card:last-child .actions button:last-child');
         await cdp.click(sessionId, '#btn-save-config');
         await cdp.until(sessionId, '!document.querySelector("#btn-save-config")?.offsetWidth');
-        await cdp.click(sessionId, '#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
+        await cdp.click(sessionId, '#page-config > section:has(#zone-config-title) .config-mini-card .actions button:first-child');
         await read('document.querySelector("#zone-domain-0").value = "example.net"; document.querySelector("#zone-domain-0").dispatchEvent(new Event("input", { bubbles: true }))');
         await cdp.click(sessionId, '#zone-edit-panel .config-edit-actions button:last-child');
         await read('new Promise(resolve => requestAnimationFrame(resolve))');

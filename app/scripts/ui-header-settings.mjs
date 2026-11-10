@@ -85,10 +85,12 @@ try {
     }
     await setValue('#cfg-concurrent-checks', '7');
     assert(await read('!document.querySelector("#cfg-concurrent-checks-error")'), 'Correcting the value did not clear its error');
-    await click('#page-config > :has(> #zone-edit-panel) .config-mini-card .actions button:first-child');
+    await click('#page-config > section:has(#zone-config-title) .config-mini-card .actions button:first-child');
     await setValue('#zone-name-0', '未提交编辑草稿');
+    assert(await read('document.querySelector("dialog[open] #zone-name-0")?.value === "未提交编辑草稿" && document.querySelector("#btn-save-config").disabled'), 'Unconfirmed edits can be skipped by saving');
+    await click('#zone-edit-panel .config-edit-actions button:last-child');
     const assertDraft = async () => {
-      assert(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#zone-name-0")?.value === "未提交编辑草稿" && document.querySelector("#btn-save-config").disabled'), 'Unconfirmed edits were lost or can be skipped by saving');
+      assert(await read('document.querySelector("#cfg-concurrent-checks").value === "7" && document.querySelector("#page-config > section:has(#zone-config-title) .config-mini-card h3")?.textContent === "未提交编辑草稿" && !document.querySelector("#btn-save-config").disabled'), 'Staged edits were lost after a flag update');
     };
     server.fixture.configSaveDelay = 400;
     server.fixture.failConfigSave = true;
@@ -119,7 +121,6 @@ try {
     assert.deepEqual(notified.input, { tgEnabled: true });
     await assertDraft();
     assert.equal(probes(), probeCount, 'Changing global flags reloaded DNS/probes');
-    await click('#zone-edit-panel .config-edit-actions button:last-child');
     start = server.requests.length;
     const beforeFormSave = writes().length;
     await click('#btn-save-config');

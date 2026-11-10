@@ -179,6 +179,15 @@ describe('native candidate probe', () => {
     expect(io.connect).toHaveBeenCalledTimes(2); expect(backup.probe).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the backup when an asynchronous connection fails before allocating a socket', async () => {
+    const backup = { name: 'backup', probe: vi.fn(async () => alive(target, { endpoint: 'backup' })) };
+    const connect = vi.fn(async () => { throw new TypeError('socket API unavailable'); });
+    expect(await new NativeProbeAdapter({ urls, timeoutMs: 1000, connect, backup }).probe(target))
+      .toMatchObject({ status: 'alive', endpoint: 'backup' });
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(backup.probe).toHaveBeenCalledTimes(1);
+  });
+
   it('cannot use a backup failure to overwrite a native runtime anomaly', async () => {
     const io = connector(() => new Error('TCP Loop detected'));
     const backup = { name: 'backup', probe: vi.fn(async () => dead(target)) };

@@ -11,6 +11,7 @@ import {
   isPoolDataKey,
 } from '../../contracts/pool';
 import { parsePoolText } from '../../domain/pool-entry';
+import { normalizePoolOrder } from '../../domain/pool-order';
 import type { PoolSummary } from '../../contracts/pool';
 import type { PoolCatalog } from '../../ports/pool-catalog';
 import { readKvStringRecord } from './kv-json';
@@ -26,7 +27,7 @@ export class KvPoolCatalog implements PoolCatalog {
       this.readOrder(),
       this.listPoolKeys(),
     ]);
-    const normalizedOrder = normalizeOrder(order, keys);
+    const normalizedOrder = normalizePoolOrder(order, keys);
     const summaries = await mapWithConcurrency(normalizedOrder, 4, async (key) => {
       const content = await this.read(key);
       return {
@@ -68,7 +69,7 @@ export class KvPoolCatalog implements PoolCatalog {
     if (displayName !== getPoolFixedName(poolKey)) {
       await this.writeNames({ ...names, [poolKey]: displayName });
     }
-    if (savedOrder) await this.writeOrder(normalizeOrder([...savedOrder, poolKey], [...keys, poolKey]));
+    if (savedOrder) await this.writeOrder(normalizePoolOrder([...savedOrder, poolKey], [...keys, poolKey]));
     return { key: poolKey, name: displayName, count: 0 };
   }
 
@@ -113,7 +114,7 @@ export class KvPoolCatalog implements PoolCatalog {
 
   async saveOrder(order: readonly string[]): Promise<void> {
     const keys = await this.listPoolKeys();
-    await this.writeOrder(normalizeOrder(order, keys));
+    await this.writeOrder(normalizePoolOrder(order, keys));
   }
 
   private async readNames(): Promise<Record<string, string>> {
@@ -153,32 +154,4 @@ function toStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string')
     : [];
-}
-
-function normalizeOrder(saved: readonly string[] | null, actualKeys: readonly string[]): readonly string[] {
-  const actual = [...new Set(actualKeys.filter(isPoolDataKey))];
-  const actualSet = new Set(actual);
-  const fallback = [...actual].sort(comparePoolKeys);
-  const normalized: string[] = [];
-  for (const key of saved ?? fallback) {
-    if (actualSet.has(key) && !normalized.includes(key)) normalized.push(key);
-  }
-  for (const key of fallback) if (!normalized.includes(key)) normalized.push(key);
-
-  const middle = normalized.filter((key) => key !== DEFAULT_POOL_KEY && key !== TRASH_POOL_KEY);
-  return [
-    ...(actualSet.has(DEFAULT_POOL_KEY) ? [DEFAULT_POOL_KEY] : []),
-    ...middle,
-    ...(actualSet.has(TRASH_POOL_KEY) ? [TRASH_POOL_KEY] : []),
-  ];
-}
-
-function comparePoolKeys(left: string, right: string): number {
-  const rank = (key: string): number => key === DEFAULT_POOL_KEY ? 0 : key === TRASH_POOL_KEY ? 2 : 1;
-  const difference = rank(left) - rank(right);
-  if (difference !== 0) return difference;
-  const leftNumber = NUMBERED_POOL_KEY_RE.exec(left);
-  const rightNumber = NUMBERED_POOL_KEY_RE.exec(right);
-  if (leftNumber && rightNumber) return Number(leftNumber[1]) - Number(rightNumber[1]);
-  return left.localeCompare(right, 'zh-CN', { numeric: true });
 }

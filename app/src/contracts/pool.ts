@@ -111,7 +111,7 @@ export interface CleanPoolResponse {
   readonly checked: number;
   readonly kept: number;
   readonly trashed: number;
-  /** 探针异常或无法识别的行数；大于 0 时整池不写回也不入桶。 */
+  /** 保留的探针异常数量，加上无法识别的行数；格式无效时跳过清理。 */
   readonly unknown: number;
   readonly skipped: boolean;
   readonly remaining?: number;

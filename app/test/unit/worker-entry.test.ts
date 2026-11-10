@@ -56,22 +56,22 @@ describe('发布 Worker 装配', () => {
         }
         const fetchImpl = globalThis.fetch;
         globalThis.fetch = (...args) => { charge(); return fetchImpl(...args); };
-        const app = createWorker(config => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
-          secure: async socket => socket,
+        const app = createWorker((config, deps) => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
+          defer: deps?.defer, disableNative: deps?.disableNative, secure: async socket => socket,
           connect() {
-            charge(); stats.connections++; stats.open++;
+            charge(); stats.connections++; stats.open++; stats.peak = Math.max(stats.peak, stats.open);
             let rejectOpened, closed = false;
             const opened = stats.slow ? new Promise((_, reject) => { rejectOpened = reject; }) : Promise.resolve({});
             const body = JSON.stringify({ ip:'198.51.100.42', asn:64500, country:'US', colo:'NRT' });
             const bytes = new TextEncoder().encode('HTTP/1.1 200 OK\\r\\nContent-Length: ' + body.length + '\\r\\n\\r\\n' + body);
             return { opened, closed:Promise.resolve(),
               readable:new ReadableStream({start(c){c.enqueue(bytes);c.close();}}), writable:new WritableStream(),
-              async close(){if(!closed){closed=true;stats.open--;rejectOpened?.(new Error('closed'));}}, startTls(){throw new Error('unused');} };
+              async close(){if(!closed){closed=true;await new Promise(resolve=>setTimeout(resolve, 20));stats.open--;rejectOpened?.(new Error('closed'));}}, startTls(){throw new Error('unused');} };
           },
         }));
         export default class TestWorker extends WorkerEntrypoint {
           async fetch(request) {
-            stats = {scopes:[], connections:0, open:0, slow:new URL(request.url).searchParams.has('slow')};
+            stats = {scopes:[], connections:0, open:0, peak:0, slow:new URL(request.url).searchParams.has('slow')};
             const scope = {used:0, internal:0}; stats.scopes.push(scope);
             return scopes.run(scope, async () => {
               const env = limitedEnv(this.env), ctx = limitedContext(this.ctx);
@@ -88,6 +88,8 @@ describe('发布 Worker 装配', () => {
                 controller.close();
                 const reply = await operation;
                 const result = await new Response(reply.body).json();
+                const cleanup = await new Response(reply.closed).arrayBuffer();
+                if (new Uint8Array(cleanup)[0] !== 1) throw new Error('socket cleanup failed');
                 reply[Symbol.dispose]?.();
                 response = Response.json({openAtCancel, open:stats.open, status:reply.status, probeStatus:result.items?.[0]?.result?.status, code:result.items?.[0]?.result?.code});
               } else if (new URL(request.url).pathname === '/test-scheduled') {
@@ -98,6 +100,8 @@ describe('发布 Worker 装配', () => {
               } else response = await app.fetch(request, env, ctx);
               const headers = new Headers(response.headers);
               headers.set('x-test-connections', String(stats.connections));
+              headers.set('x-test-peak-open', String(stats.peak));
+              headers.set('x-test-open', String(stats.open));
               headers.set('x-test-invocations', String(stats.scopes.length));
               headers.set('x-test-max-used', String(Math.max(...stats.scopes.map(s=>s.used))));
               headers.set('x-test-max-internal', String(Math.max(...stats.scopes.map(s=>s.internal))));
@@ -143,6 +147,8 @@ describe('发布 Worker 装配', () => {
           expect(result.results?.map(item => item.activeCount)).toEqual([3,3,3,3,3,3,3]);
         }
         expect(Number(response.headers.get('x-test-connections'))).toBe(42);
+        expect(Number(response.headers.get('x-test-peak-open'))).toBeLessThanOrEqual(4);
+        expect(Number(response.headers.get('x-test-open'))).toBe(0);
         expect(Number(response.headers.get('x-test-invocations'))).toBeGreaterThan(21);
         expect(Number(response.headers.get('x-test-max-used'))).toBeLessThanOrEqual(50);
         expect(Number(response.headers.get('x-test-max-internal'))).toBeLessThanOrEqual(1000);

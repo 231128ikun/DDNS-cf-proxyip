@@ -1,3 +1,4 @@
+import { SOCKET_CLOSE_TIMEOUT_MS } from './adapters/probe/native';
 import { toMaintenanceTargetResult } from './application/maintenance-summary';
 import { maintenanceDisplayLines, notificationDisplay } from './domain/maintenance-display';
 import { CloudflareDnsRepository } from './adapters/dns/cloudflare-dns';
@@ -29,13 +30,13 @@ import { isProbeResponse } from './contracts/probe';
 import { isRecord } from './contracts/parse';
 import type { ProbeAdapter } from './ports/probe';
 import { appFetch } from './util/fetch';
-import { createRequestTimeout } from './util/request-timeout';
+import { createRequestTimeout, waitWithSignal } from './util/request-timeout';
 import { runMaintenanceJob } from './jobs/maintenance-job';
 import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, streamMaintenanceTask, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult } from './contracts/maintenance';
 
-export const APP_VERSION = '2026.11.07-15.54';
+export const APP_VERSION = '2026.11.09-23.13';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -45,6 +46,7 @@ const MAX_PARALLEL_PROBE_REQUESTS = 2;
 export interface InvocationProps {
   readonly resolved?: ResolvedConfig;
   readonly directProbe?: boolean;
+  readonly disableNative?: boolean;
   readonly outbound?: boolean;
   readonly command?: Omit<MaintainManagedTargetCommand, 'signal'>;
   readonly known?: Readonly<Record<string, ProbeResult>>;
@@ -61,6 +63,7 @@ export interface InvocationReply {
   readonly status: number;
   readonly headers: [string, string][];
   readonly body: ReadableStream<Uint8Array> | null;
+  readonly closed?: ReadableStream<Uint8Array>;
 }
 
 interface SelfBinding {
@@ -79,12 +82,13 @@ export function createWorker(createProbe: typeof createProbeAdapterFromConfig = 
         const kv = env.IP_DATA;
         if (!kv) throw new Error('maintenance unavailable');
         const command = props.command;
-        return streamMaintenanceTask((progress, signal) => createLocalTarget(kv, resolved, executionContext, props.known)
+        return streamMaintenanceTask((progress, signal) => createLocalTarget(kv, resolved, executionContext, props.known, props.disableNative)
           .execute({ ...command, signal }, progress), request.signal, task => executionContext.waitUntil(task));
       }
 
       const checkProxy = new CheckProxy(props.directProbe
-        ? createProbe(toProbeConfig(resolved.config), { budget: createSubrequestBudget() })
+        ? createProbe(toProbeConfig(resolved.config), { budget: createSubrequestBudget(), defer: task => executionContext.waitUntil(task),
+          ...(props.disableNative ? { disableNative: true } : {}) })
         : createInvocationProbe(resolved, executionContext));
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv, resolved.config) : null;
@@ -149,25 +153,45 @@ export function createWorker(createProbe: typeof createProbeAdapterFromConfig = 
 }
 
 /** RPC 使用原始内部绑定，不通过带 props 的普通请求通道。 */
-function invocationBinding(context: ExecutionContext, props: InvocationProps): Pick<Fetcher, 'fetch'> {
+function invocationBinding(context: ExecutionContext, props: InvocationProps,
+  onCleanup?: (task: Promise<boolean>) => void): Pick<Fetcher, 'fetch'> {
   const binding = (context.exports as { default?: SelfBinding } | undefined)?.default;
   if (!binding) throw new TypeError('Worker 内部调用不可用');
   return { async fetch(input, init) {
     const request = new Request(input, init);
     let cancellation: ReadableStreamDefaultController<Uint8Array>;
-    let stopped = false;
+    let stopped = false, bodyFinished = false, cleanupFinished = false, disposed = false;
+    let bodyDone!: (task: Promise<boolean>) => void;
+    const bodyCompletion = new Promise<boolean>(resolve => { bodyDone = resolve; });
     const stop = () => { if (!stopped) { stopped = true; try { cancellation.close(); } catch {} } };
     const pipe = new ReadableStream<Uint8Array>({ start(controller) { cancellation = controller; } });
     request.signal.addEventListener('abort', stop, { once: true });
     let reply: (InvocationReply & Partial<Disposable>) | undefined;
-    const finish = () => { stop(); request.signal.removeEventListener('abort', stop); reply?.[Symbol.dispose]?.(); };
+    const dispose = () => { if (!disposed && bodyFinished && cleanupFinished) {
+      disposed = true; try { reply?.[Symbol.dispose]?.(); } catch {}
+    } };
+    const finish = (_cancelled: boolean, cancellation: Promise<boolean>) => {
+      bodyFinished = true; bodyDone(cancellation); stop(); request.signal.removeEventListener('abort', stop); dispose();
+    };
+    const cleanup = bodyCompletion.then(async safe => {
+      if (!reply?.closed) return safe && !props.directProbe && !props.command;
+      const reader = reply.closed.getReader();
+      const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS + 500);
+      try {
+        const part = await waitWithSignal(reader.read(), timeout.signal);
+        return safe && !part.done && part.value.length === 1 && part.value[0] === 1;
+      } finally { timeout.cleanup(); void reader.cancel().catch(() => {}); }
+    }).catch(() => false);
+    void cleanup.then(() => { cleanupFinished = true; dispose(); });
+    onCleanup?.(cleanup);
     try {
       request.signal.throwIfAborted();
       const body = request.body ? await request.text() : null;
       request.signal.throwIfAborted();
       reply = await binding.dispatch(request.url, { method: request.method, headers: invocationHeaders(request.headers), body, redirect: request.redirect }, props, pipe);
-      return new Response(invocationBody(reply.body, finish), { status: reply.status, headers: reply.headers });
-    } catch (error) { finish(); throw error; }
+      request.signal.throwIfAborted();
+      return new Response(invocationBody(reply.body, finish, request.signal), { status: reply.status, headers: reply.headers });
+    } catch (error) { finish(true, cancelInvocationBody(reply?.body)); throw error; }
   } };
 }
 
@@ -177,23 +201,43 @@ function invocationHeaders(headers: Headers): [string, string][] {
   return entries;
 }
 
-function invocationBody(source: ReadableStream<Uint8Array> | null, finish: (cancelled: boolean) => void): ReadableStream<Uint8Array> | null {
-  if (!source) { finish(false); return null; }
+async function cancelInvocationBody(source: { cancel(): Promise<unknown> } | null | undefined): Promise<boolean> {
+  if (!source) return true;
+  const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS + 500);
+  try { await waitWithSignal(source.cancel(), timeout.signal); return true; }
+  catch { return false; }
+  finally { timeout.cleanup(); }
+}
+
+function invocationBody(source: ReadableStream<Uint8Array> | null,
+  finish: (cancelled: boolean, cancellation: Promise<boolean>) => void,
+  signal?: AbortSignal): ReadableStream<Uint8Array> | null {
+  if (!source) { finish(false, Promise.resolve(true)); return null; }
   const reader = source.getReader();
   let finished = false;
+  let abort = () => {};
   const end = async (cancelled: boolean) => {
     if (finished) return;
     finished = true;
-    if (cancelled) await reader.cancel().catch(() => {});
-    finish(cancelled);
+    signal?.removeEventListener('abort', abort);
+    const cancellation = cancelled ? cancelInvocationBody(reader) : Promise.resolve(true);
+    finish(cancelled, cancellation);
+    await cancellation;
   };
   return new ReadableStream<Uint8Array>({
+    start(controller) {
+      abort = () => { controller.error(signal!.reason); void end(true); };
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+    },
     async pull(controller) {
+      if (finished) return;
       try {
         const { done, value } = await reader.read();
+        if (finished) return;
         if (done) { controller.close(); await end(false); }
         else controller.enqueue(value);
-      } catch (error) { controller.error(error); await end(true); }
+      } catch (error) { if (!finished) { controller.error(error); await end(true); } }
     },
     cancel() { return end(true); },
   });
@@ -204,14 +248,35 @@ export async function dispatchWorkerInvocation(worker: ExportedHandler<RuntimeEn
   url: string, init: InvocationRequestInit, props: InvocationProps, cancelled: ReadableStream<Uint8Array>): Promise<InvocationReply> {
   const abort = new AbortController();
   const reader = cancelled.getReader();
+  const pending: Promise<unknown>[] = [];
+  let bodyDone!: () => void;
+  const bodyCompletion = new Promise<void>(resolve => { bodyDone = resolve; });
   context.waitUntil(reader.read().then(() => abort.abort()).catch(() => abort.abort()));
-  const finish = (cancelled: boolean) => { if (cancelled) abort.abort(); void reader.cancel().catch(() => {}); };
+  const finish = (cancelled: boolean, cancellation = Promise.resolve(true)) => {
+    pending.push(cancellation); bodyDone(); if (cancelled) abort.abort(); void reader.cancel().catch(() => {});
+  };
   try {
     const request = new Request(url, { ...init, signal: abort.signal });
     const response = await worker.fetch!(request as Parameters<NonNullable<typeof worker.fetch>>[0], env,
-      { props, exports: context.exports, waitUntil: task => context.waitUntil(task),
+      { props, exports: context.exports, waitUntil: task => { pending.push(task); context.waitUntil(task); },
         passThroughOnException: () => context.passThroughOnException() } as ExecutionContext);
-    return { status: response.status, headers: invocationHeaders(response.headers), body: invocationBody(response.body, finish) };
+    let stopped = false;
+    const closed = props.directProbe || props.command ? new ReadableStream<Uint8Array>({
+      start(controller) {
+        void bodyCompletion.then(async () => {
+          let safe = true, offset = 0;
+          while (offset < pending.length) {
+            const batch = pending.slice(offset); offset = pending.length;
+            const results = await Promise.all(batch.map(task => task.catch(() => false)));
+            safe &&= !results.includes(false);
+          }
+          if (!stopped) { controller.enqueue(new Uint8Array([safe ? 1 : 0])); controller.close(); }
+        }).catch(() => { if (!stopped) controller.error(new Error('内部收尾异常')); });
+      },
+      cancel() { stopped = true; },
+    }) : undefined;
+    return { status: response.status, headers: invocationHeaders(response.headers), body: invocationBody(response.body, finish),
+      ...(closed ? { closed } : {}) };
   } catch (error) { finish(true); throw error; }
 }
 
@@ -219,32 +284,60 @@ function createInvocationFetch(context: ExecutionContext): typeof fetch {
   return (input, init) => invocationBinding(context, { outbound: true }).fetch(input, init);
 }
 
-/** 每个地址复用 /api/check，原生连接不再累积到整轮维护调用。 */
-function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionContext): ProbeAdapter {
+/** 每个 RPC 最多占四个原生槽；收尾确认后再交接，排队不消耗候选时限。 */
+function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionContext, disableNative = false): ProbeAdapter {
+  let settled = Promise.resolve();
   return { name: 'native', async probe(target, probeContext = {}) {
+    const previous = settled;
+    let release!: () => void;
+    const turn = new Promise<void>(resolve => { release = resolve; });
+    settled = previous.then(() => turn);
+    try {
+      if (probeContext.signal) await waitWithSignal(previous, probeContext.signal);
+      else await previous;
+      probeContext.signal?.throwIfAborted();
+    } catch { release(); return unknown(target, 'CANCELLED', '检测已取消'); }
     const timeout = createRequestTimeout(resolved.config.settings.CHECK_TIMEOUT * 2 + 1_000, probeContext.signal);
     let response: Response | undefined;
+    let dispatch: Promise<Response> | undefined;
+    let cleanup: Promise<boolean> | undefined;
+    let consumed = false;
     try {
-      probeContext.signal?.throwIfAborted();
-      response = await invocationBinding(context, { resolved, directProbe: true }).fetch('https://worker.internal/api/check', {
-        method: 'POST', headers: { 'Content-Type': 'application/json',
-          ...(resolved.config.authKey ? { Authorization: 'Bearer ' + resolved.config.authKey } : {}) },
-        body: JSON.stringify({ proxyip: target.authority }), signal: timeout.signal,
-      });
-      if (!response.ok) return unknown(target, 'CHECK_REQUEST_ERROR', '检测调用 HTTP ' + response.status);
-      const data: unknown = await response.json();
-      if (!isRecord(data) || data.ok !== true || !Array.isArray(data.items) || data.items.length !== 1
-        || !isRecord(data.items[0]) || data.items[0].address !== target.authority || !isProbeResponse(data.items[0].result)) {
-        return unknown(target, 'CHECK_REQUEST_ERROR', '检测调用未返回有效的目标结果');
-      }
-      probeContext.signal?.throwIfAborted();
-      return { ...data.items[0].result, target };
+      return await waitWithSignal((async () => {
+        probeContext.signal?.throwIfAborted();
+        response = await (dispatch = invocationBinding(context, { resolved, directProbe: true, disableNative },
+          task => { cleanup = task; }).fetch('https://worker.internal/api/check', {
+          method: 'POST', headers: { 'Content-Type': 'application/json',
+            ...(resolved.config.authKey ? { Authorization: 'Bearer ' + resolved.config.authKey } : {}) },
+          body: JSON.stringify({ proxyip: target.authority }), signal: timeout.signal,
+        }));
+        timeout.signal.throwIfAborted();
+        if (!response.ok) return unknown(target, 'CHECK_REQUEST_ERROR', '检测调用 HTTP ' + response.status);
+        const text = await response.text();
+        consumed = true;
+        const data: unknown = JSON.parse(text);
+        timeout.signal.throwIfAborted();
+        if (!isRecord(data) || data.ok !== true || !Array.isArray(data.items) || data.items.length !== 1
+          || !isRecord(data.items[0]) || data.items[0].address !== target.authority || !isProbeResponse(data.items[0].result)) {
+          return unknown(target, 'CHECK_REQUEST_ERROR', '检测调用未返回有效的目标结果');
+        }
+        return { ...data.items[0].result, target };
+      })(), timeout.signal);
     } catch {
       return unknown(target, probeContext.signal?.aborted ? 'CANCELLED' : 'CHECK_REQUEST_ERROR',
         probeContext.signal?.aborted ? '检测已取消' : timeout.didTimeout() ? '检测调用超时，候选状态未知' : '检测调用异常，候选状态未知');
     } finally {
       timeout.cleanup();
-      await response?.body?.cancel().catch(() => {});
+      const cancellation = cancelInvocationBody(consumed ? undefined : response?.body);
+      const closingTimeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS + 500);
+      const closed = dispatch ? waitWithSignal(Promise.all([cancellation,
+        dispatch.then(() => cleanup ?? false, () => cleanup ?? false)]).then(results => results.every(Boolean)), closingTimeout.signal)
+        .catch(() => false) : Promise.resolve(true);
+      context.waitUntil(closed.then(safe => {
+        disableNative ||= !safe;
+        closingTimeout.cleanup(); release();
+        return safe;
+      }));
     }
   } };
 }
@@ -282,9 +375,9 @@ export function createConfigService(env: RuntimeEnv, projectUrl?: string): Confi
 }
 
 function createLocalTarget(kv: KVNamespace, resolved: ResolvedConfig, context: ExecutionContext,
-  known: Readonly<Record<string, ProbeResult>> = {}): MaintainManagedTarget {
+  known: Readonly<Record<string, ProbeResult>> = {}, disableNative = false): MaintainManagedTarget {
   const config = resolved.config;
-  const probe = createInvocationProbe(resolved, context);
+  const probe = createInvocationProbe(resolved, context, disableNative);
   return new MaintainManagedTarget({
     probe: { name: probe.name, async probe(target, options) {
       options?.signal?.throwIfAborted();
@@ -299,14 +392,16 @@ function createLocalTarget(kv: KVNamespace, resolved: ResolvedConfig, context: E
 /** 目标调用与逐地址调用分层，父维护只调度目标并汇总，不累积候选调用数。 */
 function createInvocationTarget(resolved: ResolvedConfig, context: ExecutionContext,
   confirmed: Map<string, ProbeResult>): TargetMaintainer {
+  let disableNative = false;
   return { async execute(command, onProgress) {
     let response: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let cleanup = Promise.resolve(false);
     try {
       command.signal?.throwIfAborted();
       const { signal, ...input } = command;
-      response = await invocationBinding(context, { resolved, command: input, known: Object.fromEntries(confirmed) })
-        .fetch('https://worker.internal/api/maintenance/run', { method: 'POST', ...(signal ? { signal } : {}), headers: { Accept: MAINTENANCE_STREAM_TYPE } });
+      response = await invocationBinding(context, { resolved, command: input, known: Object.fromEntries(confirmed), disableNative },
+        task => { cleanup = task; context.waitUntil(task); }).fetch('https://worker.internal/api/maintenance/run', { method: 'POST', ...(signal ? { signal } : {}), headers: { Accept: MAINTENANCE_STREAM_TYPE } });
       if (!response.ok || !response.headers.get('Content-Type')?.startsWith(MAINTENANCE_STREAM_TYPE)) throw new Error('目标维护调用未返回有效响应');
       reader = response.body?.getReader();
       if (!reader) throw new Error('目标维护调用未返回结果');
@@ -322,8 +417,12 @@ function createInvocationTarget(resolved: ResolvedConfig, context: ExecutionCont
       for (const result of results) if (result.target && result.status !== 'unknown' && result.code !== 'PARTIAL_EXIT') confirmed.set(result.target.key, result);
       return report;
     } finally {
-      if (reader) await reader.cancel().catch(() => {});
-      else await response?.body?.cancel().catch(() => {});
+      const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS + 500);
+      try {
+        const safe = await waitWithSignal(Promise.all([cancelInvocationBody(reader ?? response?.body), cleanup])
+          .then(results => results.every(Boolean)), timeout.signal).catch(() => false);
+        disableNative ||= !safe;
+      } finally { timeout.cleanup(); }
     }
   } };
 }
