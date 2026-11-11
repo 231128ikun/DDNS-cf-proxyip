@@ -13,12 +13,13 @@ import {
   type PoolsResponse,
   type RestoreTrashResponse,
 } from '../../../src/contracts/pool';
-import type { ApiErrorResponse, CheckTargetResponse, HealthResponse } from '../../../src/contracts/probe';
+import { readCheckStreamResult, type ApiErrorResponse, type CheckTargetResponse, type CheckTargetItemResponse, type HealthResponse } from '../../../src/contracts/probe';
 import type { ConfigResponse, ConfigUpdateRequest } from '../../../src/contracts/config';
 import type { AuthStatusResponse } from '../../../src/contracts/auth';
 import { DEFAULT_RUNTIME_SETTINGS } from '../../../src/contracts/runtime-settings';
 import type { RemoteLoadResponse } from '../../../src/contracts/remote-load';
-import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import { readMaintenanceStreamResult, type DomainBindingsResponse, type MaintenanceLogLine, type MaintenanceRunResponse } from '../../../src/contracts/maintenance';
+import { JSON_STREAM_TYPE } from '../../../src/contracts/json-stream';
 import { isRecord } from '../../../src/contracts/parse';
 import type { TargetStatusResponse } from '../../../src/contracts/target-status';
 
@@ -74,15 +75,13 @@ export class ApiClient {
     return await this.request<HealthResponse>('/api/health', 'GET', undefined, signal);
   }
 
-  /** 探测入口：域名解析与逐地址探测都在服务端完成，前端只负责展示结果。 */
-  async checkTarget(proxyip: string, signal?: AbortSignal): Promise<CheckTargetResponse> {
-    return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal);
+  /** 探测入口：域名解析与逐地址探测都在服务端完成。分组调用通过 onItem 逐条接收结果。 */
+  async checkTarget(proxyip: string | readonly string[], signal?: AbortSignal,
+    onItem?: (item: CheckTargetItemResponse) => void): Promise<CheckTargetResponse> {
+    return await this.request<CheckTargetResponse>('/api/check', 'POST', { proxyip }, signal, true, undefined, onItem);
   }
 
-  /**
-   * 浏览器限制并发，每个地址单独请求 Worker。
-   * 单个 Worker 请求只承担一个目标的主/备探测，避免整批耗尽子请求预算。
-   */
+  /** 浏览器限制并发，将 IP 分组交给 Worker，逐条接收完成结果。 */
   async checkBatch(text: string, signal?: AbortSignal, onProgress?: (event: PoolCheckProgressEvent) => void, concurrency: number = DEFAULT_RUNTIME_SETTINGS.CONCURRENT_CHECKS): Promise<PoolCheckResponse> {
     const { checkBatch } = await loadBatchCheckModule();
     return checkBatch(this, text, signal, onProgress, concurrency);
@@ -223,8 +222,8 @@ export class ApiClient {
   }
 
   private async request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal, redirectOnUnauthorized = true,
-    onProgress?: (line: MaintenanceLogLine) => void): Promise<T> {
-    const headers = new Headers({ Accept: onProgress ? MAINTENANCE_STREAM_TYPE : 'application/json' });
+    onProgress?: (line: MaintenanceLogLine) => void, onCheckItem?: (item: CheckTargetItemResponse) => void): Promise<T> {
+    const headers = new Headers({ Accept: onProgress || onCheckItem ? JSON_STREAM_TYPE : 'application/json' });
     if (body !== undefined) headers.set('Content-Type', 'application/json');
 
     const init: RequestInit = { method, headers, credentials: 'same-origin', cache: 'no-store' };
@@ -251,8 +250,17 @@ export class ApiClient {
       page?.location?.assign?.('/');
     }
 
-    if (onProgress && response.ok && response.headers.get('Content-Type')?.startsWith(MAINTENANCE_STREAM_TYPE)) {
-      return await readMaintenanceStream(response, onProgress) as T;
+    if (response.ok && response.headers.get('Content-Type')?.startsWith(JSON_STREAM_TYPE)) {
+      if (onCheckItem) {
+        const reader = response.body?.getReader();
+        if (!reader) throw new ApiError('检测响应为空', 0);
+        try { return await readCheckStreamResult(reader.read.bind(reader), onCheckItem) as T; }
+        catch (error) {
+          if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
+          throw new ApiError(error instanceof Error ? error.message : '检测连接中断', 0);
+        } finally { await reader.cancel().catch(() => {}); }
+      }
+      if (onProgress) return await readMaintenanceStream(response, onProgress) as T;
     }
     let payload: unknown;
     try {

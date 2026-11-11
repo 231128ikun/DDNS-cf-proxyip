@@ -1,12 +1,11 @@
 import { ApiError, type ApiClient } from './client';
 import type { PoolCheckItemResponse, PoolCheckProgressEvent, PoolCheckResponse } from '../../../src/contracts/pool-check';
-import { isProbeResponse, type CheckTargetResponse } from '../../../src/contracts/probe';
+import { isCheckTargetItemResponse, MAX_CHECK_BATCH_SIZE, type CheckTargetItemResponse, type CheckTargetResponse } from '../../../src/contracts/probe';
 import { formatPoolEntry, updatePoolEntryFromProbe, type PoolEntry } from '../../../src/domain/pool-entry';
 import { readPoolSnapshot } from '../../../src/domain/pool-snapshot';
 import { parseProxyTarget } from '../../../src/domain/proxy-target';
 import { DEFAULT_RUNTIME_SETTINGS, parseRuntimeSetting } from '../../../src/contracts/runtime-settings';
 import { mapWithConcurrency } from '../../../src/util/concurrency';
-import { isRecord } from '../../../src/contracts/parse';
 
 export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
   text: string,
@@ -17,35 +16,61 @@ export async function checkBatch(client: Pick<ApiClient, 'checkTarget'>,
   const { targets, invalid } = parsePoolCheckTargets(text);
   let completed = 0;
   let total = targets.length;
-
+  const emit = (target: ParsedPoolCheckTarget, item: PoolCheckItemResponse, sourceComplete = true) => {
+    signal?.throwIfAborted();
+    onProgress?.({ type: 'progress', completed: ++completed, total, item, sourceIndex: target.sourceIndex, sourceComplete });
+  };
   const limit = parseRuntimeSetting('CONCURRENT_CHECKS', concurrency);
-  const itemGroups = await mapWithConcurrency(targets, limit, async (target) => {
-    if (signal?.aborted) throw new DOMException('检测已取消', 'AbortError');
+  // 小批量保留可用并发；大批量每组最多八项，组内按顺序检测。
+  const size = Math.min(MAX_CHECK_BATCH_SIZE, Math.max(1, Math.floor(targets.length / limit)));
+  const groups: ParsedPoolCheckTarget[][] = [];
+  for (const target of targets) {
+    const previous = groups.at(-1);
+    if (target.target.family !== 'hostname' && previous && previous[0]!.target.family !== 'hostname' && previous.length < size) previous.push(target);
+    else groups.push([target]);
+  }
+  const itemGroups = await mapWithConcurrency(groups, limit, async group => {
+    signal?.throwIfAborted();
+    if (group.length > 1) return await checkPoolGroup(client, group, signal, emit);
+    const target = group[0]!;
     const checked = await checkPoolTarget(client, target, signal);
     total += checked.length - 1;
-    for (const [index, item] of checked.entries()) {
-      completed += 1;
-      onProgress?.({
-        type: 'progress',
-        completed,
-        total,
-        item,
-        sourceIndex: target.sourceIndex,
-        sourceComplete: index === checked.length - 1,
-      });
-    }
+    checked.forEach((item, index) => emit(target, item, index === checked.length - 1));
     return checked;
   });
   const items = itemGroups.flat();
+  return { total: items.length, alive: items.filter(item => item.status === 'alive').length,
+    dead: items.filter(item => item.status === 'dead').length, unknown: items.filter(item => item.status === 'unknown').length, invalid, items };
+}
 
-  return {
-    total: items.length,
-    alive: items.filter((item) => item.status === 'alive').length,
-    dead: items.filter((item) => item.status === 'dead').length,
-    unknown: items.filter((item) => item.status === 'unknown').length,
-    invalid,
-    items,
+async function checkPoolGroup(client: Pick<ApiClient, 'checkTarget'>, targets: readonly ParsedPoolCheckTarget[], signal: AbortSignal | undefined,
+  emit: (target: ParsedPoolCheckTarget, item: PoolCheckItemResponse) => void): Promise<readonly PoolCheckItemResponse[]> {
+  const expected = new Map(targets.map(target => [target.target.key, target]));
+  const results = new Map<string, PoolCheckItemResponse>();
+  const accept = (item: CheckTargetItemResponse) => {
+    if (!isCheckTargetItemResponse(item)) throw new ApiError('检测结果格式无效', 200);
+    const key = parseProxyTarget(item.address, 443)!.key;
+    if (!expected.has(key) || results.has(key)) throw new ApiError('检测结果包含重复或组外地址', 200);
+    const target = expected.get(key)!;
+    const checked = toPoolCheckItem(target, item);
+    results.set(key, checked);
+    emit(target, checked);
   };
+  let failure = unknownResult('EMPTY_RESPONSE', '检测响应缺少目标结果');
+  try {
+    const response = await client.checkTarget(targets.map(target => target.target.authority), signal, accept);
+    // 非流式回执（例如中间层未保留 Accept）仍按整组结果处理，避免全部误判为 unknown。
+    if (!results.size) response.items.forEach(accept);
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    failure = requestFailure(error);
+  }
+  for (const target of targets) if (!results.has(target.target.key)) {
+    const item = toPoolCheckItem(target, { address: target.target.authority, result: failure });
+    results.set(target.target.key, item);
+    emit(target, item);
+  }
+  return targets.map(target => results.get(target.target.key)!);
 }
 
 async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
@@ -56,61 +81,53 @@ async function checkPoolTarget(client: Pick<ApiClient, 'checkTarget'>,
   try {
     const response = await client.checkTarget(target.entry.address, signal);
     if (Array.isArray(response.items) && response.items.length > 0) {
-      if (!response.items.every(isCheckTargetItemResponse)) {
-        throw new ApiError('检测响应格式无效', 200);
-      }
+      if (!response.items.every(isCheckTargetItemResponse)) throw new ApiError('检测响应格式无效', 200);
       results = response.items;
     }
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    results = [unknownCheckItem(target.target.authority,
-      error instanceof ApiError ? `HTTP_${error.status}` : 'REQUEST_FAILED',
-      error instanceof Error ? error.message : '检测请求异常')];
+    results = [{ address: target.target.authority, result: requestFailure(error) }];
   }
-  if (results.length === 0) {
-    results = [unknownCheckItem(target.target.authority, 'EMPTY_RESPONSE', '检测响应缺少目标结果')];
-  }
-
-  return results.map(({ address, result }) => {
-    const resolvedTarget = parseProxyTarget(address, 443) ?? target.target;
-    const sourceEntry = resolvedTarget.key === target.target.key
-      ? target.entry
-      : { ...target.entry, address: resolvedTarget.authority };
-    const entry = updatePoolEntryFromProbe(sourceEntry, { ...result, target: resolvedTarget });
-    const primary = result.exits[0];
-    const asn = primary?.asn ?? entry.asn ?? undefined;
-    const country = primary?.country ?? entry.country ?? undefined;
-    const region = primary?.region;
-    const city = primary?.city;
-    return {
-      address,
-      status: result.status,
-      exitFamily: result.exitFamily,
-      ...(result.exitIp ? { exitIp: result.exitIp } : {}),
-      ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
-      ...(result.colo ? { colo: result.colo } : {}),
-      ...(result.executionColo ? { executionColo: result.executionColo } : {}),
-      ...(result.exits.length ? { exits: result.exits } : {}),
-      ...(result.code ? { code: result.code } : {}),
-      ...(result.message ? { message: result.message } : {}),
-      ...(result.endpoint ? { endpoint: result.endpoint } : {}),
-      ...(result.diagnostics?.length ? { diagnostics: result.diagnostics } : {}),
-      ...(asn ? { asn } : {}),
-      ...(country ? { country } : {}),
-      ...(region ? { region } : {}),
-      ...(city ? { city } : {}),
-      line: result.status === 'unknown' ? target.sourceLine : formatPoolEntry(entry),
-    };
-  });
+  if (!results.length) results = [unknownCheckItem(target.target.authority, 'EMPTY_RESPONSE', '检测响应缺少目标结果')];
+  return results.map(item => toPoolCheckItem(target, item));
 }
 
-function unknownCheckItem(address: string, code: string, message: string): CheckTargetResponse['items'][number] {
-  return { address, result: { status: 'unknown', exitFamily: 'unknown', exits: [], code, message } };
+function toPoolCheckItem(target: ParsedPoolCheckTarget, { address, result }: CheckTargetItemResponse): PoolCheckItemResponse {
+  const resolvedTarget = parseProxyTarget(address, 443) ?? target.target;
+  const sourceEntry = resolvedTarget.key === target.target.key ? target.entry : { ...target.entry, address: resolvedTarget.authority };
+  const entry = updatePoolEntryFromProbe(sourceEntry, { ...result, target: resolvedTarget });
+  const primary = result.exits[0];
+  const asn = primary?.asn ?? entry.asn ?? undefined;
+  const country = primary?.country ?? entry.country ?? undefined;
+  const region = primary?.region;
+  const city = primary?.city;
+  return {
+    address, status: result.status, exitFamily: result.exitFamily,
+    ...(result.exitIp ? { exitIp: result.exitIp } : {}),
+    ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
+    ...(result.colo ? { colo: result.colo } : {}),
+    ...(result.executionColo ? { executionColo: result.executionColo } : {}),
+    ...(result.exits.length ? { exits: result.exits } : {}),
+    ...(result.code ? { code: result.code } : {}),
+    ...(result.message ? { message: result.message } : {}),
+    ...(result.endpoint ? { endpoint: result.endpoint } : {}),
+    ...(result.diagnostics?.length ? { diagnostics: result.diagnostics } : {}),
+    ...(asn ? { asn } : {}), ...(country ? { country } : {}), ...(region ? { region } : {}), ...(city ? { city } : {}),
+    line: result.status === 'unknown' ? target.sourceLine : formatPoolEntry(entry),
+  };
 }
 
-function isCheckTargetItemResponse(value: unknown): value is CheckTargetResponse['items'][number] {
-  if (!isRecord(value) || typeof value.address !== 'string' || !parseProxyTarget(value.address, 443)) return false;
-  return isProbeResponse(value.result);
+function unknownCheckItem(address: string, code: string, message: string): CheckTargetItemResponse {
+  return { address, result: unknownResult(code, message) };
+}
+
+function unknownResult(code: string, message: string): CheckTargetItemResponse['result'] {
+  return { status: 'unknown', exitFamily: 'unknown', exits: [], code, message };
+}
+
+function requestFailure(error: unknown): CheckTargetItemResponse['result'] {
+  return unknownResult(error instanceof ApiError ? `HTTP_${error.status}` : 'REQUEST_FAILED',
+    error instanceof Error ? error.message : '检测请求异常');
 }
 
 interface ParsedPoolCheckTarget {
@@ -120,11 +137,7 @@ interface ParsedPoolCheckTarget {
   readonly sourceIndex: number;
 }
 
-/** 复用池文本与地址规则，只负责把用户输入整理成逐个请求的目标。 */
-function parsePoolCheckTargets(text: string): {
-  readonly targets: readonly ParsedPoolCheckTarget[];
-  readonly invalid: readonly string[];
-} {
+function parsePoolCheckTargets(text: string): { readonly targets: readonly ParsedPoolCheckTarget[]; readonly invalid: readonly string[] } {
   const source = readPoolSnapshot(text);
   const invalidLines = new Set(source.invalid);
   return {

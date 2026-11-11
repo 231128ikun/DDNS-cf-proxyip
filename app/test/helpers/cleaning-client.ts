@@ -1,5 +1,6 @@
 import { CheckProxy } from '../../src/application/check-proxy';
 import { CheckTarget } from '../../src/application/check-target';
+import { MAX_CHECK_BATCH_SIZE } from '../../src/contracts/probe';
 import { CleanPool } from '../../src/application/clean-pool';
 import { PoolService } from '../../src/application/pool-service';
 import { ResolveTarget } from '../../src/application/resolve-target';
@@ -17,7 +18,7 @@ export function cleaningClient(catalog: PoolCatalog, trash: PoolRepository, prob
     const entry = {path:String(input), method:init?.method ?? 'GET', probes:0};
     requests.push(entry);
     const checkProxy = new CheckProxy({name:probe.name, probe: (target, context) => {
-      if (++entry.probes > 1 || entry.path !== '/api/check') throw new Error('单个 Worker 请求的探针预算已耗尽');
+      if (++entry.probes > MAX_CHECK_BATCH_SIZE || entry.path !== '/api/check') throw new Error('单个 Worker 请求的探针预算已耗尽');
       return probe.probe(target, context);
     }});
     return createHttpApp({pools, cleanPool, version:'test', checkTarget:new CheckTarget({checkProxy,

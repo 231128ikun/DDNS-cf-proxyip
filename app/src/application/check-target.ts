@@ -50,7 +50,18 @@ export class CheckTarget {
     this.concurrency = parseRuntimeSetting('CONCURRENT_CHECKS', dependencies.concurrency);
   }
 
-  async execute(input: string, context: ProbeContext = {}): Promise<CheckTargetOutcome> {
+  async execute(input: string | readonly string[], context: ProbeContext = {}, onItem?: (item: CheckTargetItem) => void): Promise<CheckTargetOutcome> {
+    if (typeof input !== 'string') {
+      const items: CheckTargetItem[] = [];
+      for (const address of input) {
+        context.signal?.throwIfAborted();
+        const outcome = await this.execute(address, context);
+        if (!outcome.ok) return outcome;
+        context.signal?.throwIfAborted();
+        for (const item of outcome.report.items) { items.push(item); onItem?.(item); }
+      }
+      return { ok: true, report: { input: input.join('\n'), source: { kind: 'direct' }, items, skipped: [] } };
+    }
     const original = input.trim();
     let value = original;
     if (!needsDnsResolution(value) && !parseProxyTarget(value, 443)) {

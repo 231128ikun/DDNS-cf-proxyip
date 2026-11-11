@@ -1,6 +1,8 @@
 import { toMaintenanceRunResponse } from '../application/maintenance-summary';
-import { MAINTENANCE_STREAM_TYPE, type MaintenanceLogLine, type MaintenanceStreamEvent } from '../contracts/maintenance';
-import type { CheckTarget, CheckTargetReport } from '../application/check-target';
+import { MAINTENANCE_STREAM_TYPE, type MaintenanceLogLine } from '../contracts/maintenance';
+import { JSON_STREAM_TYPE } from '../contracts/json-stream';
+import { streamTask } from './task-stream';
+import type { CheckTarget, CheckTargetItem, CheckTargetReport } from '../application/check-target';
 import type { EffectiveConfigSource, ResolvedConfig } from '../application/config-service';
 import type { CleanPool } from '../application/clean-pool';
 import { DomainBindingsInputError, type DomainBindings } from '../application/domain-bindings';
@@ -108,7 +110,18 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
     const parsed = parseCheckProxyInput((body.value as { proxyip?: unknown } | null)?.proxyip);
     if (!parsed.ok) return errorResponse('invalid proxyip', 400);
 
-    const outcome = await dependencies.checkTarget.execute(parsed.value, { signal: context.request.signal });
+    const input = parsed.value;
+    if (typeof input !== 'string' && context.request.headers.get('Accept')?.includes(JSON_STREAM_TYPE)) {
+      return streamTask(async (send, signal) => {
+        const outcome = await dependencies.checkTarget.execute(input, { signal }, item => send({
+          type: 'progress', item: toCheckTargetItemResponse(item, dependencies.executionColo),
+        }));
+        if (!outcome.ok) throw new Error(outcome.message);
+        // 流式回执只表示完成；逐条结果已通过 progress 交付，避免整组重复序列化。
+        return { ok: true, input: outcome.report.input, source: { kind: 'direct' }, items: [], skipped: outcome.report.skipped };
+      }, context.request.signal, '检测连接中断，已返回的结果保留', dependencies.waitUntil);
+    }
+    const outcome = await dependencies.checkTarget.execute(input, { signal: context.request.signal });
     if (!outcome.ok) return errorResponse(outcome.message, 400);
 
     return jsonResponse(toCheckTargetResponse(outcome.report, dependencies.executionColo));
@@ -394,37 +407,10 @@ export function createHttpApp(dependencies: HttpAppDependencies): HttpApp {
   };
 }
 
-/** 把用例层的输入错误映射成 400，其余异常继续向上抛给统一错误处理。 */
 export function streamMaintenanceTask<Result>(run: (progress: (line: MaintenanceLogLine) => void, signal: AbortSignal) => Promise<Result>,
   requestSignal: AbortSignal, waitUntil?: (task: Promise<unknown>) => void): Response {
-  const encoder = new TextEncoder();
-  const abort = new AbortController();
-  const stop = () => abort.abort();
-  if (requestSignal.aborted) stop();
-  else requestSignal.addEventListener('abort', stop, { once: true });
-  let cancelled = false;
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const send = (event: MaintenanceStreamEvent<Result>) => {
-        if (cancelled) return;
-        try { controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); }
-        catch { cancelled = true; stop(); }
-      };
-      const task = Promise.resolve().then(() => run(line => send({ type: 'progress', line }), abort.signal))
-        .then(result => {
-          send({ type: 'result', result });
-        }).catch((error: unknown) => {
-          console.error('[maintenance]', abort.signal.aborted ? '维护已取消' : '维护任务中断', error instanceof Error ? error.name : 'UnknownError');
-          send({ type: 'error', message: '维护执行中断，已返回的目标结果保留，请核对解析与库存' });
-        }).finally(() => {
-          requestSignal.removeEventListener('abort', stop);
-          if (!cancelled) controller.close();
-        });
-      waitUntil?.(task);
-    },
-    cancel() { cancelled = true; stop(); },
-  });
-  return new Response(body, { headers: { 'Content-Type': MAINTENANCE_STREAM_TYPE, 'Cache-Control': 'no-store, no-transform' } });
+  return streamTask((send, signal) => run(line => send({ type: 'progress', line }), signal), requestSignal,
+    '维护执行中断，已返回的目标结果保留，请核对解析与库存', waitUntil);
 }
 
 async function mapApplicationInputError(run: () => Promise<Response>): Promise<Response> {
@@ -462,9 +448,13 @@ function toCheckTargetResponse(report: CheckTargetReport, executionColo?: string
     source: source.kind === 'direct'
       ? { kind: 'direct' }
       : { kind: source.kind, host: source.host, addresses: source.addresses },
-    items: report.items.map((item) => ({ address: item.address, result: { ...toProbeResponse(item.result), ...(executionColo ? { executionColo } : {}) } })),
+    items: report.items.map(item => toCheckTargetItemResponse(item, executionColo)),
     skipped: report.skipped,
   };
+}
+
+function toCheckTargetItemResponse(item: CheckTargetItem, executionColo?: string) {
+  return { address: item.address, result: { ...toProbeResponse(item.result), ...(executionColo ? { executionColo } : {}) } };
 }
 
 function toProbeResponse(result: ProbeResult): ProbeResponse {

@@ -14,7 +14,7 @@ import { loadTargetStatus } from '../../web/src/state/target-status';
 
 function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddress?: string, probeAdapter?: ProbeAdapter) {
   const writes = vi.fn();
-  const requests: { path: string; method: string; address?: string }[] = [];
+  const requests: { path: string; method: string; address?: string | readonly string[] }[] = [];
   let active = 0;
   let peak = 0;
   const checkProxy = new CheckProxy(probeAdapter ?? {
@@ -41,7 +41,9 @@ function setup(records: readonly DnsRecord[], mode: 'A' | 'TXT' = 'A', failAddre
   });
   const client = new ApiClient({ fetchImpl: async (input, init) => {
     const path = String(input);
-    const address = typeof init?.body === 'string' ? (JSON.parse(init.body) as { proxyip: string }).proxyip : undefined;
+    const address = typeof init?.body === 'string'
+      ? (JSON.parse(init.body) as { proxyip?: string | readonly string[] }).proxyip
+      : undefined;
     requests.push({ path, method: init?.method ?? 'GET', ...(address ? { address } : {}) });
     if (address === failAddress && failAddress) return Response.json({ error: 'fixture probe error' }, { status: 500 });
     if (address) { active += 1; peak = Math.max(peak, active); }
@@ -204,10 +206,13 @@ describe('current DNS display through ApiClient and Worker routes', () => {
     }));
     const { client, requests, writes, peak } = setup(records);
     const view = await loadTargetStatus(client, 'edge.example.com|A', 2053);
+    const probed = requests.filter(request => request.method === 'POST')
+      .flatMap(request => Array.isArray(request.address) ? request.address : [request.address!]);
     expect(peak()).toBe(8);
     expect(view.records).toHaveLength(201);
     expect(view.probes).toHaveLength(201);
-    expect(requests).toHaveLength(202);
+    expect(probed).toHaveLength(201);
+    expect(requests).toHaveLength(27);
     expect(writes).not.toHaveBeenCalled();
   });
 
