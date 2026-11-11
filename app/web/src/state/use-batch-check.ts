@@ -135,11 +135,11 @@ export function useBatchCheck({ client, config, webCheckConcurrency, notify, app
         batchGroups.current.clear();
         batchSourceMap.current = null;
         appendConsoleLog(
-          `[批量] 完成 · 可用 ${combined.alive} / 失效 ${combined.dead} / 未知 ${combined.unknown}${report.invalid.length ? ` / 无效 ${report.invalid.length}` : ''}`,
+          `[批量] 完成 · 可用 ${combined.alive} / 失效 ${combined.dead} / 未知 ${combined.unknown}${report.invalid.length ? ` / 格式错误 ${report.invalid.length}` : ''}`,
           combined.unknown ? 'warning' : combined.alive ? 'success' : 'error',
         );
         notify(
-          `检测完成：可用 ${combined.alive}，失效 ${combined.dead}，未知 ${combined.unknown}${report.invalid.length ? `，无效 ${report.invalid.length}` : ''}`,
+          `检测完成：可用 ${combined.alive}，失效 ${combined.dead}，未知 ${combined.unknown}${report.invalid.length ? `，格式错误 ${report.invalid.length}` : ''}`,
           combined.alive > 0 ? 'success' : 'error',
         );
       })

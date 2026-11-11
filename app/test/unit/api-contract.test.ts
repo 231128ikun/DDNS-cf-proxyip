@@ -168,7 +168,7 @@ describe('web and Worker API contract', () => {
     }
   });
 
-  it('runs configured browser concurrency through the real single-target Worker route', async () => {
+  it('groups IP checks through the existing Worker route while preserving configured concurrency', async () => {
     const checkProxy = new CheckProxy(new FakeProbeAdapter());
     const app = createHttpApp({
       checkTarget: new CheckTarget({
@@ -198,7 +198,7 @@ describe('web and Worker API contract', () => {
       progress.push(event.completed);
     }, 2);
 
-    expect(requestCount).toBe(5);
+    expect(requestCount).toBe(3);
     expect(peak).toBe(2);
     expect(progress).toEqual([1, 2, 3, 4, 5]);
     expect(report).toMatchObject({ total: 5, alive: 5, dead: 0, unknown: 0, invalid: [] });

@@ -97,7 +97,7 @@ try {
     await read('document.querySelector("[aria-label=筛选用法]").dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
     await until('document.querySelector("#pool-filter-help").hidden');
     const looseStart = server.requests.length;
-    await set('#ip-input', '203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段');
+    await set('#ip-input', '# 独立注释\n\n203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段\n???');
     await click('[aria-label="批量检测导入草稿"]');
     await until('!document.querySelector("[aria-label=停止批量检测]") && document.querySelector("[aria-label=检测结果分类]")?.textContent.includes("可用 4")');
     assert.deepEqual(server.requests.slice(looseStart).filter(item => item.path === '/api/check').map(item => item.input.proxyip).sort(),
@@ -105,6 +105,12 @@ try {
     assert.deepEqual(await read('[...document.querySelectorAll(".pool-result-list .syntax-address")].map(item => item.textContent).sort()'),
       ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72:443', '203.0.113.73:443']);
     assert.equal(server.requests.slice(looseStart).filter(item => item.method === 'PUT').length, 0, '宽容输入检测不应写库存');
+    assert.deepEqual(await read('[...document.querySelector("[aria-label=检测结果分类]").options].map(item => item.textContent.trim())'),
+      ['全部 5', '可用 4', '失效 0', '异常 0', '格式错误 1', '未完成 0']);
+    assert.ok(await read('document.querySelector("#ip-input").value.includes("# 独立注释")'), '注释从原始输入中丢失');
+    await choose('[aria-label=检测结果分类]', 'invalid');
+    await until('document.querySelectorAll(".pool-result-list li").length === 1 && document.querySelector(".pool-result-list").textContent.includes("格式错误")');
+    assert.ok(await read('document.querySelector(".pool-result-list").textContent.includes("???") && !document.querySelector(".pool-result-list").textContent.includes("独立注释")'));
     await capture('loose-input-' + width);
     await click('[data-action=view-draft]');
     await set('#ip-input', '');
@@ -253,10 +259,10 @@ try {
     assert.deepEqual(server.requests.slice(cleanSuccess).filter(item => item.method === 'GET' && item.path.startsWith('/api/pools')).map(item => item.path), ['/api/pools/ip_pool_default'], '洗库必须只读取一次库存');
     assert.ok(server.fixture.poolContents.ip_pool_default.includes('# 保留标题'));
     assert.equal(await read('document.querySelector("#ip-input").value'), draft, '洗库覆盖了本地输入');
-    server.fixture.poolContents.ip_pool_default = Array.from({length:216}, (_, i) => `node-${i}.example:443,AS64500,JP,v4 # 保留备注`).join('\n');
-    server.fixture.probeDelays['node-215.example:443'] = 1500;
-    server.fixture.probeErrors['node-1.example:443'] = { code: 'TIMEOUT', message: '候选连接超时' };
-    server.fixture.probeErrors['node-2.example:443'] = { code: 'CANCELLED', message: '检测已取消' };
+    server.fixture.poolContents.ip_pool_default = Array.from({length:216}, (_, i) => `203.0.113.${i + 10}:443,AS64500,JP,v4 # 保留备注`).join('\n');
+    server.fixture.probeDelays['203.0.113.225:443'] = 1500;
+    server.fixture.probeErrors['203.0.113.11:443'] = { code: 'TIMEOUT', message: '候选连接超时' };
+    server.fixture.probeErrors['203.0.113.12:443'] = { code: 'CANCELLED', message: '检测已取消' };
     const bigStart = server.requests.length;
     await openClean();
     await until('document.querySelector(".pool-feedback")?.textContent.includes("/216")');
@@ -265,10 +271,10 @@ try {
     await capture('clean-stream-' + width, '.dashboard-console-card');
     await until('document.querySelector(".pool-feedback")?.textContent.includes("保留 215") && !document.querySelector("[data-action=stop-clean]")');
     assert.ok(await read('document.querySelector(".pool-feedback").textContent.includes("异常保留 1") && document.querySelector("#pool-count").textContent.includes("215")'));
-    assert.ok(server.fixture.poolContents.ip_pool_default.includes('node-2.example:443,AS64500,JP,v4 # 保留备注'));
-    assert.ok(!server.fixture.poolContents.ip_pool_default.includes('node-1.example:443,'));
-    assert.ok(server.fixture.poolContents.ip_pool_trash.includes('node-1.example:443,'));
-    assert.ok(await read('!document.querySelector(".console-run") && document.querySelector("#log-window").textContent.includes("node-0.example:443")'));
+    assert.ok(server.fixture.poolContents.ip_pool_default.includes('203.0.113.12:443,AS64500,JP,v4 # 保留备注'));
+    assert.ok(!server.fixture.poolContents.ip_pool_default.includes('203.0.113.11:443,'));
+    assert.ok(server.fixture.poolContents.ip_pool_trash.includes('203.0.113.11:443,'));
+    assert.ok(await read('!document.querySelector(".console-run") && document.querySelector("#log-window").textContent.includes("203.0.113.10:443")'));
     assert.equal(server.requests.slice(bigStart).filter(item => item.path.endsWith('/clean')).length, 1);
     await capture('console-scrollbar-' + width, '.dashboard-console-card');
     const scroll = await read(`(() => {
@@ -297,11 +303,12 @@ try {
     await read('document.querySelector("#log-window").scrollTop = document.querySelector("#log-window").scrollHeight');
     const bigRequests = server.requests.slice(bigStart);
     const checked = bigRequests.filter(item => item.path === '/api/check');
-    assert.equal(new Set(checked.map(item => item.input.proxyip)).size, 216);
-    assert.equal(checked.length, 216, '应复用普通批检逐地址请求');
+    const checkedAddresses = checked.flatMap(item => Array.isArray(item.input.proxyip) ? item.input.proxyip : [item.input.proxyip]);
+    assert.equal(new Set(checkedAddresses).size, 216);
+    assert.equal(checked.length, 36, '应按分组上限合并普通批检请求');
     assert.ok(checked.every(item => item.completed && item.status === 200));
     assert.ok(bigRequests.at(-1).path.endsWith('/clean'), '检测结束后才提交清理');
-    assert.ok(server.fixture.poolContents.ip_pool_default.includes('node-215.example:443'));
+    assert.ok(server.fixture.poolContents.ip_pool_default.includes('203.0.113.225:443'));
     const stoppedWrites = server.fixture.kvWrites.length, stoppedRequests = server.requests.length;
     await openClean();
     await until('Boolean(document.querySelector("[data-action=stop-clean]"))');
@@ -311,16 +318,18 @@ try {
     assert.equal(server.fixture.kvWrites.length, stoppedWrites, '停止洗库后仍然写入了 KV');
     assert.equal(server.requests.slice(stoppedRequests).filter(item => item.path.endsWith('/clean')).length, 0);
     server.fixture.probeDelays = {};
-    server.fixture.poolContents.ip_pool_trash = Array.from({length:216}, (_, i) => `trash-${i}.example:443 # 维护失效 来自 ip_pool_001`).join('\n');
-    server.fixture.probeErrors['trash-1.example:443'] = { code: 'TIMEOUT', message: '候选连接超时' };
-    server.fixture.probeErrors['trash-2.example:443'] = { code: 'PROBE_API_ERROR', message: '检测接口异常' };
+    // 清空恢复目标，避免与垃圾桶测试地址重名而少恢复一条。
+    server.fixture.poolContents.ip_pool_001 = '';
+    server.fixture.poolContents.ip_pool_trash = Array.from({length:216}, (_, i) => `203.0.113.${i + 10}:443 # 维护失效 来自 ip_pool_001`).join('\n');
+    server.fixture.probeErrors['203.0.113.11:443'] = { code: 'TIMEOUT', message: '候选连接超时' };
+    server.fixture.probeErrors['203.0.113.12:443'] = { code: 'PROBE_API_ERROR', message: '检测接口异常' };
     await choose('#pool-selector', 'ip_pool_trash'); await openClean();
     await until('document.querySelector(".pool-feedback")?.textContent.includes("恢复 214") && !document.querySelector("[data-action=stop-clean]")');
     assert.ok(await read('document.querySelector("#pool-count").textContent.includes("2") && document.querySelector(".pool-feedback").textContent.includes("异常保留 1")'));
     assert.equal(server.fixture.poolContents.ip_pool_trash.split('\n').length, 2);
-    assert.ok(server.fixture.poolContents.ip_pool_trash.includes('trash-2.example:443,null,null,null # 维护失效 来自 ip_pool_001'));
+    assert.ok(server.fixture.poolContents.ip_pool_trash.includes('203.0.113.12:443,null,null,null # 维护失效 来自 ip_pool_001'));
     await capture('trash-partial-' + width);
-    assert.ok(server.fixture.poolContents.ip_pool_001.includes('trash-215.example:443'));
+    assert.ok(server.fixture.poolContents.ip_pool_001.includes('203.0.113.225:443'));
     await choose('#pool-selector', 'ip_pool_default');
     server.fixture.probeErrors['203.0.113.77:443'] = { status:'dead', code:'TARGET_TLS_ERROR', message:'候选 TLS 失败' };
     await click('[aria-label=探测]');

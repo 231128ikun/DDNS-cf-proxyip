@@ -92,6 +92,50 @@ describe('HTTP app', () => {
     });
   });
 
+  it('checks a grouped IP list in one request and keeps source order', async () => {
+    const response = await postJson(createApp(), '/api/check', {
+      proxyip: ['203.0.113.10:443', '203.0.113.11:443'],
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      input: '203.0.113.10:443\n203.0.113.11:443',
+      source: { kind: 'direct' },
+      items: [
+        { address: '203.0.113.10:443', result: { status: 'alive' } },
+        { address: '203.0.113.11:443', result: { status: 'alive' } },
+      ],
+      skipped: [],
+    });
+  });
+
+  it.each([
+    ['empty', []],
+    ['more than eight', Array.from({ length: 9 }, (_, index) => `203.0.113.${index + 10}:443`)],
+    ['duplicate', ['203.0.113.10:443', '203.0.113.10']],
+    ['hostname', ['edge.example.com:443']],
+    ['invalid', ['203.0.113.999:443']],
+  ])('rejects a %s grouped check input', async (_label, proxyip) => {
+    const response = await postJson(createApp(), '/api/check', { proxyip });
+    expect(response.status).toBe(400);
+  });
+
+  it('streams grouped progress before the final receipt', async () => {
+    const response = await postJson(createApp(), '/api/check', {
+      proxyip: ['203.0.113.10:443', '203.0.113.11:443'],
+    }, { accept: 'application/x-ndjson' });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('application/x-ndjson');
+    const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+    expect(events.map(event => event.type)).toEqual(['progress', 'progress', 'result']);
+    expect(events.slice(0, 2).map(event => event.item.address)).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
+    expect(events[2]?.result).toMatchObject({
+      ok: true, input: '203.0.113.10:443\n203.0.113.11:443', items: [], skipped: [],
+    });
+  });
+
   it('reports unresolvable domains as input errors', async () => {
     const lookup: DnsLookup = {
       async query() {

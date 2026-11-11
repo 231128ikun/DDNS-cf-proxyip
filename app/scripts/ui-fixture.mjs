@@ -87,7 +87,7 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
   }
   finally { await harness.close(); }
   const worker = createWorker();
-  // 普通批检与洗库走实际路由；替身限制每个请求最多探测一个目标。
+  // 普通批检与洗库走实际路由；替身限制每个 Worker 请求最多探测一个目标。
   const probeWorker = createWorker(() => {
     let used = false;
     return {name:'fixture', async probe(target, context = {}) {
@@ -286,16 +286,26 @@ export async function serveUiFixture({ reference = false, ref = UI_BASELINE_REF,
       }
       if (url.pathname === '/api/check') {
         // 复用实际解析和目标分类，阻止验收发出真实 DNS 请求。
-        const lines = typeof input.proxyip === 'string' ? parsePoolText(input.proxyip).filter(line => !line.raw.startsWith('#')) : [];
-        const address = lines.length === 1 && lines[0].entry ? lines[0].entry.address : '';
-        if (!parseProxyTarget(address) || needsDnsResolution(address)) return json({error:'验收仅支持直连目标'}, 400);
+        const inputs = Array.isArray(input.proxyip) ? input.proxyip : [input.proxyip];
+        if (inputs.some(value => {
+          const lines = typeof value === 'string' ? parsePoolText(value).filter(line => !line.raw.startsWith('#')) : [];
+          const address = lines.length === 1 && lines[0].entry ? lines[0].entry.address : '';
+          return !parseProxyTarget(address) || needsDnsResolution(address);
+        })) return json({error:'验收仅支持直连目标'}, 400);
         const abort = new AbortController();
         response.once('close', () => { if (!response.writableEnded) abort.abort(); });
         const req = new Request(url, {method:'POST', signal:abort.signal, body,
-          headers:{'content-type':'application/json', ...(request.headers.cookie ? {cookie:request.headers.cookie} : {})}});
+          headers:{'content-type':'application/json', accept:request.headers.accept ?? 'application/json', ...(request.headers.cookie ? {cookie:request.headers.cookie} : {})}});
         Object.defineProperty(req, 'cf', {value:{colo:fixture.executionColo}});
         const result = await runWorker(probeWorker, req);
-        return json(await result.json(), result.status);
+        response.writeHead(result.status, { 'content-type': result.headers.get('content-type') ?? 'application/json',
+          'cache-control': result.headers.get('cache-control') ?? 'no-store' });
+        if (!result.body) return response.end();
+        try {
+          for await (const chunk of result.body) if (!response.destroyed) response.write(chunk);
+          if (!response.destroyed) response.end();
+        } catch { response.destroy(); }
+        return;
       }
       if (url.pathname === '/api/check-ip') return json({...baselineProbe, responseTime:12, asn:'AS64500', country:'US', stack:'v4'});
       if (['/api/add-record', '/api/add-a-record'].includes(url.pathname)) {

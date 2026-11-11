@@ -31,6 +31,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
   private waiting: ((available: boolean) => void)[] = [];
   private subrequestLimitReached = false;
   private cleanupFailed = false;
+  private readonly cleanupByTarget = new Map<string, Promise<boolean>>();
   private readonly redact: (message: string) => string;
   constructor(private readonly options: NativeProbeOptions) {
     this.cleanupFailed = options.disableNative === true;
@@ -50,7 +51,15 @@ export class NativeProbeAdapter implements ProbeAdapter {
         ? { ...second, code: 'PARTIAL_EXIT', message: '首次检测未确认：' + (first.message ?? '检测异常') + '；复检：' + second.message }
         : second;
     }
-    return first.status === 'unknown' && second.status === 'dead' ? first : second;
+    const result = first.status === 'unknown' && second.status === 'dead' ? first : second;
+    const closing = this.cleanupByTarget.get(target.key);
+    if (result.status === 'unknown' && result.code !== 'CANCELLED' && !context.signal?.aborted && closing) {
+      let safe: boolean;
+      try { safe = await (context.signal ? waitWithSignal(closing, context.signal) : closing); }
+      catch { return unknown(target, 'CANCELLED', '检测已取消'); }
+      if (!safe) return dead(target, { ...result, endpoint: this.name, code: 'SOCKET_CLOSE_FAILED', message: '原生连接关闭失败' });
+    }
+    return result;
   }
 
   private async runAttempt(target: ProxyTarget, task: () => Promise<ProbeResult>): Promise<ProbeResult> {
@@ -105,7 +114,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
   }
 
   // 后端批量共用四个 TCP 配额，留出 KV / 备用 HTTP 连接；排队不消耗候选超时。
-  private async limited(task: (hold: (closing: Promise<void>) => void) => Promise<ProbeResult>, signal?: AbortSignal): Promise<ProbeResult | undefined> {
+  private async limited(task: (hold: (closing: Promise<void>, candidate?: ProxyTarget) => void) => Promise<ProbeResult>, signal?: AbortSignal): Promise<ProbeResult | undefined> {
     if (signal?.aborted) return undefined;
     if (this.active >= 4 && !this.cleanupFailed) {
       const acquired = await new Promise<boolean>(resolve => {
@@ -118,13 +127,17 @@ export class NativeProbeAdapter implements ProbeAdapter {
     const release = () => { const next = this.waiting.shift(); if (next) next(true); else this.active--; };
     let cleanup: Promise<boolean> | undefined;
     // 结论可以先交付；关闭完成前不交接连接槽，收尾异常则停止开新连接。
-    const hold = (closing: Promise<void>) => {
+    const hold = (closing: Promise<void>, candidate?: ProxyTarget) => {
       const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS);
       cleanup = waitWithSignal(closing, timeout.signal).then(() => true).catch(() => {
         this.cleanupFailed = true;
         for (const wake of this.waiting.splice(0)) wake(false);
         return false;
       }).finally(() => { timeout.cleanup(); release(); });
+      if (candidate) {
+        const previous = this.cleanupByTarget.get(candidate.key);
+        this.cleanupByTarget.set(candidate.key, previous ? Promise.all([previous, cleanup]).then(results => results.every(Boolean)) : cleanup);
+      }
     };
     try { return signal?.aborted ? undefined : await task(hold); }
     finally {
@@ -135,7 +148,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
   }
 
   private async checkExit(target: ProxyTarget, url: URL, connect: ProbeConnect, context: ProbeContext,
-    hold: (closing: Promise<void>) => void): Promise<ProbeResult> {
+    hold: (closing: Promise<void>, candidate?: ProxyTarget) => void): Promise<ProbeResult> {
     if (this.cleanupFailed) return unknown(target, 'PROBE_API_ERROR', '原生连接收尾异常，候选状态未知');
     const timeout = createRequestTimeout(this.options.timeoutMs, context.signal);
     const started = Date.now();
@@ -199,7 +212,7 @@ export class NativeProbeAdapter implements ProbeAdapter {
       return dead(target, { ...details(), code: phase, message: stage + '：' + this.redact(message).slice(0, 180) });
     } finally {
       timeout.signal.removeEventListener('abort', abort); timeout.cleanup();
-      hold(close());
+      hold(close(), socket ? target : undefined);
     }
   }
 }

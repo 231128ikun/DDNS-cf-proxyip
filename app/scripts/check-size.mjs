@@ -8,8 +8,9 @@ const BUDGETS = {
   worker: { rawKb: 230, gzipKb: 60 },
   // 单个脚本与全部脚本分别设限。
   script: { rawKb: 70, gzipKb: 24 },
-  // 全量脚本同时限制未压缩与 gzip 体积。
-  scriptTotal: { rawKb: 128, gzipKb: 48 },
+  // 分组检测的流式进度与回执经精简后约 128.8/47.4 KiB；raw 上限 128->130 KiB，gzip 预算不变。
+  // js+css 合计实际约 169.6/55.9 KiB，仍在 170/56 KiB 内。
+  scriptTotal: { rawKb: 130, gzipKb: 48 },
   style: { rawKb: 42, gzipKb: 10 },
   pageTotal: { rawKb: 170, gzipKb: 56 },
 };

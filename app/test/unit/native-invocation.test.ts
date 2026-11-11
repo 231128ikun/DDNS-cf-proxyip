@@ -107,7 +107,7 @@ describe('native result and managed socket cleanup', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('bounds stalled cleanup, wakes queued work unknown, and never hands out unclosed slots', async () => {
+  it('bounds stalled cleanup, marks the affected target dead, and never hands out unclosed slots', async () => {
     const io = sockets('tcp', null);
     const tasks: Promise<boolean>[] = [];
     const adapter = new NativeProbeAdapter({ urls, timeoutMs: 500, connect: io.connect, secure: io.secure,
@@ -115,14 +115,56 @@ describe('native result and managed socket cleanup', () => {
     const pending = Promise.all(Array.from({ length: 6 }, () => adapter.probe(target)));
     await vi.advanceTimersByTimeAsync(1600);
     const results = await pending;
-    expect(results.every(result => result.status === 'unknown')).toBe(true);
+    expect(results.every(result => result.status === 'dead' && result.code === 'SOCKET_CLOSE_FAILED')).toBe(true);
     expect(results.some(result => result.code === 'CANCELLED')).toBe(false);
-    expect(results.every(result => result.message?.includes('收尾异常'))).toBe(true);
+    expect(results.every(result => result.message === '原生连接关闭失败')).toBe(true);
     expect(io.connect).toHaveBeenCalledTimes(4);
     expect(io.stats().peak).toBe(4);
     await Promise.all(tasks);
-    expect(await adapter.probe(target)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+    expect(await adapter.probe(target)).toMatchObject({ status: 'dead', code: 'SOCKET_CLOSE_FAILED' });
     expect(io.connect).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not mark an unprobed address or caller cancellation dead after another target fails cleanup', async () => {
+    const io = sockets('healthy', null);
+    const tasks: Promise<boolean>[] = [];
+    const adapter = new NativeProbeAdapter({ urls, timeoutMs: 500, connect: io.connect, secure: io.secure, defer: task => tasks.push(task) });
+    expect((await adapter.probe(target)).status).toBe('alive');
+    await vi.advanceTimersByTimeAsync(1100);
+    await Promise.all(tasks);
+    expect(await adapter.probe(parseProxyTarget('203.0.113.11:443')!)).toMatchObject({ status: 'unknown', code: 'PROBE_API_ERROR' });
+    expect(await adapter.probe(target, { signal: AbortSignal.abort() })).toMatchObject({ status: 'unknown', code: 'CANCELLED' });
+    expect(io.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for deferred cleanup before deciding an unknown result', async () => {
+    const io = sockets('healthy', null);
+    io.secure.mockRejectedValue(new TypeError('TLS runtime failed'));
+    const { client, tasks } = nativeClient(io);
+    const pending = client.checkTarget(address);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect((await pending).items[0]?.result).toMatchObject({ status: 'dead', code: 'SOCKET_CLOSE_FAILED' });
+    await Promise.all(tasks);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cleans confirmed socket-close failures through the real client and Worker using a full pool', async () => {
+    const storage = memoryKv();
+    const entries = Array.from({ length: 216 }, (_, index) => `203.0.113.${index + 1}:443,AS64500,JP,v4 # note-${index}`);
+    storage.data.set('ip_pool_default', '# 标题\n' + entries.join('\n'));
+    const io = sockets('healthy', null);
+    io.secure.mockRejectedValue(new Error('candidate TLS failed'));
+    const connect: ProbeConnect = () => ({ ...io.connect(), close: async () => { throw new Error('close failed'); } });
+    const { client, tasks } = nativeClient(io, undefined, connect, { ...env, IP_DATA: storage.kv });
+    expect(await client.cleanPool('ip_pool_default')).toMatchObject({ checked: 216, trashed: 216, kept: 0, unknown: 0, skipped: false });
+    expect(storage.data.get('ip_pool_default')).toBe('# 标题');
+    const trash = storage.data.get('ip_pool_trash')!;
+    expect(trash).toContain('# 原垃圾桶');
+    expect(trash).toContain('203.0.113.1:443,AS64500,JP,v4');
+    expect(trash).toContain('203.0.113.216:443,AS64500,JP,v4');
+    expect(io.connect).toHaveBeenCalledTimes(432);
+    await Promise.all(tasks);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -210,7 +252,7 @@ describe('shared invocation socket handoff', () => {
     await vi.advanceTimersByTimeAsync(1050);
     expect(await Promise.all(tasks)).toEqual([false, false]);
     const result = await adapter.probe(target);
-    expect(result.status).toBe(status === 'alive' ? 'alive' : 'unknown');
+    expect(result.status).toBe(status === 'alive' ? 'alive' : 'dead');
     expect(backup.probe).toHaveBeenCalledTimes(1);
     expect(io.connect).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
@@ -339,6 +381,25 @@ describe('runtime preparation and cancellation safety', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('keeps the cleanup fuse scoped to one grouped address', async () => {
+    const flags: boolean[] = [];
+    const client = rpcClient(async (_url, init, props) => {
+      flags.push(props.disableNative === true);
+      const candidate = parseProxyTarget(JSON.parse(init.body!).proxyip as string)!;
+      return {
+        ...reply(Response.json({ ok: true, items: [{ address: candidate.authority, result: alive(candidate) }] })),
+        closed: flags.length === 1
+          ? new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([0])); controller.close(); } })
+          : closureReceipt(),
+      };
+    });
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined, undefined, 1);
+
+    expect(flags).toEqual([false, false]);
+    expect(report.items.map(item => item.status)).toEqual(['alive', 'alive']);
+  });
+
   it('bounds maintenance response cancellation before the next target', async () => {
     const storage = memoryKv(maintenanceConfig());
     const flags: boolean[] = [];
@@ -368,7 +429,7 @@ describe('internal invocation deadline arbitration', () => {
     const context = localWorkerContext(worker, env, task => tasks.push(task));
     const client = new ApiClient({ fetchImpl: (async (url, init) => worker.fetch!(new Request(new URL(String(url), 'https://panel.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0], env, context)) as typeof fetch });
     const pending = client.checkTarget(address);
-    await vi.advanceTimersByTimeAsync(2050);
+    await vi.advanceTimersByTimeAsync(2550);
     expect((await pending).items[0]?.result).toMatchObject({ status: 'unknown', code: 'CHECK_REQUEST_ERROR', message: '检测调用超时，候选状态未知' });
     await Promise.all(tasks);
     expect(vi.getTimerCount()).toBe(0);
@@ -376,10 +437,10 @@ describe('internal invocation deadline arbitration', () => {
 
   it('does not accept a late valid result and disposes the late RPC reply', async () => {
     const dispose = vi.fn();
-    const client = rpcClient(async () => { await new Promise(resolve => setTimeout(resolve, 2100));
+    const client = rpcClient(async () => { await new Promise(resolve => setTimeout(resolve, 2600));
       return { ...reply(Response.json({ ok: true, items: [{ address, result: alive(target) }] })), [Symbol.dispose]: dispose }; });
     const pending = client.checkTarget(address);
-    await vi.advanceTimersByTimeAsync(2050);
+    await vi.advanceTimersByTimeAsync(2550);
     expect((await pending).items[0]?.result).toMatchObject({ status: 'unknown', code: 'CHECK_REQUEST_ERROR' });
     await vi.advanceTimersByTimeAsync(100);
     expect(dispose).toHaveBeenCalledTimes(1);
@@ -391,7 +452,7 @@ describe('internal invocation deadline arbitration', () => {
     const dispose = vi.fn();
     const client = rpcClient(async () => ({ status: 200, headers: [], body: new ReadableStream({ cancel }), [Symbol.dispose]: dispose }));
     const pending = client.checkTarget(address);
-    await vi.advanceTimersByTimeAsync(2050);
+    await vi.advanceTimersByTimeAsync(2550);
     expect((await pending).items[0]?.result).toMatchObject({ status: 'unknown', code: 'CHECK_REQUEST_ERROR', message: '检测调用超时，候选状态未知' });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);

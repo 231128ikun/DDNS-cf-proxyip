@@ -1,5 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../../web/src/api/client';
+import type { ProbeResponse } from '../../src/contracts/probe';
+
+function checkResponse(proxyip: string | readonly string[], result: ProbeResponse): Response {
+  const addresses = typeof proxyip === 'string' ? [proxyip] : proxyip;
+  const items = addresses.map(address => ({ address, result }));
+  const receipt = { ok: true, input: addresses.join('\n'), source: { kind: 'direct' }, items, skipped: [] };
+  if (typeof proxyip === 'string') return Response.json(receipt);
+  // 分组请求走流式进度；回执只表示完成，避免整组重复传输。
+  return streamCheckResponse([
+    ...items.map(item => ({ type: 'progress', item })),
+    { type: 'result', result: { ...receipt, items: [] } },
+  ]);
+}
+
+/** 按小片切分 NDJSON，顺带验证跨块的多字节边界。 */
+function streamCheckResponse(events: readonly unknown[]): Response {
+  const bytes = new TextEncoder().encode(events.map(event => JSON.stringify(event) + '\n').join(''));
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += 3) controller.enqueue(bytes.subarray(offset, offset + 3));
+      controller.close();
+    },
+  }), { headers: { 'Content-Type': 'application/x-ndjson' } });
+}
 
 describe('web API client', () => {
   it('terminates a stalled startup read with a retryable error', async () => {
@@ -104,6 +128,77 @@ describe('web API client pool endpoints', () => {
     });
   });
 
+  it('streams grouped progress in arrival order and still returns source order', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('Accept')).toBe('application/x-ndjson');
+      const addresses = JSON.parse(String(init?.body)).proxyip as string[];
+      const item = (address: string) => ({ address, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } });
+      return streamCheckResponse([
+        ...[...addresses].reverse().map(address => ({ type: 'progress', item: item(address) })),
+        { type: 'result', result: { ok: true, input: addresses.join('\n'), source: { kind: 'direct' },
+          items: addresses.map(item), skipped: [] } },
+      ]);
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const seen: string[] = [];
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined,
+      event => seen.push(event.item.address), 1);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual(['203.0.113.11:443', '203.0.113.10:443']);
+    expect(report.items.map(item => item.address)).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
+  });
+
+  it('uses a JSON grouped response when the stream is unavailable', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const addresses = JSON.parse(String(init?.body)).proxyip as string[];
+      const items = addresses.map(address => ({ address, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }));
+      return Response.json({ ok: true, input: addresses.join('\n'), source: { kind: 'direct' }, items, skipped: [] });
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined, undefined, 1);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(report.items.map(item => item.status)).toEqual(['alive', 'alive']);
+  });
+
+  it('marks the rest unknown when a grouped stream ends without a receipt', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const addresses = JSON.parse(String(init?.body)).proxyip as string[];
+      return streamCheckResponse([
+        { type: 'progress', item: { address: addresses[0], result: { status: 'alive', exitFamily: 'ipv4', exits: [] } } },
+      ]);
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined, undefined, 1);
+
+    expect(report.items.map(item => item.status)).toEqual(['alive', 'unknown']);
+    expect(report.items[1]?.line).toBe('203.0.113.11:443');
+  });
+
+  it('treats a foreign grouped result as unknown without losing completed items', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const addresses = JSON.parse(String(init?.body)).proxyip as string[];
+      const item = (address: string) => ({ address, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } });
+      return streamCheckResponse([
+        { type: 'progress', item: item(addresses[0]!) },
+        { type: 'progress', item: item('198.51.100.9:443') },
+      ]);
+    });
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    const progress: string[] = [];
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined,
+      event => progress.push(`${event.completed}:${event.item.address}:${event.item.status}`), 1);
+
+    expect(progress).toEqual(['1:203.0.113.10:443:alive', '2:203.0.113.11:443:unknown']);
+    expect(report.items.map(item => item.status)).toEqual(['alive', 'unknown']);
+    expect(report.items[1]).toMatchObject({ message: '检测结果包含重复或组外地址' });
+  });
+
   it.each([[2, 2], [7, 7], [0, 1], [999, 128], [Number.NaN, 8]])(
     'uses configured concurrency %s, bounds it to %s and preserves progress and source order',
     async (concurrency, expectedPeak) => {
@@ -111,14 +206,13 @@ describe('web API client pool endpoints', () => {
       let peak = 0;
       const requested: string[] = [];
       const client = new ApiClient({ fetchImpl: async (_input, init) => {
-        const proxyip = JSON.parse(String(init?.body)).proxyip as string;
-        requested.push(proxyip);
+        const proxyip = JSON.parse(String(init?.body)).proxyip as string | readonly string[];
+        requested.push(...(Array.isArray(proxyip) ? proxyip : [proxyip]));
         active += 1;
         peak = Math.max(peak, active);
         await new Promise(resolve => setTimeout(resolve, 1));
         active -= 1;
-        return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
-          items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }], skipped: [] });
+        return checkResponse(proxyip, { status: 'alive', exitFamily: 'ipv4', exits: [] });
       } });
       const addresses = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 1}:443`);
       const progress: number[] = [];
@@ -148,24 +242,18 @@ describe('web API client pool endpoints', () => {
     expect(requested).toEqual(['203.0.113.1:443', '203.0.113.2:443']);
   });
 
-  it('checks one target per API request and keeps batch concurrency bounded', async () => {
+  it('groups large batches into bounded API requests while keeping configured concurrency', async () => {
     let active = 0;
     let peak = 0;
     const requests: string[] = [];
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const proxyip = JSON.parse(String(init?.body)).proxyip as string;
-      requests.push(proxyip);
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string | readonly string[];
+      requests.push(...(Array.isArray(proxyip) ? proxyip : [proxyip]));
       active += 1;
       peak = Math.max(peak, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active -= 1;
-      return Response.json({
-        ok: true,
-        input: proxyip,
-        source: { kind: 'direct' },
-        items: [{ address: proxyip, result: { status: 'alive', exitFamily: 'ipv4', exits: [] } }],
-        skipped: [],
-      });
+      return checkResponse(proxyip, { status: 'alive', exitFamily: 'ipv4', exits: [] });
     });
     const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
     const text = Array.from({ length: 136 }, (_, index) => `203.0.113.${index + 10}:443 # node${index}`).join('\n');
@@ -173,9 +261,10 @@ describe('web API client pool endpoints', () => {
 
     const report = await client.checkBatch(text, undefined, (event) => progress.push(event.completed));
 
-    expect(fetchMock).toHaveBeenCalledTimes(136);
+    expect(fetchMock).toHaveBeenCalledTimes(17);
+    expect(requests).toHaveLength(136);
     expect(new Set(requests).size).toBe(136);
-    expect(peak).toBeLessThanOrEqual(32);
+    expect(peak).toBeLessThanOrEqual(8);
     expect(progress).toEqual(Array.from({ length: 136 }, (_, index) => index + 1));
     expect(report).toMatchObject({ total: 136, alive: 136, dead: 0, unknown: 0, invalid: [] });
     expect(report.items[0]?.line).toBe('203.0.113.10:443,null,null,v4 # node0');
@@ -245,21 +334,29 @@ describe('web API client pool endpoints', () => {
     expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
   });
 
-  it('preserves invalid comment reporting, merged duplicate metadata and first source positions', async () => {
-    const calls: string[] = [];
+  it('ignores standalone comments while preserving format errors, merged metadata and first source positions', async () => {
+    const calls: Array<string | readonly string[]> = [];
     const client = new ApiClient({ fetchImpl: async (_url, init) => {
-      const proxyip = JSON.parse(String(init?.body)).proxyip;
+      const proxyip = JSON.parse(String(init?.body)).proxyip as string | readonly string[];
       calls.push(proxyip);
-      return Response.json({ ok: true, input: proxyip, source: { kind: 'direct' },
-        items: [{ address: proxyip, result: { status: 'unknown', exitFamily: 'unknown', exits: [] } }], skipped: [] });
+      return checkResponse(proxyip, { status: 'unknown', exitFamily: 'unknown', exits: [] });
     } });
     const indices: number[] = [];
     const report = await client.checkBatch('# header\n203.0.113.10:443,AS64500,JP,v4 # keep\n???\n203.0.113.10:443,null,null,null\n203.0.113.11:443',
       undefined, event => indices.push(event.sourceIndex), 1);
-    expect(calls).toEqual(['203.0.113.10:443', '203.0.113.11:443']);
+    expect(calls).toEqual([['203.0.113.10:443', '203.0.113.11:443']]);
     expect(indices).toEqual([1, 4]);
-    expect(report.invalid).toEqual(['# header', '???']);
+    expect(report.invalid).toEqual(['???']);
     expect(report.items[0]?.line).toBe('203.0.113.10:443,AS64500,JP,v4 # keep');
+  });
+
+  it('ignores blank lines and standalone comments without sending detection requests', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    expect(await client.checkBatch('\n  # 标题\r\n# 注释\n\n')).toEqual({
+      total: 0, alive: 0, dead: 0, unknown: 0, invalid: [], items: [],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns final items in source order when requests finish out of order', async () => {
