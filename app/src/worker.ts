@@ -36,7 +36,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, streamMaintenanceTask, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult } from './contracts/maintenance';
 
-export const APP_VERSION = '2026.11.11-19.51';
+export const APP_VERSION = '2026.11.11-20.21';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -287,6 +287,8 @@ function createInvocationFetch(context: ExecutionContext): typeof fetch {
 /** 每个 RPC 最多占四个原生槽；收尾确认后再交接，排队不消耗候选时限。 */
 function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionContext, disableNative = false): ProbeAdapter {
   let settled = Promise.resolve();
+  let scope: object | undefined;
+  const inheritedDisable = disableNative;
   return { name: 'native', async probe(target, probeContext = {}) {
     const previous = settled;
     let release!: () => void;
@@ -297,6 +299,11 @@ function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionConte
       else await previous;
       probeContext.signal?.throwIfAborted();
     } catch { release(); return unknown(target, 'CANCELLED', '检测已取消'); }
+    // 新分组地址从干净的收尾状态开始；同一检测范围内的后续地址仍沿用禁用。
+    if (probeContext.scope && probeContext.scope !== scope) {
+      scope = probeContext.scope;
+      disableNative = inheritedDisable;
+    }
     const timeout = createRequestTimeout(resolved.config.settings.CHECK_TIMEOUT * 2 + 1_000, probeContext.signal);
     let response: Response | undefined;
     let dispatch: Promise<Response> | undefined;

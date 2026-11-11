@@ -339,6 +339,25 @@ describe('runtime preparation and cancellation safety', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('keeps the cleanup fuse scoped to one grouped address', async () => {
+    const flags: boolean[] = [];
+    const client = rpcClient(async (_url, init, props) => {
+      flags.push(props.disableNative === true);
+      const candidate = parseProxyTarget(JSON.parse(init.body!).proxyip as string)!;
+      return {
+        ...reply(Response.json({ ok: true, items: [{ address: candidate.authority, result: alive(candidate) }] })),
+        closed: flags.length === 1
+          ? new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([0])); controller.close(); } })
+          : closureReceipt(),
+      };
+    });
+
+    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined, undefined, 1);
+
+    expect(flags).toEqual([false, false]);
+    expect(report.items.map(item => item.status)).toEqual(['alive', 'alive']);
+  });
+
   it('bounds maintenance response cancellation before the next target', async () => {
     const storage = memoryKv(maintenanceConfig());
     const flags: boolean[] = [];
