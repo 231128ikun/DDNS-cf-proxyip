@@ -36,7 +36,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, streamMaintenanceTask, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult } from './contracts/maintenance';
 
-export const APP_VERSION = '2026.11.11-20.21';
+export const APP_VERSION = '2026.11.11-21.17';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -304,7 +304,7 @@ function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionConte
       scope = probeContext.scope;
       disableNative = inheritedDisable;
     }
-    const timeout = createRequestTimeout(resolved.config.settings.CHECK_TIMEOUT * 2 + 1_000, probeContext.signal);
+    const timeout = createRequestTimeout(resolved.config.settings.CHECK_TIMEOUT * 2 + SOCKET_CLOSE_TIMEOUT_MS + 500, probeContext.signal);
     let response: Response | undefined;
     let dispatch: Promise<Response> | undefined;
     let cleanup: Promise<boolean> | undefined;
