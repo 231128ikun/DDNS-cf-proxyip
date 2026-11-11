@@ -13,6 +13,18 @@ describe('batch interruption progress', () => {
     expect(report.invalid).toEqual(['???']);
     expect(report.incomplete).toEqual(['2.2.2.2']);
   });
+  it('keeps comments in the source but excludes them from errors and resumed requests', () => {
+    const text = '# header\n203.0.113.10:443 # keep\n# note\n???\n203.0.113.11:443';
+    const source = createBatchSource(text);
+    expect(source.text).toBe(text);
+    expect(describeBatch(source, new Map(), new Set([1]))).toMatchObject({
+      invalid: ['???'], incomplete: ['203.0.113.11:443'],
+    });
+    expect(remainingBatch(source, new Set([1]))).toEqual({
+      text: '???\n203.0.113.11:443', sourceIndices: [3, 4],
+    });
+  });
+
   const input = '203.0.113.10:443 # first\ninvalid input\n203.0.113.12:443 # third';
 
   it('keeps only unfinished valid and invalid source lines for a resume', () => {
@@ -41,7 +53,7 @@ describe('batch interruption progress', () => {
     for (let index = 0; index < 20; index++) {
       expect(describeBatch(source, groups, new Set()).incomplete).toEqual(['edge.example.com', '[2001:db8::1]:8443,null,null,null # keep']);
     }
-    expect(remainingBatch(source, new Set([3]))).toEqual({ text: '# header\nedge.example.com\n???', sourceIndices: [0, 1, 2] });
+    expect(remainingBatch(source, new Set([3]))).toEqual({ text: 'edge.example.com\n???', sourceIndices: [1, 2] });
     expect(JSON.stringify(source)).toBe(before);
   });
 

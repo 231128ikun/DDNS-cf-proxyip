@@ -97,7 +97,7 @@ try {
     await read('document.querySelector("[aria-label=筛选用法]").dispatchEvent(new KeyboardEvent("keydown", {key:"Escape",bubbles:true}))');
     await until('document.querySelector("#pool-filter-help").hidden');
     const looseStart = server.requests.length;
-    await set('#ip-input', '203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段');
+    await set('#ip-input', '# 独立注释\n\n203.0.113.70 8443 # 空格\n203.0.113.71\t2053\n203.0.113.72：443\n203.0.113.73:443,,US,v4 # 空字段\n???');
     await click('[aria-label="批量检测导入草稿"]');
     await until('!document.querySelector("[aria-label=停止批量检测]") && document.querySelector("[aria-label=检测结果分类]")?.textContent.includes("可用 4")');
     assert.deepEqual(server.requests.slice(looseStart).filter(item => item.path === '/api/check').map(item => item.input.proxyip).sort(),
@@ -105,6 +105,12 @@ try {
     assert.deepEqual(await read('[...document.querySelectorAll(".pool-result-list .syntax-address")].map(item => item.textContent).sort()'),
       ['203.0.113.70:8443', '203.0.113.71:2053', '203.0.113.72:443', '203.0.113.73:443']);
     assert.equal(server.requests.slice(looseStart).filter(item => item.method === 'PUT').length, 0, '宽容输入检测不应写库存');
+    assert.deepEqual(await read('[...document.querySelector("[aria-label=检测结果分类]").options].map(item => item.textContent.trim())'),
+      ['全部 5', '可用 4', '失效 0', '异常 0', '格式错误 1', '未完成 0']);
+    assert.ok(await read('document.querySelector("#ip-input").value.includes("# 独立注释")'), '注释从原始输入中丢失');
+    await choose('[aria-label=检测结果分类]', 'invalid');
+    await until('document.querySelectorAll(".pool-result-list li").length === 1 && document.querySelector(".pool-result-list").textContent.includes("格式错误")');
+    assert.ok(await read('document.querySelector(".pool-result-list").textContent.includes("???") && !document.querySelector(".pool-result-list").textContent.includes("独立注释")'));
     await capture('loose-input-' + width);
     await click('[data-action=view-draft]');
     await set('#ip-input', '');

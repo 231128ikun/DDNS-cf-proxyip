@@ -89,7 +89,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
   const count = useMemo(() => selectedPool?.count ?? (model.content === undefined ? undefined : readPoolSnapshot(model.content).entries.size),
     [selectedPool?.count, model.content]);
   const name = selectedPool?.name ?? poolKey;
-  const statusName = (status: string): string => ({ all: '全部', alive: '可用', dead: '失效', unknown: '异常', invalid: '无效', incomplete: '未完成' })[status] ?? status;
+  const statusName = (status: string): string => ({ all: '全部', alive: '可用', dead: '失效', unknown: '异常', invalid: '格式错误', incomplete: '未完成' })[status] ?? status;
 
   leaveGuard.current = () => !model.writing && !sidePending.current;
   containerChanged.current = key => model.forgetPool(key);
@@ -162,7 +162,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
     finally { sidePending.current = false; setSideBusy(false); }
   };
   const cleanPool = async (): Promise<void> => {
-    if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常的地址保留，格式无效或检测未完成时不清理。`)) return;
+    if (locked || sidePending.current || !window.confirm(`一键洗库「${name}」？${inTrash ? '可用地址恢复到来源池。' : '复检失效的地址移入垃圾桶。'}检测异常的地址保留，格式错误或检测未完成时不清理。`)) return;
     sidePending.current = true; setSideBusy(true);
     const controller = cleanController.current = new AbortController();
     setCleaning(true); model.message = '正在读取库存…';
@@ -181,7 +181,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
         render(value => value + 1);
         log('[洗库] 检测完成，正在核对库存并提交清理');
       });
-      model.message = result.skipped ? `检测异常或格式无效 ${result.unknown} 条，未清理`
+      model.message = result.skipped ? `检测异常或格式错误 ${result.unknown} 条，未清理`
         : `检测 ${result.checked} 条 · ${inTrash ? '恢复' : '保留'} ${result.kept} 条${inTrash ? '' : ` · 入桶 ${result.trashed} 条`}${result.unknown ? ` · 异常保留 ${result.unknown} 条` : ''}`;
       if (!result.skipped) {
         const message = model.message; model.forgetPool(poolKey); model.message = message;
@@ -267,7 +267,7 @@ export function PoolPanel({ client, pools, poolKey, onPoolChange, actions, conta
       <Help label="筛选用法"><p><code>port:443</code> 端口，<code>port:443-2053</code> 端口范围；<code>country:KR</code> 国家，<code>asn:AS4766</code> ASN，<code>stack:v4</code> / <code>v6</code> / <code>dual</code> 出口栈。</p><p>不同字段用<strong>空格</strong>表示“且”；同一字段用<strong>逗号 ,</strong>表示“或”，如 <code>country:US,KR</code>。</p><p><strong>竖线 |</strong>连接的整组条件表示“或”，最后计算。例如 <code>country:KR asn:AS4766 | country:US</code>。</p><p>普通文字可匹配 IP 或备注；清空筛选恢复原文。</p></Help>
     </div>
     {badFilter && <p role="status" class="text-danger small">筛选条件无效</p>}
-    {invalid.length > 0 && view === 'input' && <details class="small text-danger"><summary>无效内容 {invalid.length} 行</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
+    {invalid.length > 0 && view === 'input' && <details class="small text-danger"><summary>格式错误 {invalid.length} 行</summary><pre class="pool-text">{invalid.join('\n')}</pre></details>}
     {model.message && <p class="pool-feedback small" role="status">{model.message}</p>}
     <footer class="pool-footer" id="main-actions">
       <div class="pool-footer-primary" role="group" aria-label="检测和出入库">

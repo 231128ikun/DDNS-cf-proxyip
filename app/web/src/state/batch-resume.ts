@@ -8,7 +8,7 @@ export function createBatchSource(text: string) {
   const lines = snapshot.lines.flatMap((line, sourceIndex) => {
     const item = firstEntries.get(sourceIndex);
     if (item) return [{ raw: item.raw, sourceIndex, valid: true }];
-    return !line.entry || invalid.has(line.raw) ? [{ raw: line.raw, sourceIndex, valid: false }] : [];
+    return invalid.has(line.raw) ? [{ raw: line.raw, sourceIndex, valid: false }] : [];
   });
   return { text, invalid: snapshot.invalid, lines };
 }

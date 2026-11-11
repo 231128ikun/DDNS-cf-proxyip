@@ -334,7 +334,7 @@ describe('web API client pool endpoints', () => {
     expect(report).toMatchObject({ total: 2, alive: 1, dead: 0, unknown: 1 });
   });
 
-  it('preserves invalid comment reporting, merged duplicate metadata and first source positions', async () => {
+  it('ignores standalone comments while preserving format errors, merged metadata and first source positions', async () => {
     const calls: Array<string | readonly string[]> = [];
     const client = new ApiClient({ fetchImpl: async (_url, init) => {
       const proxyip = JSON.parse(String(init?.body)).proxyip as string | readonly string[];
@@ -346,8 +346,17 @@ describe('web API client pool endpoints', () => {
       undefined, event => indices.push(event.sourceIndex), 1);
     expect(calls).toEqual([['203.0.113.10:443', '203.0.113.11:443']]);
     expect(indices).toEqual([1, 4]);
-    expect(report.invalid).toEqual(['# header', '???']);
+    expect(report.invalid).toEqual(['???']);
     expect(report.items[0]?.line).toBe('203.0.113.10:443,AS64500,JP,v4 # keep');
+  });
+
+  it('ignores blank lines and standalone comments without sending detection requests', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    const client = new ApiClient({ fetchImpl: fetchMock as typeof fetch });
+    expect(await client.checkBatch('\n  # 标题\r\n# 注释\n\n')).toEqual({
+      total: 0, alive: 0, dead: 0, unknown: 0, invalid: [], items: [],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns final items in source order when requests finish out of order', async () => {

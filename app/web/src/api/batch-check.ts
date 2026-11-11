@@ -139,11 +139,9 @@ interface ParsedPoolCheckTarget {
 
 function parsePoolCheckTargets(text: string): { readonly targets: readonly ParsedPoolCheckTarget[]; readonly invalid: readonly string[] } {
   const source = readPoolSnapshot(text);
-  const invalidLines = new Set(source.invalid);
   return {
     targets: [...source.entries.values()].map(item => ({ entry: item.entry, target: parseProxyTarget(item.entry.address, 443)!,
       sourceLine: item.raw, sourceIndex: item.sourceIndex })),
-    // 批检仍报告独立注释行；库存快照的无损读取规则不变。
-    invalid: source.lines.flatMap(line => !line.entry ? [line.raw] : invalidLines.has(line.raw) ? [line.entry.address] : []),
+    invalid: source.invalid,
   };
 }
