@@ -268,8 +268,8 @@ describe('runMaintenanceJob', () => {
     return { source, runner, notifier, stats, isManual: options.isManual };
   }
 
-  it.each([true, false])('stays silent when DNS is unchanged, including manual maintenance: %s', async isManual => {
-    const job = createJob({ isManual });
+  it('stays silent during scheduled maintenance when DNS is unchanged', async () => {
+    const job = createJob({ isManual: false });
 
     const result = await runMaintenanceJob({
       source: job.source,
@@ -284,6 +284,19 @@ describe('runMaintenanceJob', () => {
     expect(result.notification).toBeNull();
     expect(job.notifier.messages).toEqual([]);
     expect(job.stats.saved).toBeNull();
+  });
+
+  it.each([false, true])('sends a manual report without DNS changes, including no enabled targets: %s', async empty => {
+    const job = createJob({ isManual: true, ...(empty ? { data: emptyData() } : {}) });
+    const result = await runMaintenanceJob({ source: job.source, maintainer: job.runner, notifier: job.notifier,
+      stats: job.stats, fallbackZone, isManual: true });
+
+    expect(result.run).toMatchObject({ changed: false, insufficient: false, probeErrors: 0, errors: [] });
+    expect(result.notification).toEqual({ sent: true, reason: 'sent' });
+    expect(job.notifier.messages).toHaveLength(1);
+    expect(job.notifier.messages[0]).toContain('DDNS 手动维护报告');
+    if (empty) expect(job.notifier.messages[0]).toContain('没有启用的维护目标');
+    expect(job.stats.saved).toEqual({ ip_pool_default: 0, ip_pool_trash: 0 });
   });
 
   it.each([{ probeErrors: 1 }, { activeCount: 0 }, { errors: ['更新 DNS 失败'] }])(
@@ -306,7 +319,8 @@ describe('runMaintenanceJob', () => {
     expect(job.stats.saved).toBeNull();
   });
 
-  it.each([true, false])('ignores pool-only changes from cleanup or an older notification baseline: %s', async isManual => {
+  it('ignores pool-only changes from cleanup or an older notification baseline during scheduled maintenance', async () => {
+    const isManual = false;
     const stats = new StubStats([
       [{ key: 'ip_pool_default', name: '默认池', count: 8 }, { key: 'ip_pool_trash', name: '垃圾桶', count: 2 }],
       [{ key: 'ip_pool_default', name: '默认池', count: 6 }, { key: 'ip_pool_trash', name: '垃圾桶', count: 4 }],

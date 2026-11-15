@@ -1,8 +1,7 @@
-import {
-  shouldNotifyMaintenance,
-  type MaintainManagedTargets,
-  type MaintenanceRunReport,
-  type MaintenanceRunSummary,
+import type {
+  MaintainManagedTargets,
+  MaintenanceRunReport,
+  MaintenanceRunSummary,
 } from '../application/maintain-managed-targets';
 import { buildTelegramMaintenanceMessage } from './maintenance-message';
 import type { PoolSummary } from '../contracts/pool';
@@ -59,7 +58,7 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
     },
   };
 
-  const notify = options.isManual ? shouldNotifyMaintenance(run) : run.changed;
+  const notify = options.isManual || run.changed;
   if (!notify) return { run, notification: null };
 
   options.signal?.throwIfAborted();

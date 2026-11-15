@@ -137,6 +137,38 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
 }
 
 describe('native maintenance invocation boundaries', () => {
+  it.each(['sent', 'disabled', 'not_configured', 'failed'])('returns Telegram %s for healthy manual maintenance through the Worker', async reason => {
+    const f = fixture(8, 2);
+    const config = JSON.parse(f.store.get('app_config')!);
+    f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: reason !== 'disabled',
+      tgToken: reason === 'not_configured' ? '' : 'fixture-token', tgId: '123' }));
+    const messages: string[] = [];
+    const upstream = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (f.requestUrl(input).hostname !== 'api.telegram.org') return upstream(input, init);
+      const body = await new Request(input, init).json() as { text: string };
+      messages.push(body.text);
+      return Response.json({ ok: reason === 'sent' }, { status: reason === 'failed' ? 403 : 200 });
+    });
+    const lines: string[] = [];
+    const result = await f.client.runMaintenance(undefined, line => lines.push(line.message));
+
+    expect(result).toMatchObject({ changed: false, insufficient: false, probeErrors: 0,
+      completed: reason !== 'failed', notification: { sent: reason === 'sent', reason } });
+    expect(result.results.map(item => item.activeCount)).toEqual([3, 3]);
+    expect(lines).toContain('处理维护通知');
+    expect(result.notificationMessage).toContain(reason === 'sent' ? '通知已发送' : reason === 'disabled'
+      ? '通知未启用' : reason === 'not_configured' ? '通知未配置' : '通知发送失败');
+    expect(messages).toHaveLength(['sent', 'failed'].includes(reason) ? 1 : 0);
+    if (messages.length) {
+      expect(messages[0]).toContain('DDNS 手动维护报告');
+      expect(messages[0]).toContain('所有 IP 正常，无变化');
+    }
+    expect(f.store.has('pool_stats_baseline')).toBe(reason === 'sent');
+    expect(f.writes).toEqual([]);
+    expect(f.open()).toBe(0);
+  });
+
   it.each(['A', 'TXT'])('continues current checks, replenishment and the next target after %s socket cleanup fails', async mode => {
     const f = fixture(8, 2, 50, false, [mode, 'TXT']);
     f.failClose('203.0.113.1', 'reject');
@@ -361,14 +393,12 @@ describe('native maintenance invocation boundaries', () => {
       expect(log).toContain('IPv4 探测可用；IPv6 出口失效');
       expect(log).toContain(removed ? '出口栈不符合要求' : '仅 IPv4 出口');
     }
-    if (removed) {
-      expect(send).toHaveBeenCalledTimes(1);
-      const [input, init] = send.mock.calls[0]!;
-      const { text } = input instanceof Request ? await input.json() as { text: string } : JSON.parse(String(init?.body));
-      expect(text).toContain('仅 IPv4 出口');
-      expect(text).toContain('出口栈不符合要求');
-      expect(text).not.toContain('Not enough data');
-    } else expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
+    const [input, init] = send.mock.calls[0]!;
+    const { text } = input instanceof Request ? await input.json() as { text: string } : JSON.parse(String(init?.body));
+    expect(text).toContain('仅 IPv4 出口');
+    if (removed) expect(text).toContain('出口栈不符合要求');
+    expect(text).not.toContain('Not enough data');
     expect(f.store.get('ip_pool_default')).toBe(beforePool);
     expect(f.store.get('ip_pool_trash')).toBe(beforeTrash);
     expect(f.connect).toHaveBeenCalledTimes(18);
