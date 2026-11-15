@@ -36,7 +36,7 @@ import type { MaintenanceSource } from './ports/maintenance-source';
 import { createHttpApp, streamMaintenanceTask, type HttpAppDependencies, type MaintenanceRunner } from './transport/http';
 import { MAINTENANCE_STREAM_TYPE, readMaintenanceStreamResult } from './contracts/maintenance';
 
-export const APP_VERSION = '2026.11.11-21.58';
+export const APP_VERSION = '2026.11.15-10.27';
 
 /** 维护里每次 Cloudflare API 调用的超时；cron 场景不能让单个请求拖垮整轮。 */
 const DNS_TIMEOUT_MS = 10_000;
@@ -46,7 +46,6 @@ const MAX_PARALLEL_PROBE_REQUESTS = 2;
 export interface InvocationProps {
   readonly resolved?: ResolvedConfig;
   readonly directProbe?: boolean;
-  readonly disableNative?: boolean;
   readonly outbound?: boolean;
   readonly command?: Omit<MaintainManagedTargetCommand, 'signal'>;
   readonly known?: Readonly<Record<string, ProbeResult>>;
@@ -82,13 +81,12 @@ export function createWorker(createProbe: typeof createProbeAdapterFromConfig = 
         const kv = env.IP_DATA;
         if (!kv) throw new Error('maintenance unavailable');
         const command = props.command;
-        return streamMaintenanceTask((progress, signal) => createLocalTarget(kv, resolved, executionContext, props.known, props.disableNative)
+        return streamMaintenanceTask((progress, signal) => createLocalTarget(kv, resolved, executionContext, props.known)
           .execute({ ...command, signal }, progress), request.signal, task => executionContext.waitUntil(task));
       }
 
       const checkProxy = new CheckProxy(props.directProbe
-        ? createProbe(toProbeConfig(resolved.config), { budget: createSubrequestBudget(), defer: task => executionContext.waitUntil(task),
-          ...(props.disableNative ? { disableNative: true } : {}) })
+        ? createProbe(toProbeConfig(resolved.config), { budget: createSubrequestBudget(), defer: task => executionContext.waitUntil(task) })
         : createInvocationProbe(resolved, executionContext));
       const kv = env.IP_DATA;
       const maintenanceSource = kv ? new KvMaintenanceSource(kv, resolved.config) : null;
@@ -284,11 +282,9 @@ function createInvocationFetch(context: ExecutionContext): typeof fetch {
   return (input, init) => invocationBinding(context, { outbound: true }).fetch(input, init);
 }
 
-/** 每个 RPC 最多占四个原生槽；收尾确认后再交接，排队不消耗候选时限。 */
-function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionContext, disableNative = false): ProbeAdapter {
+/** 每个地址使用独立 RPC；有界收尾后交接，排队不消耗候选时限。 */
+function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionContext): ProbeAdapter {
   let settled = Promise.resolve();
-  let scope: object | undefined;
-  const inheritedDisable = disableNative;
   return { name: 'native', async probe(target, probeContext = {}) {
     const previous = settled;
     let release!: () => void;
@@ -299,11 +295,6 @@ function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionConte
       else await previous;
       probeContext.signal?.throwIfAborted();
     } catch { release(); return unknown(target, 'CANCELLED', '检测已取消'); }
-    // 新分组地址从干净的收尾状态开始；同一检测范围内的后续地址仍沿用禁用。
-    if (probeContext.scope && probeContext.scope !== scope) {
-      scope = probeContext.scope;
-      disableNative = inheritedDisable;
-    }
     const timeout = createRequestTimeout(resolved.config.settings.CHECK_TIMEOUT * 2 + SOCKET_CLOSE_TIMEOUT_MS + 500, probeContext.signal);
     let response: Response | undefined;
     let dispatch: Promise<Response> | undefined;
@@ -312,7 +303,7 @@ function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionConte
     try {
       return await waitWithSignal((async () => {
         probeContext.signal?.throwIfAborted();
-        response = await (dispatch = invocationBinding(context, { resolved, directProbe: true, disableNative },
+        response = await (dispatch = invocationBinding(context, { resolved, directProbe: true },
           task => { cleanup = task; }).fetch('https://worker.internal/api/check', {
           method: 'POST', headers: { 'Content-Type': 'application/json',
             ...(resolved.config.authKey ? { Authorization: 'Bearer ' + resolved.config.authKey } : {}) },
@@ -341,7 +332,6 @@ function createInvocationProbe(resolved: ResolvedConfig, context: ExecutionConte
         dispatch.then(() => cleanup ?? false, () => cleanup ?? false)]).then(results => results.every(Boolean)), closingTimeout.signal)
         .catch(() => false) : Promise.resolve(true);
       context.waitUntil(closed.then(safe => {
-        disableNative ||= !safe;
         closingTimeout.cleanup(); release();
         return safe;
       }));
@@ -382,9 +372,9 @@ export function createConfigService(env: RuntimeEnv, projectUrl?: string): Confi
 }
 
 function createLocalTarget(kv: KVNamespace, resolved: ResolvedConfig, context: ExecutionContext,
-  known: Readonly<Record<string, ProbeResult>> = {}, disableNative = false): MaintainManagedTarget {
+  known: Readonly<Record<string, ProbeResult>> = {}): MaintainManagedTarget {
   const config = resolved.config;
-  const probe = createInvocationProbe(resolved, context, disableNative);
+  const probe = createInvocationProbe(resolved, context);
   return new MaintainManagedTarget({
     probe: { name: probe.name, async probe(target, options) {
       options?.signal?.throwIfAborted();
@@ -399,7 +389,6 @@ function createLocalTarget(kv: KVNamespace, resolved: ResolvedConfig, context: E
 /** 目标调用与逐地址调用分层，父维护只调度目标并汇总，不累积候选调用数。 */
 function createInvocationTarget(resolved: ResolvedConfig, context: ExecutionContext,
   confirmed: Map<string, ProbeResult>): TargetMaintainer {
-  let disableNative = false;
   return { async execute(command, onProgress) {
     let response: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -407,7 +396,7 @@ function createInvocationTarget(resolved: ResolvedConfig, context: ExecutionCont
     try {
       command.signal?.throwIfAborted();
       const { signal, ...input } = command;
-      response = await invocationBinding(context, { resolved, command: input, known: Object.fromEntries(confirmed), disableNative },
+      response = await invocationBinding(context, { resolved, command: input, known: Object.fromEntries(confirmed) },
         task => { cleanup = task; context.waitUntil(task); }).fetch('https://worker.internal/api/maintenance/run', { method: 'POST', ...(signal ? { signal } : {}), headers: { Accept: MAINTENANCE_STREAM_TYPE } });
       if (!response.ok || !response.headers.get('Content-Type')?.startsWith(MAINTENANCE_STREAM_TYPE)) throw new Error('目标维护调用未返回有效响应');
       reader = response.body?.getReader();
@@ -426,9 +415,8 @@ function createInvocationTarget(resolved: ResolvedConfig, context: ExecutionCont
     } finally {
       const timeout = createRequestTimeout(SOCKET_CLOSE_TIMEOUT_MS + 500);
       try {
-        const safe = await waitWithSignal(Promise.all([cancelInvocationBody(reader ?? response?.body), cleanup])
+        await waitWithSignal(Promise.all([cancelInvocationBody(reader ?? response?.body), cleanup])
           .then(results => results.every(Boolean)), timeout.signal).catch(() => false);
-        disableNative ||= !safe;
       } finally { timeout.cleanup(); }
     }
   } };

@@ -57,8 +57,8 @@ describe('发布 Worker 装配', () => {
         const fetchImpl = globalThis.fetch;
         globalThis.fetch = (...args) => { charge(); return fetchImpl(...args); };
         const app = createWorker((config, deps) => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
-          defer: deps?.defer, disableNative: deps?.disableNative, secure: async socket => socket,
-          connect() {
+          defer: deps?.defer, secure: async socket => socket,
+          connect(address) {
             charge(); stats.connections++; stats.open++; stats.peak = Math.max(stats.peak, stats.open);
             let rejectOpened, closed = false;
             const opened = stats.slow ? new Promise((_, reject) => { rejectOpened = reject; }) : Promise.resolve({});
@@ -66,12 +66,13 @@ describe('发布 Worker 装配', () => {
             const bytes = new TextEncoder().encode('HTTP/1.1 200 OK\\r\\nContent-Length: ' + body.length + '\\r\\n\\r\\n' + body);
             return { opened, closed:Promise.resolve(),
               readable:new ReadableStream({start(c){c.enqueue(bytes);c.close();}}), writable:new WritableStream(),
-              async close(){if(!closed){closed=true;await new Promise(resolve=>setTimeout(resolve, 20));stats.open--;rejectOpened?.(new Error('closed'));}}, startTls(){throw new Error('unused');} };
+              async close(){if(!closed){closed=true;await new Promise(resolve=>setTimeout(resolve, 20));stats.open--;rejectOpened?.(new Error('closed'));
+                if(stats.failClose && address.hostname === '203.0.113.1') throw new Error('socket cleanup failed');}}, startTls(){throw new Error('unused');} };
           },
         }));
         export default class TestWorker extends WorkerEntrypoint {
           async fetch(request) {
-            stats = {scopes:[], connections:0, open:0, peak:0, slow:new URL(request.url).searchParams.has('slow')};
+            stats = {scopes:[], connections:0, open:0, peak:0, slow:new URL(request.url).searchParams.has('slow'), failClose:new URL(request.url).searchParams.has('fail-close')};
             const scope = {used:0, internal:0}; stats.scopes.push(scope);
             return scopes.run(scope, async () => {
               const env = limitedEnv(this.env), ctx = limitedContext(this.ctx);
@@ -138,11 +139,11 @@ describe('发布 Worker 装配', () => {
       const pool = '# 库存备注\n' + targets.flatMap((_, index) => Array.from({length:3}, (_, item) => address(index,item) + ':443,AS64500,US,v4')).join('\n');
       await IP_DATA.put('ip_pool_default', pool);
       await IP_DATA.put('ip_pool_trash', '# 垃圾桶备注');
-      for (const path of ['/api/maintenance/run', '/test-scheduled']) {
+      for (const path of ['/api/maintenance/run', '/test-scheduled', '/api/maintenance/run?fail-close', '/test-scheduled?fail-close']) {
         const response = await mf.dispatchFetch('https://test.local' + path, {method:'POST', headers:{Authorization:'Bearer fixture-auth'}});
         const result = await response.json() as {completed?:boolean; probeErrors?:number; results?:{activeCount:number}[]};
         expect(response.status).toBe(200);
-        if (path === '/api/maintenance/run') {
+        if (path.startsWith('/api/maintenance/run')) {
           expect(result).toMatchObject({completed:true, probeErrors:0});
           expect(result.results?.map(item => item.activeCount)).toEqual([3,3,3,3,3,3,3]);
         }

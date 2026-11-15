@@ -19,7 +19,6 @@ interface NativeProbeOptions {
   readonly backup?: ProbeAdapter;
   readonly rootsFetch?: typeof fetch;
   readonly defer?: (task: Promise<boolean>) => void;
-  readonly disableNative?: boolean;
 }
 const READ_LIMIT = 65_536;
 export const SOCKET_CLOSE_TIMEOUT_MS = 1_000;
@@ -34,7 +33,6 @@ export class NativeProbeAdapter implements ProbeAdapter {
   private readonly cleanupByTarget = new Map<string, Promise<boolean>>();
   private readonly redact: (message: string) => string;
   constructor(private readonly options: NativeProbeOptions) {
-    this.cleanupFailed = options.disableNative === true;
     this.redact = createProbeRedactor(options.urls.map(urlTemplate => ({ name: 'native', urlTemplate })));
   }
 
