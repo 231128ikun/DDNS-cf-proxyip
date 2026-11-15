@@ -137,6 +137,46 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
 }
 
 describe('native maintenance invocation boundaries', () => {
+  it.each(['manual-json', 'manual-stream', 'scheduled'])('preserves sent receipts and reports baseline write failures during %s maintenance', async mode => {
+    const f = fixture(8, 2);
+    const config = JSON.parse(f.store.get('app_config')!);
+    f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: true, tgToken: 'fixture-token', tgId: '123' }));
+    const baseline = '{"ip_pool_default":2500,"ip_pool_trash":1}';
+    f.store.set('pool_stats_baseline', baseline);
+    f.dead('203.0.113.1');
+    const put = f.kv.put.bind(f.kv);
+    const failedPut = vi.spyOn(f.kv, 'put').mockImplementation(async (key, value, options) => {
+      if (key === 'pool_stats_baseline') throw new Error('fixture-private-storage-error');
+      await put(key, value, options);
+    });
+    const send = vi.fn(async () => Response.json({ ok: true }));
+    const upstream = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+      f.requestUrl(input).hostname === 'api.telegram.org' ? send() : upstream(input, init));
+    const logs = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      if (mode === 'scheduled') await f.scheduled();
+      else {
+        const result = await f.client.runMaintenance(undefined, mode === 'manual-stream' ? () => {} : undefined);
+        expect(result).toMatchObject({ changed: true, completed: true, errors: [],
+          notification: { sent: true, reason: 'sent', code: 'BASELINE_SAVE_FAILED' } });
+        expect(result.notificationMessage).toContain('通知已发送');
+        expect(result.notificationMessage).toContain('库存统计基线更新失败');
+        expect(result.results.map(item => item.activeCount)).toEqual([3, 3]);
+        expect(result.results[0]?.dns?.removed).toEqual(['203.0.113.1:443']);
+        expect(JSON.stringify(result)).not.toContain('fixture-private-storage-error');
+      }
+      expect(logs.mock.calls).toContainEqual(['[notification]', '通知已发送（库存统计基线更新失败）']);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(failedPut.mock.calls.filter(([key]) => key === 'pool_stats_baseline')).toHaveLength(1);
+      expect(f.store.get('pool_stats_baseline')).toBe(baseline);
+      expect(f.open()).toBe(0);
+    } finally {
+      logs.mockRestore();
+      failedPut.mockRestore();
+    }
+  });
+
   it.each(['sent', 'disabled', 'not_configured', 'failed'])('returns Telegram %s for healthy manual maintenance through the Worker', async reason => {
     const f = fixture(8, 2);
     const config = JSON.parse(f.store.get('app_config')!);

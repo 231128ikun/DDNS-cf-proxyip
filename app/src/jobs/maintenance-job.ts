@@ -68,7 +68,10 @@ export async function runMaintenanceJob(options: MaintenanceJobOptions): Promise
     ...(options.projectUrl ? { projectUrl: options.projectUrl } : {}),
     ...(options.now ? { now: options.now() } : {}),
   }));
-  if (notification.sent) await options.stats.saveBaseline(afterCounts);
+  if (notification.sent) {
+    try { await options.stats.saveBaseline(afterCounts); }
+    catch { return { run, notification: { ...notification, code: 'BASELINE_SAVE_FAILED' } }; }
+  }
   return { run, notification };
 }
 

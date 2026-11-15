@@ -88,7 +88,8 @@ export function maintenanceRemovalReason(check: MaintenanceAddressCheck | undefi
 
 export function notificationDisplay(result: NotifyResult | null | undefined): string {
   if (!result) return '';
-  if (result.sent) return '通知已发送' + (result.total && result.total > 1 ? '（' + result.total + ' 条）' : '');
+  if (result.sent) return '通知已发送' + (result.total && result.total > 1 ? '（' + result.total + ' 条）' : '')
+    + (result.code === 'BASELINE_SAVE_FAILED' ? '（库存统计基线更新失败）' : '');
   if (result.reason === 'disabled') return '通知未启用';
   if (result.reason === 'not_configured') return '通知未配置';
   return '通知发送失败' + (result.code ? ' [' + result.code + ']' : '')

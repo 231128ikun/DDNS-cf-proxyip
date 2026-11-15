@@ -6,5 +6,6 @@ export interface NotifyResult {
   readonly reason: NotifyReason;
   readonly delivered?: number;
   readonly total?: number;
+  /** 发送错误或发送成功后的统计诊断。 */
   readonly code?: string;
 }

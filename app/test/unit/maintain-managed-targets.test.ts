@@ -454,4 +454,17 @@ describe('runMaintenanceJob', () => {
     expect(result.notification).toEqual({ sent: false, reason: 'failed' });
     expect(stats.saved).toBeNull();
   });
+
+  it('preserves successful delivery counts when saving the baseline fails', async () => {
+    const job = createJob({ isManual: true, notifyResult: { sent: true, reason: 'sent', delivered: 3, total: 3 } });
+    const result = await runMaintenanceJob({ source: job.source, maintainer: job.runner, notifier: job.notifier,
+      stats: { current: () => job.stats.current(), loadBaseline: () => job.stats.loadBaseline(),
+        saveBaseline: async () => { throw new Error('storage unavailable'); } },
+      fallbackZone, isManual: true });
+
+    expect(result.notification).toEqual({ sent: true, reason: 'sent', delivered: 3, total: 3, code: 'BASELINE_SAVE_FAILED' });
+    expect(result.run.errors).toEqual([]);
+    expect(job.notifier.messages).toHaveLength(1);
+    expect(job.stats.saved).toBeNull();
+  });
 });
