@@ -143,7 +143,7 @@ describe('complete and concise maintenance output', () => {
     expect(JSON.stringify(response)).not.toContain('fixture-zone');
   });
 
-  it.each(['A', 'AAAA', 'TXT'] as const)('notifies only confirmed %s changes through the client, job and storage', async mode => {
+  it.each(['A', 'AAAA', 'TXT'] as const)('reports every manual run with confirmed %s results through the client, job and storage', async mode => {
     const target = normalizeManagedTarget({ mode: mode === 'TXT' ? 'TXT' : 'A', domain: 'edge.example.com', minActive: 1 })!;
     const oldAddress = mode === 'AAAA' ? '[2001:db8::10]:443' : '203.0.113.10:443';
     const newAddress = mode === 'AAAA' ? '[2001:db8::11]:443' : mode === 'TXT' ? '203.0.113.10:8443' : '203.0.113.11:443';
@@ -177,19 +177,20 @@ describe('complete and concise maintenance output', () => {
       checkTarget: new CheckTarget({ checkProxy: new CheckProxy(probe), resolver: new ResolveTarget({ query: async () => ({ ok: true, values: [] }) }) }),
     });
     const client = new ApiClient({ fetchImpl: async (url, init) => app.request(String(url), init) });
-    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: null, completed: true });
-    expect(send).not.toHaveBeenCalled();
-    expect(saveBaseline).not.toHaveBeenCalled();
+    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: { sent: true }, completed: true });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(saveBaseline).toHaveBeenCalledTimes(1);
     failOld = true;
     const changed = await client.runMaintenance();
     expect(changed).toMatchObject({ changed: true, notification: { sent: true }, completed: true });
     expect(changed.results[0]?.dns?.after).toEqual([mode === 'TXT' ? newAddress : parseProxyTarget(newAddress)!.host]);
     expect(record?.content).toBe(mode === 'TXT' ? `"${newAddress}"` : parseProxyTarget(newAddress)!.host);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(saveBaseline).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(saveBaseline).toHaveBeenCalledTimes(2);
     poolText += '\n203.0.113.99:443 # imported later';
-    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: null });
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(await client.runMaintenance()).toMatchObject({ changed: false, notification: { sent: true } });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(saveBaseline).toHaveBeenCalledTimes(3);
   });
 
   it('does not advance the notification baseline after partial delivery', async () => {

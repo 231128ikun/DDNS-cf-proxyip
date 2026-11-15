@@ -137,6 +137,78 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
 }
 
 describe('native maintenance invocation boundaries', () => {
+  it.each(['manual-json', 'manual-stream', 'scheduled'])('preserves sent receipts and reports baseline write failures during %s maintenance', async mode => {
+    const f = fixture(8, 2);
+    const config = JSON.parse(f.store.get('app_config')!);
+    f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: true, tgToken: 'fixture-token', tgId: '123' }));
+    const baseline = '{"ip_pool_default":2500,"ip_pool_trash":1}';
+    f.store.set('pool_stats_baseline', baseline);
+    f.dead('203.0.113.1');
+    const put = f.kv.put.bind(f.kv);
+    const failedPut = vi.spyOn(f.kv, 'put').mockImplementation(async (key, value, options) => {
+      if (key === 'pool_stats_baseline') throw new Error('fixture-private-storage-error');
+      await put(key, value, options);
+    });
+    const send = vi.fn(async () => Response.json({ ok: true }));
+    const upstream = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) =>
+      f.requestUrl(input).hostname === 'api.telegram.org' ? send() : upstream(input, init));
+    const logs = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      if (mode === 'scheduled') await f.scheduled();
+      else {
+        const result = await f.client.runMaintenance(undefined, mode === 'manual-stream' ? () => {} : undefined);
+        expect(result).toMatchObject({ changed: true, completed: true, errors: [],
+          notification: { sent: true, reason: 'sent', code: 'BASELINE_SAVE_FAILED' } });
+        expect(result.notificationMessage).toContain('通知已发送');
+        expect(result.notificationMessage).toContain('库存统计基线更新失败');
+        expect(result.results.map(item => item.activeCount)).toEqual([3, 3]);
+        expect(result.results[0]?.dns?.removed).toEqual(['203.0.113.1:443']);
+        expect(JSON.stringify(result)).not.toContain('fixture-private-storage-error');
+      }
+      expect(logs.mock.calls).toContainEqual(['[notification]', '通知已发送（库存统计基线更新失败）']);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(failedPut.mock.calls.filter(([key]) => key === 'pool_stats_baseline')).toHaveLength(1);
+      expect(f.store.get('pool_stats_baseline')).toBe(baseline);
+      expect(f.open()).toBe(0);
+    } finally {
+      logs.mockRestore();
+      failedPut.mockRestore();
+    }
+  });
+
+  it.each(['sent', 'disabled', 'not_configured', 'failed'])('returns Telegram %s for healthy manual maintenance through the Worker', async reason => {
+    const f = fixture(8, 2);
+    const config = JSON.parse(f.store.get('app_config')!);
+    f.store.set('app_config', JSON.stringify({ ...config, tgEnabled: reason !== 'disabled',
+      tgToken: reason === 'not_configured' ? '' : 'fixture-token', tgId: '123' }));
+    const messages: string[] = [];
+    const upstream = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (f.requestUrl(input).hostname !== 'api.telegram.org') return upstream(input, init);
+      const body = await new Request(input, init).json() as { text: string };
+      messages.push(body.text);
+      return Response.json({ ok: reason === 'sent' }, { status: reason === 'failed' ? 403 : 200 });
+    });
+    const lines: string[] = [];
+    const result = await f.client.runMaintenance(undefined, line => lines.push(line.message));
+
+    expect(result).toMatchObject({ changed: false, insufficient: false, probeErrors: 0,
+      completed: reason !== 'failed', notification: { sent: reason === 'sent', reason } });
+    expect(result.results.map(item => item.activeCount)).toEqual([3, 3]);
+    expect(lines).toContain('处理维护通知');
+    expect(result.notificationMessage).toContain(reason === 'sent' ? '通知已发送' : reason === 'disabled'
+      ? '通知未启用' : reason === 'not_configured' ? '通知未配置' : '通知发送失败');
+    expect(messages).toHaveLength(['sent', 'failed'].includes(reason) ? 1 : 0);
+    if (messages.length) {
+      expect(messages[0]).toContain('DDNS 手动维护报告');
+      expect(messages[0]).toContain('所有 IP 正常，无变化');
+    }
+    expect(f.store.has('pool_stats_baseline')).toBe(reason === 'sent');
+    expect(f.writes).toEqual([]);
+    expect(f.open()).toBe(0);
+  });
+
   it.each(['A', 'TXT'])('continues current checks, replenishment and the next target after %s socket cleanup fails', async mode => {
     const f = fixture(8, 2, 50, false, [mode, 'TXT']);
     f.failClose('203.0.113.1', 'reject');
@@ -361,14 +433,12 @@ describe('native maintenance invocation boundaries', () => {
       expect(log).toContain('IPv4 探测可用；IPv6 出口失效');
       expect(log).toContain(removed ? '出口栈不符合要求' : '仅 IPv4 出口');
     }
-    if (removed) {
-      expect(send).toHaveBeenCalledTimes(1);
-      const [input, init] = send.mock.calls[0]!;
-      const { text } = input instanceof Request ? await input.json() as { text: string } : JSON.parse(String(init?.body));
-      expect(text).toContain('仅 IPv4 出口');
-      expect(text).toContain('出口栈不符合要求');
-      expect(text).not.toContain('Not enough data');
-    } else expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
+    const [input, init] = send.mock.calls[0]!;
+    const { text } = input instanceof Request ? await input.json() as { text: string } : JSON.parse(String(init?.body));
+    expect(text).toContain('仅 IPv4 出口');
+    if (removed) expect(text).toContain('出口栈不符合要求');
+    expect(text).not.toContain('Not enough data');
     expect(f.store.get('ip_pool_default')).toBe(beforePool);
     expect(f.store.get('ip_pool_trash')).toBe(beforeTrash);
     expect(f.connect).toHaveBeenCalledTimes(18);
