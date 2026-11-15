@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NativeProbeAdapter, type ProbeSocket } from '../../src/adapters/probe/native';
+import { NativeProbeAdapter, type ProbeConnect, type ProbeSocket } from '../../src/adapters/probe/native';
 import { secureProbeSocket } from '../../src/adapters/probe/tls';
 import { createWorker } from '../../src/worker';
 import type { RuntimeEnv } from '../../src/config/runtime';
@@ -24,7 +24,7 @@ vi.mock('subtls', () => ({
 }));
 
 const env: RuntimeEnv = { CHECK_TIMEOUT: '500', PROBE_IPV4_URL: 'https://ipv4.example/', PROBE_IPV6_URL: 'https://ipv6.example/', CHECK_API_BACKUP: '' };
-type Failure = 'close' | 'cancel' | 'hung-cancel';
+type Failure = 'close' | 'cancel' | 'hung-cancel' | 'none';
 function sockets(failure: Failure) {
   let open = 0, peak = 0;
   const close = vi.fn(async () => { if (failure === 'close') throw new Error('socket close failed'); open--; });
@@ -41,10 +41,10 @@ function sockets(failure: Failure) {
   });
   return { connect, close, cancel, raw, stats: () => ({ open, peak }) };
 }
-function client(io: ReturnType<typeof sockets>, runtime: RuntimeEnv = env) {
+function client(io: ReturnType<typeof sockets>, runtime: RuntimeEnv = env, connect: ProbeConnect = io.connect) {
   const tasks: Promise<unknown>[] = [];
   const worker = createWorker((config, deps) => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
-    connect: io.connect, ...(deps?.defer ? { defer: deps.defer } : {}), ...(deps?.disableNative ? { disableNative: true } : {}) }));
+    connect, ...(deps?.defer ? { defer: deps.defer } : {}) }));
   const context = localWorkerContext(worker, runtime, task => tasks.push(task));
   const client = new ApiClient({ fetchImpl: (async (url, init) => worker.fetch!(
     new Request(new URL(String(url), 'https://panel.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0], runtime, context)) as typeof fetch });
@@ -77,14 +77,16 @@ describe('production TLS wrapper cleanup', () => {
     expect(socket.writable.locked).toBe(false);
   });
 
-  it.each(['close', 'cancel', 'hung-cancel'] as const)('does not hand off native sockets after wrapped %s failure', async failure => {
+  it.each(['close', 'cancel', 'hung-cancel'] as const)('continues domain addresses after the first wrapped %s failure', async failure => {
     const io = sockets(failure);
-    const { client: api, tasks } = client(io);
+    const healthy = sockets('none');
+    const { client: api, tasks } = client(io, env, address => address.hostname === '203.0.113.10' ? io.connect() : healthy.connect());
     const pending = api.checkTarget('nodes.example');
     await vi.advanceTimersByTimeAsync(1200);
     const report = await pending;
-    expect(report.items.map(item => item.result.status)).toEqual(['alive', 'unknown', 'unknown']);
+    expect(report.items.map(item => item.result.status)).toEqual(['alive', 'alive', 'alive']);
     expect(io.connect).toHaveBeenCalledTimes(2);
+    expect(healthy.connect).toHaveBeenCalledTimes(4);
     expect(io.stats().peak).toBe(2);
     expect(io.close).toHaveBeenCalledTimes(2);
     expect(io.cancel).toHaveBeenCalledTimes(2);
@@ -92,7 +94,7 @@ describe('production TLS wrapper cleanup', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('carries unsafe TLS closure across A and TXT maintenance targets', async () => {
+  it('keeps confirmed exits across A and TXT maintenance targets after TLS closure fails', async () => {
     const config = { tgEnabled: false, checkApiBackup: '', settings: { CHECK_TIMEOUT: 500 },
       zones: [{ baseDomain: 'example.com', zoneId: 'fixture-zone', apiKey: 'fixture-token' }],
       targets: ['A', 'TXT'].map((mode, index) => ({ domain: 'target' + index + '.example.com', mode, zoneIndex: 0, minActive: 0 })) };
@@ -116,10 +118,10 @@ describe('production TLS wrapper cleanup', () => {
     const report = await pending;
     expect(report.results).toHaveLength(2);
     expect(report.results[0]?.activeCount).toBe(1);
-    expect(report.results[1]?.probeErrors).toBeGreaterThan(0);
+    expect(report.results[1]?.activeCount).toBe(1);
+    expect(report.results[1]?.probeErrors).toBe(0);
     expect(report.results.every(item => !item.dnsUpdated)).toBe(true);
-    expect(io.connect).toHaveBeenCalledTimes(2);
-    expect(io.stats().peak).toBe(2);
+    expect(io.connect).toHaveBeenCalledTimes(4);
     expect(put.mock.calls.every(([key]) => key === 'ip_pool_default')).toBe(true);
     expect(data.get('ip_pool_default')).toContain('203.0.113.20:443');
     expect(data.get('ip_pool_trash')).toBe('# 原垃圾桶');

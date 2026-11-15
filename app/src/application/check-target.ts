@@ -55,8 +55,7 @@ export class CheckTarget {
       const items: CheckTargetItem[] = [];
       for (const address of input) {
         context.signal?.throwIfAborted();
-        // 每个分组地址独立收尾，前一个地址的连接异常不跳过后续探测。
-        const outcome = await this.execute(address, { ...context, scope: {} });
+        const outcome = await this.execute(address, context);
         if (!outcome.ok) return outcome;
         context.signal?.throwIfAborted();
         for (const item of outcome.report.items) { items.push(item); onItem?.(item); }

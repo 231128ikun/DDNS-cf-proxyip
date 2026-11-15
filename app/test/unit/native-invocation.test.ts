@@ -40,7 +40,7 @@ function nativeClient(io: ReturnType<typeof sockets>, backup?: ProbeAdapter, con
   const tasks: Promise<unknown>[] = [];
   const worker = createWorker((config, deps) => new NativeProbeAdapter({ urls: config.urls, timeoutMs: config.timeoutMs,
     connect, secure: io.secure, ...(deps?.defer ? { defer: deps.defer } : {}),
-    ...(deps?.disableNative ? { disableNative: true } : {}), ...(backup ? { backup } : {}) }));
+    ...(backup ? { backup } : {}) }));
   const context = localWorkerContext(worker, runtime, task => tasks.push(task));
   const client = new ApiClient({ fetchImpl: (async (url, init) => worker.fetch!(new Request(new URL(String(url), 'https://panel.example'), init) as Parameters<NonNullable<typeof worker.fetch>>[0],
     runtime, context)) as typeof fetch });
@@ -225,18 +225,20 @@ describe('shared invocation socket handoff', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(['alive', 'dead'] as const)('stops new native RPC sockets after stalled closure while allowing backup %s', async status => {
+  it.each(['alive', 'dead'] as const)('continues native checks for domain addresses after the first socket stalls with backup %s', async status => {
     resolvedAddresses();
     const io = sockets('healthy', null);
+    const healthy = sockets('healthy', 0);
     const backup = { name: 'backup', probe: vi.fn(async candidate => status === 'alive' ? alive(candidate) : dead(candidate)) } satisfies ProbeAdapter;
-    const { client, tasks } = nativeClient(io, backup);
+    const { client, tasks } = nativeClient(io, backup, address => address.hostname === target.host ? io.connect() : healthy.connect());
     const pending = client.checkTarget('nodes.example');
     await vi.advanceTimersByTimeAsync(1100);
     const report = await pending;
     expect(report.items[0]?.result.status).toBe('alive');
-    expect(report.items.slice(1).map(item => item.result.status)).toEqual(status === 'alive' ? ['alive', 'alive'] : ['unknown', 'unknown']);
-    expect(backup.probe).toHaveBeenCalledTimes(2);
+    expect(report.items.map(item => item.result.status)).toEqual(['alive', 'alive', 'alive']);
+    expect(backup.probe).not.toHaveBeenCalled();
     expect(io.connect).toHaveBeenCalledTimes(2);
+    expect(healthy.connect).toHaveBeenCalledTimes(4);
     expect(io.stats().peak).toBe(2);
     await Promise.all(tasks);
     expect(vi.getTimerCount()).toBe(0);
@@ -363,10 +365,9 @@ describe('runtime preparation and cancellation safety', () => {
     resolvedAddresses();
     const cancel = vi.fn(() => mode === 'hang' ? new Promise<void>(() => {}) : Promise.reject(new Error('cancel failed')));
     const dispose = vi.fn();
-    const flags: boolean[] = [];
-    const client = rpcClient(async (_url, init, props) => {
-      flags.push(props.disableNative === true);
-      if (flags.length === 1) return { status: 503, headers: [], body: new ReadableStream({ cancel }), closed: closureReceipt(), [Symbol.dispose]: dispose };
+    let calls = 0;
+    const client = rpcClient(async (_url, init) => {
+      if (++calls === 1) return { status: 503, headers: [], body: new ReadableStream({ cancel }), closed: closureReceipt(), [Symbol.dispose]: dispose };
       const candidate = parseProxyTarget(JSON.parse(init.body!).proxyip)!;
       return { ...reply(Response.json({ ok: true, items: [{ address: candidate.authority, result: alive(candidate) }] })), closed: closureReceipt() };
     });
@@ -374,45 +375,49 @@ describe('runtime preparation and cancellation safety', () => {
     await vi.advanceTimersByTimeAsync(1700);
     const report = await pending;
     expect(report.items[0]?.result).toMatchObject({ status: 'unknown', code: 'CHECK_REQUEST_ERROR' });
-    expect(flags).toEqual([false, true, true]);
+    expect(report.items.slice(1).map(item => item.result.status)).toEqual(['alive', 'alive']);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1500);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('keeps the cleanup fuse scoped to one grouped address', async () => {
-    const flags: boolean[] = [];
-    const client = rpcClient(async (_url, init, props) => {
-      flags.push(props.disableNative === true);
-      const candidate = parseProxyTarget(JSON.parse(init.body!).proxyip as string)!;
-      return {
-        ...reply(Response.json({ ok: true, items: [{ address: candidate.authority, result: alive(candidate) }] })),
-        closed: flags.length === 1
-          ? new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([0])); controller.close(); } })
-          : closureReceipt(),
-      };
+  it.each(['batch', 'direct'] as const)('continues %s addresses after the first socket fails cleanup', async entry => {
+    const failed = sockets('healthy', 0);
+    const healthy = sockets('healthy', 0);
+    const failedStreams = new Set<ReadableStream>();
+    const { client, tasks } = nativeClient(healthy, undefined, candidate => {
+      if (candidate.hostname !== target.host) return healthy.connect();
+      const socket = failed.connect();
+      failedStreams.add(socket.readable);
+      return { ...socket, close: async () => { throw new Error('socket close failed'); } };
     });
-
-    const report = await client.checkBatch('203.0.113.10:443\n203.0.113.11:443', undefined, undefined, 1);
-
-    expect(flags).toEqual([false, false]);
-    expect(report.items.map(item => item.status)).toEqual(['alive', 'alive']);
+    healthy.secure.mockImplementation(async socket => {
+      if (failedStreams.has(socket.readable)) throw new Error('candidate TLS failed');
+      return socket;
+    });
+    const addresses = ['203.0.113.10:443', '203.0.113.11:443'];
+    const pending = entry === 'batch' ? client.checkBatch(addresses.join('\n'), undefined, undefined, 1) : client.checkTarget(addresses);
+    await vi.advanceTimersByTimeAsync(1100);
+    const report = await pending;
+    expect(report.items.map(item => 'status' in item ? item.status : item.result.status)).toEqual(['dead', 'alive']);
+    expect(healthy.connect).toHaveBeenCalledTimes(2);
+    await Promise.all(tasks);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('bounds maintenance response cancellation before the next target', async () => {
     const storage = memoryKv(maintenanceConfig());
-    const flags: boolean[] = [];
+    let calls = 0;
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     const client = rpcClient(async (_url, _init, props) => {
       expect(props.command).toBeDefined();
-      flags.push(props.disableNative === true);
-      return { status: 503, headers: [], body: flags.length === 1 ? new ReadableStream({ cancel }) : null, closed: closureReceipt() };
+      return { status: 503, headers: [], body: ++calls === 1 ? new ReadableStream({ cancel }) : null, closed: closureReceipt() };
     }, { ...env, IP_DATA: storage.kv });
     const pending = client.runMaintenance();
     await vi.advanceTimersByTimeAsync(1700);
     expect((await pending).results).toHaveLength(2);
-    expect(flags).toEqual([false, true]);
+    expect(calls).toBe(2);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(storage.put).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1500);

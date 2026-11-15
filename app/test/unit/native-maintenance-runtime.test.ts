@@ -22,11 +22,11 @@ vi.mock('../../src/adapters/probe/tls', () => ({
 
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture(concurrency: number, targetCount = 6, externalLimit = Number.POSITIVE_INFINITY, allUnknown = false) {
+function fixture(concurrency: number, targetCount = 6, externalLimit = Number.POSITIVE_INFINITY, allUnknown = false,
+  modes = ['TXT', 'A', 'A', 'TXT', 'TXT', 'TXT', 'A']) {
   trust.ready = false;
   trust.failIpv6 = false;
   trust.loads = new WeakMap();
-  const modes = ['TXT', 'A', 'A', 'TXT', 'TXT', 'TXT', 'A'];
   const targets = Array.from({ length: targetCount }, (_, index) => ({
     domain: 'target' + (index === 3 && !allUnknown ? 1 : index) + '.example.com', mode: allUnknown ? 'TXT' : modes[index % modes.length]!, zoneIndex: 0, minActive: 3, enabled: true,
   }));
@@ -92,6 +92,8 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
   let open = 0;
   let peak = 0;
   const deadHosts = new Set<string>();
+  const stalledHosts = new Set<string>();
+  const closeFailures = new Map<string, 'reject' | 'timeout'>();
   const connect = vi.fn((socketAddress: SocketAddress, _options: SocketOptions): ProbeSocket => {
     charge();
     if (allUnknown) throw new Error('TCP Loop detected');
@@ -101,9 +103,16 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
     const body = JSON.stringify({ ip: '198.51.100.42', asn: 64500, country: 'US', colo: 'NRT' });
     const bytes = new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Length: ' + body.length + '\r\n\r\n' + body);
     let closed = false;
-    return { opened: Promise.resolve({} as SocketInfo), closed: Promise.resolve(),
+    return { opened: stalledHosts.has(socketAddress.hostname) ? new Promise(() => {}) : Promise.resolve({} as SocketInfo), closed: Promise.resolve(),
       readable: new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }),
-      writable: new WritableStream({ write() {} }), async close() { if (!closed) { closed = true; open--; } },
+      writable: new WritableStream({ write() {} }), async close() {
+        if (closed) return;
+        closed = true;
+        const failure = closeFailures.get(socketAddress.hostname);
+        if (failure === 'timeout') await new Promise(resolve => setTimeout(resolve, 1200));
+        open--;
+        if (failure === 'reject') throw new Error('socket cleanup failed');
+      },
       startTls() { throw new Error('unused'); } };
   });
   const kv = { get: async (key: string) => { chargeInternal(); return store.get(key) ?? null; },
@@ -123,10 +132,89 @@ function fixture(concurrency: number, targetCount = 6, externalLimit = Number.PO
   const cloudflareCalls = () => dns.mock.calls.filter(([input]) => requestUrl(input).hostname === 'api.cloudflare.com');
   return { client, worker, kv, context, tasks, store, connect, dns, scheduled, invocations, requestUrl, cloudflareCalls,
     writes, records, dead: (host: string) => deadHosts.add(host), failWrites: () => { failWrites = true; },
+    stall: (host: string) => stalledHosts.add(host), failClose: (host: string, failure: 'reject' | 'timeout') => closeFailures.set(host, failure),
     peak: () => peak, open: () => open };
 }
 
 describe('native maintenance invocation boundaries', () => {
+  it.each(['A', 'TXT'])('continues current checks, replenishment and the next target after %s socket cleanup fails', async mode => {
+    const f = fixture(8, 2, 50, false, [mode, 'TXT']);
+    f.failClose('203.0.113.1', 'reject');
+    f.dead('203.0.113.3');
+    const result = await f.client.runMaintenance();
+    await Promise.all(f.tasks);
+
+    expect(result).toMatchObject({ completed: true, changed: true, probeErrors: 0 });
+    expect(result.results.map(target => target.activeCount)).toEqual([3, 3]);
+    expect(result.results[0]?.dns?.removed).toEqual([mode === 'A' ? '203.0.113.3' : '203.0.113.3:443']);
+    expect(result.results[0]?.dns?.added).toHaveLength(1);
+    expect(result.results[0]?.candidates).toMatchObject({ checked: 3, unknown: 0 });
+    expect(f.store.get('ip_pool_default')).toContain('203.0.113.1:443,AS64500,US,v4 # 备注 0');
+    expect(f.store.get('ip_pool_default')).not.toContain('203.0.113.3:443');
+    expect(f.store.get('ip_pool_trash')).toContain('203.0.113.3:443');
+    expect(f.store.get('ip_pool_trash')).not.toContain('203.0.113.1:443');
+    expect(f.connect.mock.calls.some(([address]) => address.hostname === '203.0.113.2')).toBe(true);
+    expect(f.connect.mock.calls.some(([address]) => address.hostname === '203.0.113.4')).toBe(true);
+    expect(f.connect.mock.calls.some(([address]) => address.hostname === '203.0.113.6')).toBe(true);
+    expect(f.invocations.every(scope => scope.used <= 50 && scope.blocked === 0)).toBe(true);
+    expect(f.open()).toBe(0);
+  });
+
+  it.each(['manual', 'scheduled'])('replenishes after a current address times out and stalls cleanup during %s maintenance', async run => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(8, 2, 50);
+      const config = JSON.parse(f.store.get('app_config')!);
+      config.settings.CHECK_TIMEOUT = 500;
+      f.store.set('app_config', JSON.stringify(config));
+      f.stall('203.0.113.3');
+      f.failClose('203.0.113.3', 'timeout');
+      const pending = run === 'manual' ? f.client.runMaintenance() : f.scheduled();
+      await vi.advanceTimersByTimeAsync(5000);
+      const result = await pending;
+      await Promise.all(f.tasks);
+
+      if (result) expect(result.results.map(target => target.activeCount)).toEqual([3, 3]);
+      expect(f.writes).toEqual(['PUT']);
+      expect(f.records.get('txt0')?.content).toBe('"203.0.113.1:443,203.0.113.2:443,203.0.113.4:443"');
+      expect(f.store.get('ip_pool_trash')).toContain('203.0.113.3:443');
+      expect(f.connect.mock.calls.some(([address]) => address.hostname === '203.0.113.4')).toBe(true);
+      expect(f.open()).toBe(0);
+      expect(f.peak()).toBeLessThanOrEqual(4);
+      expect(f.invocations.every(scope => scope.used <= 50 && scope.blocked === 0)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['A', 'TXT'])('continues %s replenishment after the first candidate fails its own socket cleanup', async mode => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture(8, 2, 50, false, [mode, 'TXT']);
+      const config = JSON.parse(f.store.get('app_config')!);
+      config.settings.CHECK_TIMEOUT = 500;
+      f.store.set('app_config', JSON.stringify(config));
+      f.dead('203.0.113.3');
+      f.stall('203.0.113.4');
+      f.failClose('203.0.113.4', 'reject');
+      const pending = f.client.runMaintenance();
+      await vi.advanceTimersByTimeAsync(5000);
+      const result = await pending;
+      await Promise.all(f.tasks);
+
+      expect(result).toMatchObject({ completed: true, changed: true, probeErrors: 0 });
+      expect(result.results.map(target => target.activeCount)).toEqual([3, 3]);
+      expect(result.results[0]?.candidates).toMatchObject({ checked: 3, unknown: 0 });
+      expect(result.results[0]?.dns?.added).toEqual([mode === 'A' ? '203.0.113.5' : '203.0.113.5:443']);
+      expect(f.store.get('ip_pool_trash')).toContain('203.0.113.3:443');
+      expect(f.store.get('ip_pool_trash')).toContain('203.0.113.4:443');
+      expect(f.store.get('ip_pool_trash')).not.toContain('203.0.113.5:443');
+      expect(f.store.get('ip_pool_default')).toContain('203.0.113.5:443,AS64500,US,v4 # 备注 4');
+      expect(f.open()).toBe(0);
+      expect(f.peak()).toBeLessThanOrEqual(4);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('keeps 100 targets with twelve unknown candidates each below every invocation quota', async () => {
     const log = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     try {
