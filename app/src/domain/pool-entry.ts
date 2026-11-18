@@ -25,7 +25,7 @@ export interface PoolMetadata {
 export function parsePoolText(text: string): PoolLine[] {
   if (!text) return [];
   const lines: PoolLine[] = [];
-  for (const physicalLine of text.split(/\r?\n/)) {
+  for (const physicalLine of text.split(/\r\n?|\n/)) {
     for (const chunk of splitPoolChunks(physicalLine)) {
       const raw = chunk.trim();
       if (!raw) continue;

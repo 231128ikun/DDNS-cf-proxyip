@@ -7,7 +7,6 @@ import { errorMessage } from '../api/errors';
 export class PoolWorkspace {
   key = 'ip_pool_default';
   content: string | undefined;
-  reading = false;
   writing = false;
   message = '';
   revision = 0;
@@ -31,7 +30,7 @@ export class PoolWorkspace {
     if (this.writing) return;
     this.readController?.abort();
     const controller = this.readController = new AbortController(), key = this.key;
-    this.reading = true; this.message = ''; this.changed();
+    this.message = '';
     try {
       const result = await this.client.readPool(key, controller.signal);
       if (controller.signal.aborted || key !== this.key) return;
@@ -41,7 +40,7 @@ export class PoolWorkspace {
     } catch (error) {
       if (!controller.signal.aborted) this.message = errorMessage(error);
     } finally {
-      if (this.readController === controller) { this.reading = false; this.changed(); }
+      if (this.readController === controller) this.readController = undefined;
     }
   }
   async save(content: string, mode: 'append' | 'remove'): Promise<boolean> {
@@ -66,5 +65,5 @@ export class PoolWorkspace {
       this.message = '未取得保存确认：' + errorMessage(error) + '。请核对后重试'; return false;
     } finally { this.writing = false; this.changed(); }
   }
-  dispose(): void { this.invalidate(); this.readController?.abort(); this.readController = undefined; this.reading = false; }
+  dispose(): void { this.invalidate(); this.readController?.abort(); this.readController = undefined; }
 }

@@ -1,5 +1,4 @@
-import { parsePoolEntry, normalizePoolStack, type PoolStack } from './pool-entry';
-import { parseProxyTarget } from './proxy-target';
+import { parsePoolEntry, parsePoolAddress, normalizePoolStack, type PoolEntry } from './pool-entry';
 
 export interface PortFilterRange {
   readonly start: number;
@@ -19,21 +18,22 @@ export type PoolFilter = readonly PoolFilterCriterion[];
 /** 解析面板筛选表达式；无效端口条件让整次筛选失败，避免产生误导结果。 */
 export function parsePoolFilter(query: string): PoolFilter | null {
   const groups: PoolFilterCriterion[] = [];
-  for (const rawGroup of String(query ?? '').split('|')) {
+  for (const rawGroup of query.split('|')) {
     const criterion = parseFilterGroup(rawGroup);
     if (!criterion) return null;
     groups.push(criterion);
   }
-  return groups.length ? groups : null;
+  return groups;
 }
 
 export function matchesPoolFilter(line: string, filter: PoolFilter): boolean {
-  return filter.some((criterion) => matchesCriterion(line, criterion));
+  const entry = parsePoolEntry(line);
+  return filter.some(criterion => matchesCriterion(line, entry, criterion));
 }
 
 function parseFilterGroup(group: string): PoolFilterCriterion | null {
-  const tokens = group.trim().split(/\s+/).filter(Boolean);
-  if (!tokens.length) return null;
+  const textGroup = group.trim();
+  if (!textGroup) return null;
 
   const ports: (number | PortFilterRange)[] = [];
   const countries: string[] = [];
@@ -41,14 +41,14 @@ function parseFilterGroup(group: string): PoolFilterCriterion | null {
   const stacks: string[] = [];
   const text: string[] = [];
 
-  for (const token of tokens) {
+  for (const token of textGroup.split(/\s+/)) {
     const match = /^([a-zA-Z]+):(.*)$/.exec(token);
     if (!match) {
       text.push(token.toLowerCase());
       continue;
     }
     const key = match[1]!.toLowerCase();
-    const values = match[2]!.split(',').map((value) => value.trim()).filter(Boolean);
+    const values = match[2]!.split(',').filter(Boolean);
     if (!values.length) return null;
 
     if (key === 'port') {
@@ -73,7 +73,7 @@ function parsePortValues(values: readonly string[]): readonly (number | PortFilt
   const parsed: (number | PortFilterRange)[] = [];
   for (const value of values) {
     if (value.includes('-')) {
-      const [startText, endText, extra] = value.split('-').map((part) => part.trim());
+      const [startText, endText, extra] = value.split('-');
       if (extra !== undefined) return null;
       const start = Number(startText);
       const end = Number(endText);
@@ -86,36 +86,20 @@ function parsePortValues(values: readonly string[]): readonly (number | PortFilt
     if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
     parsed.push(port);
   }
-  return parsed.length ? parsed : null;
+  return parsed;
 }
 
-function matchesCriterion(line: string, criterion: PoolFilterCriterion): boolean {
-  const entry = parsePoolEntry(line);
-  const target = entry ? parseProxyTarget(entry.address, 443) : null;
-
+function matchesCriterion(line: string, entry: PoolEntry | null, criterion: PoolFilterCriterion): boolean {
   if (criterion.ports.length) {
-    const port = target?.port;
-    if (!port || !criterion.ports.some((item) => typeof item === 'number' ? item === port : port >= item.start && port <= item.end)) return false;
+    const port = entry && parsePoolAddress(entry)?.port;
+    if (!port || !criterion.ports.some(item => typeof item === 'number' ? item === port : port >= item.start && port <= item.end)) return false;
   }
-
-  const countries = splitMetadata(entry?.country ?? '').map((value) => value.toUpperCase());
-  if (criterion.countries.length && !criterion.countries.some((value) => countries.includes(value))) return false;
-
-  const asns = splitMetadata(entry?.asn ?? '').map((value) => value.replace(/^AS/i, '').toUpperCase());
-  if (criterion.asns.length && !criterion.asns.some((value) => asns.includes(value))) return false;
-
-  if (criterion.stacks.length) {
-    const stack: PoolStack | null = entry?.stack ?? null;
-    if (!stack || !criterion.stacks.includes(stack)) return false;
-  }
-
-  if (criterion.text.length) {
-    const searchable = [line, entry?.asn, entry?.country, entry?.comment].filter(Boolean).join(' ').toLowerCase();
-    if (!criterion.text.some((value) => searchable.includes(value))) return false;
-  }
-  return true;
+  if (criterion.countries.length && !matchesMetadata(entry?.country, criterion.countries)) return false;
+  if (criterion.asns.length && !matchesMetadata(entry?.asn, criterion.asns, /^AS/)) return false;
+  if (criterion.stacks.length && (!entry?.stack || !criterion.stacks.includes(entry.stack))) return false;
+  return !criterion.text.length || criterion.text.some(value => line.toLowerCase().includes(value));
 }
 
-function splitMetadata(value: string): string[] {
-  return value.split(/[\/,，\s]+/).map((item) => item.trim()).filter(Boolean);
+function matchesMetadata(value: string | null | undefined, expected: readonly string[], prefix?: RegExp): boolean {
+  return !!value && value.toUpperCase().split(/[\/,，\s]+/).some(item => expected.includes(prefix ? item.replace(prefix, '') : item));
 }
