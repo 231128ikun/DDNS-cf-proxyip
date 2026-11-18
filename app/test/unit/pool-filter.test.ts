@@ -75,6 +75,12 @@ describe('pool filter', () => {
     ].join('\n'));
   });
 
+  it('separates CRLF and bare CR lines before matching ports and preserves inline comments', () => {
+    const lines = parsePoolText('# 标题\r203.0.113.10:443 # 保留\r203.0.113.10:8443\r\n[2001:db8::1]:443');
+    expect(lines.map(line => line.raw).filter(line => matchesPoolFilter(line, filter('port:443'))))
+      .toEqual(['203.0.113.10:443 # 保留', '[2001:db8::1]:443']);
+  });
+
   it('filters and deduplicates mixed-separator input as individual entries', () => {
     const text = '203.0.113.10:443,AS64500,US,v4|203.0.113.11:8443,AS64501,KR,v4\t203.0.113.10:443,AS64500,US,v4';
     const matching = parsePoolText(text).map(line => line.raw).filter(line => matchesPoolFilter(line, filter('port:443')));
