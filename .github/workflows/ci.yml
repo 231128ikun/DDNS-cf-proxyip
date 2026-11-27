@@ -42,6 +42,18 @@ jobs:
       - name: Deployment entry dry-run
         run: npm run deploy -- --dry-run
 
+      - name: One-click deployment layout dry-run
+        shell: bash
+        run: |
+          standalone="$(mktemp -d)"
+          trap 'rm -rf "$standalone"' EXIT
+          git -C .. archive HEAD:app | tar -x -C "$standalone"
+          (
+            cd "$standalone"
+            npm ci --prefer-offline --no-audit --no-fund
+            npm run deploy -- --dry-run
+          )
+
       - name: Desktop and mobile essential flows
         run: npm run audit:acceptance
 
