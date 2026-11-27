@@ -24,7 +24,7 @@ DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，�
 | --- | --- |
 | 构建命令 | `npm run build` |
 | 部署命令 | `npm run deploy` |
-| 根目录 | 留空，生成的仓库已以 `app/` 为根目录 |
+| 根目录 | 留空，生成的仓库根目录已包含 `wrangler.toml` |
 
 此方式适用于新实例，会创建 GitHub 仓库。已有仓库或 Worker 可使用以下 GitHub 部署及迁移/更新方式。
 
@@ -34,20 +34,18 @@ DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，�
 <summary><strong>展开 GitHub 部署步骤</strong></summary>
 
 1. 在 Cloudflare **Workers & Pages** 中创建或选择 Worker，连接对应的 GitHub 仓库。
-2. 选择 `main` 分支，设置：
+2. 选择部署分支（默认 `main`），按该仓库中 `wrangler.toml` 的位置设置：
 
    | 设置项 | 内容 |
    | --- | --- |
-   | 构建命令 | `npm run build` |
+   | 构建命令 | 留空，由部署入口自动构建 |
    | 部署命令 | `npm run deploy` |
-   | 根目录 | `app` |
+   | 根目录 | 完整仓库（含 fork）填写 `app`；一键部署生成的仓库留空 |
 
-3. Worker 名称应与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
+3. Worker 名称应与所用的 `wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
 4. 部署完成后打开 Worker 地址，在配置中心保存域名配置。
 
 Cloudflare 自动安装依赖。部署入口构建面板与 Worker，并检查体积；已完成且未变化的构建结果会被复用。
-
-一键部署生成的仓库以 `app/` 为根目录，根目录设置留空；完整仓库的根目录填写 `app`。构建命令也可留空，由部署入口自动构建。
 
 **KV 资源：**部署入口自动初始化 `IP_DATA`；遇到同名冲突时，仅在对应账号下找到唯一匹配的命名空间后复用。已有明确绑定保持不变。
 
@@ -58,7 +56,7 @@ Cloudflare 自动安装依赖。部署入口构建面板与 Worker，并检查�
 <details>
 <summary><strong>展开 Wrangler 部署步骤</strong></summary>
 
-安装 Node.js 22.12+ 或 24 LTS，在完整仓库的 `app/` 目录执行：
+安装 Node.js 22.12+ 或 24 LTS，在 `wrangler.toml` 所在目录执行（完整仓库的 `app/`，或一键部署生成的仓库根目录）：
 
 ```sh
 npm ci
@@ -66,19 +64,24 @@ npx wrangler login
 npm run deploy
 ```
 
-部署使用 `npm run deploy`；在仓库根目录执行时使用 `npm --prefix app run deploy`。
+只有在**完整仓库的根目录**执行时，才使用 `npm --prefix app run deploy`。一键部署生成的仓库在根目录直接执行 `npm run deploy`。
 
 </details>
 
 <details>
 <summary><strong>已有实例迁移 / 更新</strong></summary>
 
-1. 保留原 Worker、域名、Secrets 和 `IP_DATA` 对应的 KV 命名空间。
-2. Worker 名称、部署账号和环境应与原实例一致，已有 `IP_DATA` 绑定或明确资源 ID 保持不变。
-3. 使用完整仓库时，将构建根目录设为 `app`，构建命令留空，部署命令设为 `npm run deploy`。未变化的有效产物会被复用。
-4. 更新前备份 KV 并保留可回退版本；更新后确认配置、IP 池和域名绑定，再执行维护。
+更新前备份 KV 并保留可回退版本。沿用原 Worker、域名、部署账号、环境、Secrets 和 `IP_DATA` 绑定，不要重新运行一键部署向导来升级。
 
-代码回退不会恢复已变更的 KV 或 DNS。
+| 已有仓库 | 更新方式 | Cloudflare 构建根目录 |
+| --- | --- | --- |
+| 完整 fork，`wrangler.toml` 在 `app/` | 同步上游 `main` 并合并本地改动。 | `app` |
+| 完整仓库的独立副本，`wrangler.toml` 在 `app/` | 从上游 `main` 合并 `app/` 源码；独立副本不会随上游自动更新。 | `app` |
+| 一键部署生成的仓库，`wrangler.toml` 在根目录 | 下载上游 `main` 源码，把 `app/` 内的内容（包括隐藏文件）合并到已有仓库根目录，不要多套一层 `app/`。 | 留空 |
+
+不要用上游的 `wrangler.toml` 覆盖已有配置。若上游配置有变更，按项合并，保留原 Worker 名称、部署环境和 `IP_DATA` 绑定。部署命令仍为 `npm run deploy`。
+
+部署后先确认配置、IP 池和域名绑定，再执行维护。代码回退不会恢复已变更的 KV 或 DNS。
 
 </details>
 

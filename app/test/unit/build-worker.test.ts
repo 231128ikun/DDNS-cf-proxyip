@@ -22,6 +22,7 @@ beforeEach(() => {
     'web/index.html': '<div id="app"></div>',
     'web/src/styles.css': 'body { margin: 0; }',
     'web/public/icon.svg': '<svg></svg>',
+    'CHANGELOG.md': '# 更新日志',
     'package.json': '{}', 'package-lock.json': '{}', 'tsconfig.json': '{}', '.node-version': '22',
     'wrangler.toml': 'main = "src/index.ts"',
     'scripts/check-size.mjs': 'console.log("size");', 'scripts/clean.mjs': 'console.log("clean");',
@@ -48,7 +49,7 @@ describe('Wrangler automatic build state', () => {
   });
 
   it.each(['src/index.ts', 'web/src/styles.css', 'web/public/icon.svg', 'package.json', 'package-lock.json',
-    'wrangler.toml', 'scripts/check-size.mjs'])('rebuilds after input changes: %s', path => {
+    'CHANGELOG.md', 'wrangler.toml', 'scripts/check-size.mjs'])('rebuilds after input changes: %s', path => {
     saveBuildState(root, fingerprintInputs(root));
     put(path, 'changed');
     expect(canReuseBuild(root)).toBe(false);

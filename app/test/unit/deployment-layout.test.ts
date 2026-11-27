@@ -55,6 +55,16 @@ describe('standalone application layout', () => {
     expect(JSON.stringify(scripts)).not.toContain('../wrangler.toml');
   });
 
+  it('loads the current version history from within the application root', () => {
+    const component = 'web/src/components/version-history.tsx';
+    const assetImport = /^import changelogUrl from '([^?]+)\?url&no-inline';$/m.exec(read(component));
+    expect(assetImport).not.toBeNull();
+    const source = new URL(assetImport![1]!, new URL(component, appRoot));
+    expect(source.href).toBe(new URL('CHANGELOG.md', appRoot).href);
+    const firstVersion = /^## \[([^\]]+)\]/m.exec(readFileSync(source, 'utf8'))?.[1];
+    expect(firstVersion).toBe(APP_VERSION);
+  });
+
   it('uses the date version without a second npm release identifier', () => {
     const manifest = JSON.parse(read('package.json'));
     const lock = JSON.parse(read('package-lock.json'));
