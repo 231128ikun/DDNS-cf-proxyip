@@ -14,35 +14,23 @@ DDNS Pro 部署于 Cloudflare Workers，使用原生 TCP/TLS 检测 ProxyIP，�
 
 > 面板密码可选，未设置时管理接口免登录。
 
-### ① 一键部署
+### ① GitHub Fork（推荐）
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
-
-通过 Cloudflare 部署向导创建仓库及 Worker，按提示完成账号授权和资源设置。
-
-| 设置项 | 内容 |
-| --- | --- |
-| 构建命令 | `npm run build` |
-| 部署命令 | `npm run deploy` |
-| 根目录 | 留空，生成的仓库根目录已包含 `wrangler.toml` |
-
-此方式适用于新实例，会创建 GitHub 仓库。已有仓库或 Worker 可使用以下 GitHub 部署及迁移/更新方式。
-
-### ② GitHub 仓库部署
+在 GitHub 点击 **Fork** 创建自己的仓库。以后可通过 **Sync fork → Update branch** 同步上游 `main`；有冲突时需先合并本地改动。
 
 <details>
 <summary><strong>展开 GitHub 部署步骤</strong></summary>
 
-1. 在 Cloudflare **Workers & Pages** 中创建或选择 Worker，连接对应的 GitHub 仓库。
-2. 选择部署分支（默认 `main`），按该仓库中 `wrangler.toml` 的位置设置：
+1. 在 Cloudflare **Workers & Pages** 中创建或选择 Worker，连接自己的 Fork。
+2. 选择部署分支（默认 `main`），设置：
 
    | 设置项 | 内容 |
    | --- | --- |
    | 构建命令 | 留空，由部署入口自动构建 |
    | 部署命令 | `npm run deploy` |
-   | 根目录 | 完整仓库（含 fork）填写 `app`；一键部署生成的仓库留空 |
+   | 根目录 | `app` |
 
-3. Worker 名称应与所用的 `wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
+3. Worker 名称应与 `app/wrangler.toml` 一致，默认为 `ddns-cf-proxyip`。KV 绑定名固定为 **`IP_DATA`**。
 4. 部署完成后打开 Worker 地址，在配置中心保存域名配置。
 
 Cloudflare 自动安装依赖。部署入口构建面板与 Worker，并检查体积；已完成且未变化的构建结果会被复用。
@@ -50,6 +38,18 @@ Cloudflare 自动安装依赖。部署入口构建面板与 Worker，并检查�
 **KV 资源：**部署入口自动初始化 `IP_DATA`；遇到同名冲突时，仅在对应账号下找到唯一匹配的命名空间后复用。已有明确绑定保持不变。
 
 </details>
+
+### ② Cloudflare 一键部署
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/231128ikun/DDNS-cf-proxyip/tree/main/app)
+
+此方式在首次部署时创建独立仓库及 Worker。该仓库不是 Fork，不会随上游更新，也没有 **Sync fork** 入口。升级方式见下方「已有实例迁移 / 更新」。
+
+| 设置项 | 内容 |
+| --- | --- |
+| 构建命令 | `npm run build` |
+| 部署命令 | `npm run deploy` |
+| 根目录 | 留空，生成的仓库根目录已包含 `wrangler.toml` |
 
 ### ③ 本地命令行部署
 
@@ -75,11 +75,11 @@ npm run deploy
 
 | 已有仓库 | 更新方式 | Cloudflare 构建根目录 |
 | --- | --- | --- |
-| 完整 fork，`wrangler.toml` 在 `app/` | 同步上游 `main` 并合并本地改动。 | `app` |
-| 完整仓库的独立副本，`wrangler.toml` 在 `app/` | 从上游 `main` 合并 `app/` 源码；独立副本不会随上游自动更新。 | `app` |
-| 一键部署生成的仓库，`wrangler.toml` 在根目录 | 下载上游 `main` 源码，把 `app/` 内的内容（包括隐藏文件）合并到已有仓库根目录，不要多套一层 `app/`。 | 留空 |
+| 完整 Fork，`wrangler.toml` 在 `app/` | 使用 **Sync fork** 同步上游 `main`。 | `app` |
+| 完整仓库的独立副本，`wrangler.toml` 在 `app/` | 从上游 `main` 合并 `app/` 的内容。 | `app` |
+| 一键部署生成的仓库，`wrangler.toml` 在根目录 | 将上游 `main` 的 `app/` 内容（包括隐藏文件）合并到仓库根目录，不新建 `app/` 子目录。 | 留空 |
 
-不要用上游的 `wrangler.toml` 覆盖已有配置。若上游配置有变更，按项合并，保留原 Worker 名称、部署环境和 `IP_DATA` 绑定。部署命令仍为 `npm run deploy`。
+更新源码时，按项合并 `wrangler.toml` 的变更，不要覆盖已有配置。部署命令仍为 `npm run deploy`。
 
 部署后先确认配置、IP 池和域名绑定，再执行维护。代码回退不会恢复已变更的 KV 或 DNS。
 
