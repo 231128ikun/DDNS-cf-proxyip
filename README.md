@@ -64,7 +64,7 @@ npx wrangler login
 npm run deploy
 ```
 
-部署使用 `npm run deploy`；在仓库根目录执行时使用 `npm --prefix app run deploy`。
+只有在**完整仓库的根目录**执行时，才使用 `npm --prefix app run deploy`。一键部署生成的仓库在根目录直接执行 `npm run deploy`。
 
 </details>
 
