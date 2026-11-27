@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import changelogUrl from '../../../../CHANGELOG.md?url&no-inline';
+import changelogUrl from '../../../CHANGELOG.md?url&no-inline';
 import { loadChangelog } from '../api/client';
 import { Modal } from './modal';
 
