@@ -81,8 +81,6 @@ npm run deploy
 
 更新源码时，按项合并 `wrangler.toml` 的变更，不要覆盖已有配置。部署命令仍为 `npm run deploy`。
 
-**一键部署仓库改用 Fork 同步：**先创建完整 Fork，核对 Worker 名称、部署环境和 `IP_DATA` 绑定与原实例一致。然后到原 Worker 的 **Settings → Builds** [断开旧仓库并连接 Fork](https://developers.cloudflare.com/workers/ci-cd/builds/#disconnecting-builds)，将构建根目录改为 `app`。不必重建 Worker 或 KV，也不要把密钥或实际资源 ID 提交到公开 Fork。
-
 部署后先确认配置、IP 池和域名绑定，再执行维护。代码回退不会恢复已变更的 KV 或 DNS。
 
 </details>
